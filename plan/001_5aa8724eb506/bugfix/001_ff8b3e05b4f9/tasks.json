@@ -93,14 +93,14 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Update harness for dedup and sentinel-removal behaviors",
-              "status": "Researching",
+              "status": "Complete",
               "description": "The F1 test currently codifies sentinel-based behavior (it expects the handler to return 'continue' because SENTINEL_RE matches). With the sentinel removed (P1.M1.T1.S2), this test must be rewritten to verify per-token dedup instead. Additionally, new tests must be added for the co-load non-sentinel scenario (Issue 1) and the sentinel-in-prompt scenario (Issue 2).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Rewrite F1 test and add co-load + sentinel-in-prompt tests",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",

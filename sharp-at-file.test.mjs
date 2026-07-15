@@ -488,28 +488,65 @@ await runCase("M1", "merge contract: user image preserved at [0] when injecting"
 
 // ── F1/F3/F5: regression cases for the validation-report findings ──────────────
 
-await runCase("F1", "F1 — no re-injection when a sentinel is already present (second copy)", async () => {
-  // A SECOND copy of the extension receives the FIRST copy's transformed text (original prompt +
-  // sentinel + blocks). It must detect the sentinel and NOT re-inject. Tested at both layers:
-  //   (a) injectFiles itself is a pure function of text — so we pass already-injected text in and
-  //       confirm it returns the SAME text/count-0 (the sentinel guard lives in the HANDLER; here we
-  //       verify injectFiles is idempotent-safe by checking it doesn't double-append when given
-  //       text that already ends in our block — the handler is what carries the guard).
-  //   (b) the HANDLER guard: feed already-sentinel'd text through the captured handler and assert
-  //       action==='continue' with no notify and no extra blocks.
+await runCase("F1", "F1 — per-token dedup prevents re-injection", async () => {
+  // The sentinel mechanism is GONE (P1.M1.T1). Re-injection is now prevented by PER-TOKEN DEDUP
+  // inside injectFiles: if a `<file name="<abs>">` block for the resolved path already exists in
+  // `text`, the token is skipped — cooperation-independent (works against ANY prior copy, sentinel or
+  // not). Simulate a SECOND copy receiving the first copy's already-injected text: (a) injectFiles
+  // returns injected===0 with unchanged text; (b) the captured handler short-circuits to `continue`
+  // (no notify); and the text retains EXACTLY ONE `<file>` block for a.ts (not two).
   const first = await mod.injectFiles("Review #@a.ts", [], FIX);
-  // (b) handler guard — the load-bearing fix.
+  assert(first.injected === 1, `first pass must inject a.ts (got ${first.injected})`);
+
+  // (a) injectFiles-level: already-injected text → injected===0 (per-token dedup), text unchanged.
+  const dedup = await mod.injectFiles(first.text, first.images, FIX);
+  assert(dedup.injected === 0, `dedup pass must return injected===0 (got ${dedup.injected})`);
+  assert(dedup.text === first.text, "dedup pass must not alter the text (idempotent)");
+
+  // (b) handler-level: the second-copy handler returns continue (injectFiles injected 0), no notify.
   const { ctx, rec } = makeMockCtx(TMPDIR);
   const slot = captureHandler();
-  const out = await slot.cb(
-    { text: first.text, source: "interactive", images: first.images },
-    ctx,
-  );
-  assert(out.action === "continue", `second copy must short-circuit on the sentinel, got '${out.action}'`);
+  const out = await slot.cb({ text: first.text, source: "interactive", images: first.images }, ctx);
+  assert(out.action === "continue", `second copy must short-circuit to continue (got '${out.action}')`);
   assert(rec.notify === undefined, "second copy must NOT notify (nothing re-injected)");
-  // The returned nothing-changed: first.text already has exactly ONE <file> block for a.ts.
-  const aCount = (first.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
-  assert(aCount === 1, `first pass must produce exactly 1 block for a.ts (got ${aCount}) — re-injection guard prevents a 2nd`);
+
+  // Exactly ONE <file> block for a.ts in the injected text — the dedup prevented a duplicate.
+  const aCount = (dedup.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `injected text must contain exactly 1 <file> block for a.ts (got ${aCount})`);
+});
+
+await runCase("F1b", "F1b — co-load: two non-sentinel copies do not double-inject (Issue 1)", async () => {
+  // Direct Issue 1 repro at the injectFiles layer. A prior copy (here another injectFiles call, since
+  // the sentinel is gone) injects, then a second copy processes the result. Because injectFiles no
+  // longer stamps a sentinel, the second copy relies SOLELY on per-token dedup. Assert the second
+  // pass injects nothing AND appends no blocks (first.text === second.text).
+  const first = await mod.injectFiles("Review #@a.ts", [], FIX);
+  assert(first.injected === 1, `first copy must inject a.ts (got ${first.injected})`);
+  const second = await mod.injectFiles(first.text, first.images, FIX);
+  assert(second.injected === 0, `second copy must inject nothing — per-token dedup (got ${second.injected})`);
+  assert(second.text === first.text, "second copy must append NO additional blocks (first.text === second.text)");
+});
+
+await runCase("F2", "F2 — sentinel string in prompt no longer gates injection (Issue 2)", async () => {
+  // Issue 2 regression: the old sentinel guard tested the RAW user prompt and short-circuited on ANY
+  // `<!--#@file-injected-->` substring, silently dropping ALL #@ tokens. With the sentinel removed
+  // (P1.M1.T1.S2), a prompt containing the literal sentinel string AND a valid #@token must STILL
+  // inject the file. (`#@file-injected-->` resolves (after cleanToken trims the trailing `>`) to a
+  // missing path and is left verbatim; `#@a.ts` injects.)
+  const prompt = '<!--#@file-injected--> Review #@a.ts';
+  const r = await mod.injectFiles(prompt, [], FIX);
+  assert(r.injected === 1, `a.ts must be injected despite the sentinel string in the prompt (got ${r.injected})`);
+  assert(r.text.startsWith(prompt), "original prompt text must be preserved verbatim at the start");
+  assert(r.text.includes('<file name="' + A_TS + '">'), "injected text must contain the a.ts <file> block");
+  // Exactly ONE block (a.ts) — no spurious block from the ghost `#@file-injected-->` token.
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `exactly 1 <file> block (a.ts); no ghost block from the sentinel token (got ${aCount})`);
+
+  // Handler-level: the input event transforms (does NOT short-circuit on the sentinel substring).
+  const { ctx } = makeMockCtx(TMPDIR);
+  const slot = captureHandler();
+  const out = await slot.cb({ text: prompt, source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform (sentinel no longer gates), got '${out.action}'`);
 });
 
 await runCase("F3a", "F3 — mislabeled image (text body, .png ext) → text path, no garbage image", async () => {
