@@ -62,14 +62,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "File-Type Detection & Format Helpers",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Implement the pure helper functions for binary detection (NUL-byte heuristic) and the three <file> block format functions (text, image, binary). These match the exact output format of Pi's built-in processFileArguments for text/image cases and add a dedicated binary note for non-image binaries.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Binary detection + text/image/binary format block helpers",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -98,7 +98,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T3.S1",
                   "title": "injectFiles: core assembly function (token iteration, file dispatch, block/image assembly)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",
