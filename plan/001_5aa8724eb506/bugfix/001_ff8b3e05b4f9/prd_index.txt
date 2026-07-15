@@ -1,0 +1,16 @@
+h1.0 Bug Fix Requirements
+ h2.0 Overview
+ h2.1 Critical Issues (Must Fix)
+ h2.2 Major Issues (Should Fix)
+  h3.0 Issue 1: Duplicate file injection when a non-sentinel copy co-loads (default pi -e path doubles every file)
+  h3.1 Issue 2: Sentinel string in the user prompt silently disables ALL #@ injection (false negative)
+ h2.3 Minor Issues (Nice to Fix)
+  h3.2 Issue 3: F3 magic-number sniff deviates from PRD §5.2 (route-by-extension-only)
+  h3.3 Issue 4: F5 empty-image handling deviates from PRD §10 ("empty file → <file>
+
+</file>")
+  h3.4 Issue 5: #@ triggers after non-ASCII "word" characters (Unicode \W lookbehind quirk)
+  h3.5 Issue 6: Assembled output no longer matches PRD §6.2 exact format (sentinel inserted)
+ h2.4 Testing Summary
+---
+code:4 para:44 list:2
