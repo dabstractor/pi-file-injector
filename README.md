@@ -43,6 +43,26 @@ cp sharp-at-file.ts .pi/extensions/sharp-at-file.ts
 
 Project-local extensions load after the project is trusted.
 
+### ⚠ Upgrading? Install exactly ONE copy (delete the old one)
+
+Pi loads **project-local** `.pi/extensions/` **before** the **global** `~/.pi/agent/extensions/`
+copy. If you upgrade by adding a new copy in one location while a **stale** copy remains in the
+other, **both run on every prompt**. The extension's per-token dedup is **one-directional**: a copy
+that runs *after* a stale (pre-dedup) copy cannot stop that stale copy from re-injecting the same
+file, so you can silently get **two identical `<file>` blocks** (doubled tokens) — see
+[`validation_report.md`](validation_report.md) finding **F-NEW-1**.
+
+**When upgrading, delete the old copy first** — don't just add the new one elsewhere:
+
+```bash
+rm -f ~/.pi/agent/extensions/sharp-at-file.ts   # remove a stale GLOBAL copy
+rm -f .pi/extensions/sharp-at-file.ts           # …and/or a stale PROJECT-LOCAL copy
+# then install the new copy in exactly ONE of the locations above
+```
+
+The safe rule: **one copy, one location.** The `pi -e ./sharp-at-file.ts` quick-test path is always
+safe regardless (it co-loads cleanly and dedups against any global copy).
+
 ### Quick test (one-off, no install)
 
 ```bash
@@ -204,9 +224,12 @@ node ./sharp-at-file.test.mjs     # model-free; exits 0 iff all assertions pass
 The harness imports the **real** `sharp-at-file.ts` (via jiti, exactly like Pi's loader), runs all
 14 PRD §11 acceptance cases plus edge cases, the three handler guards, the headless/notify path,
 **co-load dedup** (a non-sentinel co-loaded copy must not double-inject a file), the
+**structural multi-file dedup** guard (a prior `<file>` block for one path must not suppress a
+different new file), the **mixed-pair co-load limit** (a dedup copy followed by a genuine
+non-dedup legacy copy — pins the documented one-directional dedup limit, F-NEW-1), the
 **sentinel-in-prompt** regression (a prompt containing the literal marker still injects its files),
 and **Unicode word-boundary** tests (`#@` does not fire mid-word in any language), and prints a
-pass/fail matrix. At last run: **31 passed, 0 failed.** No network, no model API key, and no Pi
+pass/fail matrix. At last run: **33 passed, 0 failed.** No network, no model API key, and no Pi
 process are required. See
 [`plan/001_5aa8724eb506/P1M2T4S1/validation_report.md`](plan/001_5aa8724eb506/P1M2T4S1/validation_report.md)
 for the full recorded results, including the two live-`pi` integration confirmations (the `-p` path

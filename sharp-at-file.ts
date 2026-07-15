@@ -128,6 +128,20 @@ export async function injectFiles(
   const images = [...imagesIn]; // MERGE — runner REPLACES the array on transform; seed originals (item §3a)
   let count = 0;
 
+  // PRIOR-INJECTION SET (defense-in-depth — validator finding F-NEW-1, recommendation #2). Collect
+  // EVERY `<file name="<path>">` already present in `text` — whether stamped by a prior copy of THIS
+  // extension (under the `\n\n---\n\n` separator, PRD §6.2) or by Pi's own `@file` argv expander — so
+  // per-token dedup below is robust to path-string quirks (a prior copy may have resolved against a
+  // different cwd, expanded `~` differently, or been a sentinel/legacy build). This is a SUPERSET of
+  // a single exact-path substring test and is strictly additive: it never suppresses a token whose
+  // resolved path is NOT already in the set, so multi-file prompts (inject A then B) still work even
+  // when a prior copy already injected A. NOTE: like any in-this-copy check, it cannot stop a LATER
+  // non-cooperating (pre-dedup) copy from re-injecting — see README's single-copy guidance.
+  const priorPaths = new Set<string>();
+  for (const m of text.matchAll(/<file name="([^"]+)">/g)) {
+    priorPaths.add(m[1]);
+  }
+
   for (const m of text.matchAll(FILE_INJECT_RE)) {
     const raw = m[2]; // capture group 2 = path token after #@ (group 1 is the zero-width ^ anchor)
     const token = cleanToken(raw); // trim trailing punctuation (S2)
@@ -135,12 +149,11 @@ export async function injectFiles(
 
     const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
 
-    // PER-TOKEN DEDUP — if a <file> block for this exact absolute path already exists in `text`
-    // (injected by a prior copy of this extension in the runner's input-handler chain), skip
+    // PER-TOKEN DEDUP — if a <file> block for this exact absolute path was already injected (by a
+    // prior copy in the runner's input-handler chain, or by Pi's own @file expander), skip
     // re-injecting. Cooperation-independent: works even when the prior copy was a non-sentinel
-    // version (the default `pi -e` path when a global copy co-loads). Fixes Issue 1. Uses a plain
-    // substring test so path chars ([ ] . ( ) …) need no escaping; matches all 4 block prefixes.
-    if (text.includes('<file name="' + abs + '">')) continue;
+    // version (the default `pi -e` path when a global copy co-loads). Fixes Issue 1.
+    if (priorPaths.has(abs)) continue;
 
     let st;
     try {

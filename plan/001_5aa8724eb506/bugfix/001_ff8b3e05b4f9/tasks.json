@@ -86,7 +86,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Test Harness Coverage Expansion",
-          "status": "Ready",
+          "status": "Complete",
           "description": "The existing 28-case harness has critical blind spots: (1) the F1 test only re-feeds through the same sentinel-stamping handler — it never simulates a non-sentinel co-loaded copy; (2) no test covers a user prompt containing the sentinel string; (3) no test covers Unicode boundary behavior. These gaps allowed Issues 1, 2, and 5 to slip through. This milestone updates the harness to cover the new per-token dedup behavior and adds regression tests for all three scenarios.",
           "tasks": [
             {
@@ -122,14 +122,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Add Unicode regex boundary regression tests",
-              "status": "Ready",
+              "status": "Complete",
               "description": "No existing test covers the Unicode \\W lookbehind quirk. Add regression tests verifying that #@ does not trigger after non-ASCII letters, while existing ASCII patterns still work correctly.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Add Unicode boundary test cases",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S1"
@@ -149,7 +149,7 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Spec Reconciliation & Changeset-Level Documentation (Issues 3, 4)",
-          "status": "Complete",
+          "status": "Ready",
           "description": "Document the intentional F3 (magic-number sniff) and F5 (empty-image handling) deviations from the PRD in the README, and sync all changeset-level documentation (README overview, behavior table, test count, known limitations) to reflect the sentinel removal, Unicode regex fix, and spec reconciliations.",
           "tasks": [
             {
@@ -179,14 +179,14 @@
               "type": "Task",
               "id": "P1.M3.T2",
               "title": "Sync changeset-level documentation (final sweep)",
-              "status": "Complete",
+              "status": "Ready",
               "description": "Cross-cutting documentation that only makes sense once all code changes are in place: update the README overview, testing section (pass count), known limitations (remove sentinel references, add Unicode boundary note), and ensure all changes from this bugfix are reflected in the top-level documentation.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T2.S1",
                   "title": "Update README overview, test count, and known limitations",
-                  "status": "Complete",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

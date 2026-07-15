@@ -527,6 +527,72 @@ await runCase("F1b", "F1b — co-load: two non-sentinel copies do not double-inj
   assert(second.text === first.text, "second copy must append NO additional blocks (first.text === second.text)");
 });
 
+await runCase("F1c", "F1c — structural dedup: prior @file block doesn't block a NEW file (multi-file safe)", async () => {
+  // Validator finding F-NEW-1, recommendation #2: the dedup now builds a SET of every
+  // `<file name="<path>">` already in `text` (whether from a prior #@ copy under the `---` separator
+  // or from Pi's own @file argv expander) and skips only those exact paths. This MUST NOT suppress a
+  // genuinely-new file in the same prompt: a prior copy injected a.ts; our copy must STILL inject b.ts
+  // from the same prompt. This is the regression guard that the structural dedup is not over-aggressive
+  // (an earlier draft that keyed on the bare `\n\n---\n\n<file` separator would have wrongly dropped b.ts).
+  const priorText = `Review #@a.ts\n\n---\n\n<file name="${A_TS}">\n${A_TS_CONTENT}\n</file>`;
+  const r = await mod.injectFiles(`${priorText}\nAlso review #@b.ts`, [], FIX);
+  assert(r.injected === 1, `must inject ONLY the new b.ts (a.ts already present), got ${r.injected}`);
+  assert(r.text.includes('<file name="' + B_TS + '">'), "must contain the NEW b.ts block");
+  // Exactly ONE a.ts block (the pre-existing one) — not re-injected, not duplicated.
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `a.ts must appear exactly once (dedup), got ${aCount}`);
+  const bCount = (r.text.match(new RegExp('<file name="' + B_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(bCount === 1, `b.ts must appear exactly once (newly injected), got ${bCount}`);
+});
+
+await runCase("F1d", "F1d — mixed-pair co-load PINS the one-directional dedup limit (F-NEW-1)", async () => {
+  // Validator finding F-NEW-1, recommendation #3: the harness must exercise a GENUINE mixed pair — a
+  // dedup copy followed by a NON-dedup (legacy) copy — and PIN the documented behavior rather than
+  // silently pass. This mirrors Pi's loader order for project-local(new) + global(stale): the new copy
+  // runs FIRST (injects once), then the stale copy runs SECOND and re-injects because it has no dedup.
+  // The per-token/structural dedup is inherently ONE-DIRECTIONAL: it protects against EARLIER copies,
+  // never a LATER non-cooperating one. This case documents that limit as a known, tracked condition
+  // (the README warns: install exactly one copy; upgrading means deleting the old global copy).
+  //
+  // A faithful legacy injector: uses the repo's OWN exported formatters (identical block format) but
+  // OMITS the dedup line — exactly what the stale 182-line global copy does.
+  const legacyInject = async (text, imagesIn, ctx) => {
+    const blocks = [];
+    const images = [...imagesIn];
+    let count = 0;
+    const LEGACY_RE = /(^|(?<=\W))#@(\S+)/g; // the pre-fix \W regex
+    for (const m of text.matchAll(LEGACY_RE)) {
+      const token = mod.cleanToken(m[2]);
+      if (!token) continue;
+      const abs = mod.expandTildeAndResolve(token, ctx.cwd);
+      // NO per-token dedup — this is the bug-relevant legacy behavior
+      let st; try { st = await fs.stat(abs); } catch { continue; }
+      if (!st.isFile()) continue;
+      try { const buf = await fs.readFile(abs); blocks.push(mod.formatTextFileBlock(abs, buf.toString("utf8"))); count++; } catch { continue; }
+    }
+    if (count === 0) return { text, images: imagesIn, injected: 0 };
+    return { text: `${text}\n\n---\n\n${blocks.join("\n\n")}`, images, injected: count };
+  };
+  // Forward order: dedup copy FIRST, legacy (no-dedup) copy SECOND.
+  const first = await mod.injectFiles("Review #@a.ts", [], FIX);
+  assert(first.injected === 1, `dedup copy must inject a.ts once (got ${first.injected})`);
+  const legacyAfter = await legacyInject(first.text, first.images, FIX);
+  // KNOWN LIMITATION (F-NEW-1): the later non-cooperating legacy copy re-injects → 2 blocks total.
+  // This assertion PINS that behavior. If a future change makes dedup bidirectional (e.g. removing the
+  // #@ marker after injection — currently forbidden by PRD §6.2/§9), flip this to ===1 and update the
+  // README. Until then, the mitigation is operational: install only one copy (see README warning).
+  assert(legacyAfter.injected === 1, `legacy copy re-injects a.ts (F-NEW-1 known limit), got ${legacyAfter.injected}`);
+  const aCount = (legacyAfter.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 2, `F-NEW-1: order dedup→legacy yields 2 a.ts blocks (got ${aCount}); see README single-copy guidance`);
+  // REVERSE order (legacy FIRST, dedup SECOND) MUST stay clean — the dedup copy suppresses the dup.
+  const legacyFirst = await legacyInject("Review #@a.ts", [], FIX);
+  assert(legacyFirst.injected === 1, `legacy copy alone injects a.ts once (got ${legacyFirst.injected})`);
+  const dedupAfter = await mod.injectFiles(legacyFirst.text, legacyFirst.images, FIX);
+  assert(dedupAfter.injected === 0, `dedup copy must suppress the legacy dup (got ${dedupAfter.injected})`);
+  const aCountRev = (dedupAfter.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCountRev === 1, `reverse order (legacy→dedup) yields exactly 1 a.ts block (got ${aCountRev})`);
+});
+
 await runCase("F2", "F2 — sentinel string in prompt no longer gates injection (Issue 2)", async () => {
   // Issue 2 regression: the old sentinel guard tested the RAW user prompt and short-circuited on ANY
   // `<!--#@file-injected-->` substring, silently dropping ALL #@ tokens. With the sentinel removed
