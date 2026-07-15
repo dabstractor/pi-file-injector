@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Sentinel Dedup Bug Fix & Spec Reconciliation",
-      "status": "Ready",
+      "status": "Complete",
       "description": "Fix the two Major sentinel-based bugs (duplicate injection when a non-sentinel copy co-loads; sentinel string in user prompt silently disabling all #@ injection) and four Minor spec-deviation issues (F3 magic-number sniff, F5 empty-image handling, Unicode \\W lookbehind quirk, assembly format deviation). The core fix replaces the cooperation-based F1 sentinel mechanism with cooperation-independent per-token dedup, simultaneously resolving Issues 1, 2, and 6. The Unicode regex fix addresses Issue 5. Issues 3 and 4 are resolved by documenting the intentional deviations in the README.",
       "milestones": [
         {
@@ -149,7 +149,7 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Spec Reconciliation & Changeset-Level Documentation (Issues 3, 4)",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Document the intentional F3 (magic-number sniff) and F5 (empty-image handling) deviations from the PRD in the README, and sync all changeset-level documentation (README overview, behavior table, test count, known limitations) to reflect the sentinel removal, Unicode regex fix, and spec reconciliations.",
           "tasks": [
             {
@@ -179,14 +179,14 @@
               "type": "Task",
               "id": "P1.M3.T2",
               "title": "Sync changeset-level documentation (final sweep)",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Cross-cutting documentation that only makes sense once all code changes are in place: update the README overview, testing section (pass count), known limitations (remove sentinel references, add Unicode boundary note), and ensure all changes from this bugfix are reflected in the top-level documentation.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T2.S1",
                   "title": "Update README overview, test count, and known limitations",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

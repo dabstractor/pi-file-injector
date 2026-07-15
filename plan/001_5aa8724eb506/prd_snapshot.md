@@ -319,10 +319,20 @@ type InputEventResult =
 
 ## 8. File Structure
 
-Single-file extension, no dependencies, no `package.json`:
+Single-file extension, no runtime dependencies. The repo ships two files at the root:
 
-- **Global:** `~/.pi/agent/extensions/sharp-at-file.ts`
-- **Project-local:** `.pi/extensions/sharp-at-file.ts`
+- **`sharp-at-file.ts`** — the extension itself (zero npm imports beyond Pi's own packages).
+- **`package.json`** — a thin `"pi"` manifest (`{ "pi": { "extensions": ["sharp-at-file.ts"] } }`)
+  that makes the **directory** a loadable pi package. This is required so `pi install .` /
+  `pi install /abs/path` work, and so handing the directory to the loader (via a package
+  registration or `-e <dir>`) resolves to `sharp-at-file.ts` instead of crashing with
+  `Cannot find module '<dir>'` — a directory with no manifest and no `index.ts` has no entry
+  point for jiti to import.
+
+Install locations:
+
+- **Global:** `~/.pi/agent/extensions/sharp-at-file.ts` (copy), or `pi install .` (package).
+- **Project-local:** `.pi/extensions/sharp-at-file.ts` (copy).
 
 Internal sections (in order):
 1. Imports (§7)
@@ -490,8 +500,10 @@ function formatBinaryBlock(abs: string): string {
 
 Load the extension:
 ```bash
-pi -e ./sharp-at-file.ts            # quick test
-# or place in ~/.pi/agent/extensions/sharp-at-file.ts and use /reload
+pi -e ./sharp-at-file.ts            # quick test (file)
+pi -e .                             # quick test (directory — resolves via package.json manifest)
+# or install as a package:  pi install .
+# or copy to ~/.pi/agent/extensions/sharp-at-file.ts and use /reload
 ```
 
 ### Manual test matrix
@@ -559,7 +571,7 @@ Unconditional injection means a careless `#@` on a huge file can **blow the cont
 ### 13.3 Why a separate symbol instead of reusing `@`
 - `@` is overloaded (autocomplete + CLI inject). Overloading it further with "inject whole file interactively" would be ambiguous and would change existing behavior.
 - `#@` is unambiguous, collision-free (§3.2), and signals stronger intent — the `#` reads as "force/sharp/inject."
-- It composes with Pi's existing `@` autocomplete: a user can type `#` then use `@`-completion to fill the path, yielding `#@path`.
+- The `#` does **not** piggyback on Pi's `@` autocomplete on its own — Pi's file-completion gate only fires for `@` at a token boundary, and `#` glued in front closes it. Path completion for `#@` is provided by a separate autocomplete provider (see §14).
 
 ### 13.4 Why no config
 Configuring this feature would defeat its purpose. The contract is "always, entirely." Adding knobs (size, format, image toggle) reintroduces exactly the complexity the user asked to remove. If size-gated injection is later wanted, that is the *other* extension (`@` with a threshold), not this one.
@@ -570,6 +582,51 @@ This PRD and a size-gated `@` extension are **complementary, not competing**:
 - `@file` (gated) → small files inline, large files delegate to `read` (the token-economics sweet-spot feature).
 
 They can coexist: `#@` for "I know I want all of it," `@` for "inline it if it's small."
+
+---
+
+## 14. Interactive Path Autocomplete (TUI)
+
+`#@` is a two-character trigger, and Pi's built-in `@` file-completion (gitignore-aware, powered by
+`fd`) only fires when `@` sits at a token boundary. A `#` glued immediately in front of the `@`
+closes that gate, so — out of the box — typing `#@` yields **no** path suggestions; the user must
+type the full path by hand.
+
+### 14.1 Hook
+
+Pi exposes `ctx.ui.addAutocompleteProvider(factory)` (TUI/RPC modes only; see Pi's
+`docs/extensions.md` → "Autocomplete Providers"). The factory wraps the built-in provider (received
+as `current`) and can override three levers: `getSuggestions`, `applyCompletion`, and
+`shouldTriggerFileCompletion` (the gate). The extension registers it on `session_start`, guarded for
+headless print/json modes. This is purely a TUI affordance — headless `pi -p "...#@file..."` is
+unaffected (the user types the full path; injection still runs via the `input` handler).
+
+### 14.2 Implementation (shipped) — line-rewrite reuse (Option 1)
+
+**Option 2 (gate override) was tried first and rejected.** Overriding only
+`shouldTriggerFileCompletion` to return `true` at `#@<partial>` (delegating the rest to the built-in)
+produced **no suggestions**: Pi's built-in `@`-query extraction is itself boundary-strict
+(`CombinedAutocompleteProvider.extractAtPrefix` requires `@` at a token boundary), so opening the
+gate alone is insufficient. Reverted.
+
+**Shipped: Option 1 — line-rewrite reuse.** In `getSuggestions`, detect `#@<partial>` at the cursor,
+rewrite that one `#` into a space (so the built-in sees a clean `@<partial>` at a valid boundary),
+delegate to `current.getSuggestions(...)`, then remap the result back to `#@`: `prefix "@<partial>"`
+→ `"#@<partial>"` and each item value `@<path>` → `#@<path>`. `applyCompletion` is implemented
+inline for `#@` prefixes (deterministic replace, cursor placed after the inserted value) and
+delegates otherwise; `shouldTriggerFileCompletion` delegates to the built-in unchanged. This reuses
+Pi's entire file engine — gitignore-aware `fd` listing, sorting, fuzzy matching — with **zero**
+reimplementation; only a one-character line rewrite and a prefix/value remap are added.
+
+A last-resort **Option 4** (reimplement file listing via `fd`/`git ls-files`, à la Pi's
+`github-issue-autocomplete` example) remains documented but was **not** needed — reuse through
+`current` works.
+
+### 14.3 Non-goal
+
+No suffix-style `@<file>#` trigger. It would inherit Pi's `@` completion for free but demands a
+trailing `#` the user must type (and often backspace an inserted boundary for), and it makes `#` a
+suffix marker that collides with prose. `#@` (prefix) with a completion provider is strictly better.
 
 ---
 
@@ -601,6 +658,15 @@ export default function (pi: ExtensionAPI) {
 }
 
 // ... injectFiles() + helpers per §9 ...
+```
+
+**Companion file — `package.json`:** the skeleton above is the whole extension, but the repo also
+needs a `package.json` with a `"pi"` manifest so the *directory* is loadable (see §8). Without it,
+`pi install .` / `-e <dir>` / a package registration all fail with `Cannot find module '<dir>'`:
+
+```json
+{ "name": "pi-auto-reader", "version": "0.1.0", "private": true, "type": "module",
+  "pi": { "extensions": ["sharp-at-file.ts"] } }
 ```
 
 **Done-definition:** all 14 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files; prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.

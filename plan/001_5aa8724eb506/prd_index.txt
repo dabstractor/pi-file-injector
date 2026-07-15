@@ -38,6 +38,10 @@ h1.0 PRD: #@file Whole-File Injection Extension for Pi
   h3.23 13.3 Why a separate symbol instead of reusing @
   h3.24 13.4 Why no config
   h3.25 13.5 Relationship to a possible future size-gated @ extension
- h2.13 Appendix A — Minimal skeleton
+ h2.13 14. Interactive Path Autocomplete (TUI)
+  h3.26 14.1 Hook
+  h3.27 14.2 Implementation (shipped) — line-rewrite reuse (Option 1)
+  h3.28 14.3 Non-goal
+ h2.14 Appendix A — Minimal skeleton
 ---
-code:16 para:43 list:19 table:5 quote:5
+code:17 para:51 list:20 table:5 quote:5

@@ -116,6 +116,11 @@ original `#@path` marker stays in place as a readable reference (the extension *
 not inline-replace). These are the exact prompts the test harness exercises, so you can run
 `node ./sharp-at-file.test.mjs` and watch them pass.
 
+**Path completion:** in the TUI, `#@` autocompletes file paths — type `#@` and start the path, and
+the same gitignore-aware file list Pi uses for `@` pops up; Tab completes it as `#@<path>`. (The
+extension registers a completion provider that reuses Pi's `@` engine; TUI/RPC only — headless
+`pi -p` just takes the literal path.)
+
 ## Behavior by file type
 
 | File type | What `#@path` does | Output appended to your prompt |
@@ -189,8 +194,9 @@ restriction — you asked for the file, you get the file.
 *inject a file* (parsed from argv before the session starts). Overloading it further would be
 ambiguous and would change existing behavior. `#@` is unambiguous and collision-free with Markdown
 `#` headings, issue references like `#1234`, and `user@host` email addresses — and the `#` reads as
-"force/sharp/inject." Bonus: you can type `#` then use Pi's existing `@` path-completion to fill in
-the path, yielding `#@path`.
+"force/sharp/inject." And `#@` is fully path-completable in the TUI: the extension registers a
+completion provider that reuses Pi's own gitignore-aware `@` engine, so `#@` lists and Tab-completes
+files exactly like `@` (details in PRD §14).
 
 ### Why no size limit
 
@@ -251,7 +257,7 @@ different new file), the **mixed-pair co-load limit** (a dedup copy followed by 
 non-dedup legacy copy — pins the documented one-directional dedup limit, F-NEW-1), the
 **sentinel-in-prompt** regression (a prompt containing the literal marker still injects its files),
 and **Unicode word-boundary** tests (`#@` does not fire mid-word in any language), and prints a
-pass/fail matrix. At last run: **33 passed, 0 failed.** No network, no model API key, and no Pi
+pass/fail matrix. At last run: **34 passed, 0 failed.** No network, no model API key, and no Pi
 process are required. See
 [`plan/001_5aa8724eb506/P1M2T4S1/validation_report.md`](plan/001_5aa8724eb506/P1M2T4S1/validation_report.md)
 for the full recorded results, including the two live-`pi` integration confirmations (the `-p` path
