@@ -590,6 +590,35 @@ await runCase("F4", "F4 — notify pluralization (1 file / N files)", async () =
   assert(rec2.notify && rec2.notify.m === "#@ injected 2 files", `plural prompt must say '2 files', got ${JSON.stringify(rec2.notify && rec2.notify.m)}`);
 });
 
+// ── U1: Unicode word-boundary regression (Issue 5) ────────────────────────────
+await runCase("U1", "U1 — Unicode word-boundary: #@ does not fire mid-word in any language", async () => {
+  // Issue 5 regression guard. FILE_INJECT_RE is now /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu (P1.M1.T2.S1): the
+  // `u` flag enables Unicode property escapes, and the negative lookbehind treats Unicode letters /
+  // numbers / underscore as word chars. So #@ no longer triggers after non-ASCII letters (é, ö, ñ, CJK,
+  // …). Each sub-assert calls injectFiles and checks BOTH r.injected and r.text (verbatim for no-match).
+  // (a) THE FIX: é is a Unicode letter → #@ is mid-word in café#@a.ts → NO match → injected===0, text verbatim.
+  let r = await mod.injectFiles("café#@a.ts", [], FIX);
+  assert(r.injected === 0, `(a) café#@a.ts must NOT inject (é is a Unicode letter, mid-word), got ${r.injected}`);
+  assert(r.text === "café#@a.ts", `(a) café#@a.ts text must be unchanged when not matched`);
+  // (b) THE FIX: CJK characters are Unicode letters → 日本語#@a.ts is mid-word → NO match → injected===0, text verbatim.
+  r = await mod.injectFiles("日本語#@a.ts", [], FIX);
+  assert(r.injected === 0, `(b) 日本語#@a.ts must NOT inject (CJK are Unicode letters, mid-word), got ${r.injected}`);
+  assert(r.text === "日本語#@a.ts", `(b) 日本語#@a.ts text must be unchanged when not matched`);
+  // (c) REGRESSION GUARD: a SPACE before #@ is a boundary → Review #@a.ts still injects → injected===1.
+  r = await mod.injectFiles("Review #@a.ts", [], FIX);
+  assert(r.injected === 1, `(c) Review #@a.ts must inject (space before #@ is a boundary), got ${r.injected}`);
+  assert(r.text.startsWith("Review #@a.ts"), `(c) original prompt must be preserved verbatim at start`);
+  assert(r.text.includes('<file name="' + A_TS + '">'), `(c) injected text must contain the a.ts <file> block`);
+  // (d) REGRESSION GUARD: start-of-string (^ alternation) → #@a.ts still injects → injected===1.
+  r = await mod.injectFiles("#@a.ts", [], FIX);
+  assert(r.injected === 1, `(d) #@a.ts must inject (start-of-string boundary), got ${r.injected}`);
+  assert(r.text.includes('<file name="' + A_TS + '">'), `(d) injected text must contain the a.ts <file> block`);
+  // (e) REGRESSION GUARD: ASCII mid-word is STILL blocked → foo#@bar → NO match → injected===0, text verbatim.
+  r = await mod.injectFiles("foo#@bar", [], FIX);
+  assert(r.injected === 0, `(e) foo#@bar must NOT inject (ASCII mid-word, still blocked), got ${r.injected}`);
+  assert(r.text === "foo#@bar", `(e) foo#@bar text must be unchanged when not matched`);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
