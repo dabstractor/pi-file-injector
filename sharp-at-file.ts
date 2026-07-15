@@ -142,8 +142,41 @@ export async function injectFiles(
   return { text: finalText, images, injected: count };
 }
 
+/**
+ * #@file — Whole-File Injection Extension for Pi.
+ *
+ * Lets a user attach an ENTIRE file to their prompt by writing `#@<path>` anywhere in the submitted
+ * text. On the `input` event — which fires inside `AgentSession.prompt()` for ALL input contexts
+ * (interactive TUI messages, the initial CLI / `-p` / RPC message, and RPC calls alike) — every
+ * `#@<path>` token is resolved, the whole file is read, and its contents are appended to the prompt in
+ * Pi-native `<file name="...">...</file>` blocks below a `---` separator. Image files are attached as
+ * `ImageContent` (resized to provider limits) plus a reference block; non-image binaries get a clear
+ * note instead of decoded garbage.
+ *
+ * Trigger syntax:  `#@<path>`  — e.g. `#@src/index.ts`, `#@~/notes.md`, `#@pic.png`,
+ *                  `(#@a.txt and #@b.md)`. The two-char `#@` trigger is collision-free with Pi's
+ *                  `@file` / `@mention`, markdown `#` headings, issue `#1234`, and `user@host` email.
+ *
+ * Works everywhere: interactive, `pi -p "...#@file..."`, and RPC — because the hook is the `input`
+ * event inside `prompt()`, not argv parsing (unlike Pi's built-in `@file` CLI expansion).
+ *
+ * No limits, no config: the whole file is injected every time — no truncation, no word / byte cap.
+ * Large files may blow the model's context; that is the documented, intended behavior. Images are
+ * downscaled (2000×2000) only because providers reject oversized images; the whole image is still
+ * delivered (downscaled to fit). The handler short-circuits (`continue`) when the input originated
+ * from an extension (loop prevention), is a mid-stream steering nudge (latency), or simply has no `#@`
+ * token — and it never throws (injectFiles isolates each file in its own try/catch).
+ */
 export default function (pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
-    return { action: "continue" };
+    if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)
+    if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
+    if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
+
+    const { text, images, injected } = await injectFiles(event.text, event.images ?? [], ctx);
+    if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1)
+
+    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${injected} file(s)`, "info"); // user feedback; guarded for print/json headless modes (api_verification §5)
+    return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
   });
 }

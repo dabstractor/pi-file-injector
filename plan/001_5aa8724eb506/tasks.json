@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Core Extension Implementation",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Implement the complete sharp-at-file.ts extension: file scaffold with verified imports and constants, token parsing and path resolution helpers, file-type detection and format helpers, the core injectFiles assembly function, and the input event handler with all safety guards (loop prevention, steer skip, pre-check). All APIs verified against the installed package (see architecture/api_verification.md).",
           "tasks": [
             {
@@ -91,7 +91,7 @@
               "type": "Task",
               "id": "P1.M1.T3",
               "title": "Core injectFiles Assembly & Input Event Handler",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Implement the central injectFiles function that orchestrates token matching, file classification, I/O, and output assembly — and wire it into the input event handler with all safety guards (loop prevention, steer skip, cheap pre-check, error containment).",
               "subtasks": [
                 {
@@ -124,7 +124,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T3.S2",
                   "title": "Input event handler: replace factory stub with real handler (guards, injectFiles call, notify, transform/continue)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T3.S1"
