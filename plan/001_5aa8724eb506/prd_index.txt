@@ -1,0 +1,43 @@
+h1.0 PRD: #@file Whole-File Injection Extension for Pi
+ h2.0 1. Overview
+  h3.0 Problem
+  h3.1 Solution
+  h3.2 Value proposition
+  h3.3 Tagline
+ h2.1 2. Goals & Non-Goals
+  h3.4 Goals
+  h3.5 Non-Goals
+ h2.2 3. Background: How Pi Handles Input (must-read for implementer)
+  h3.6 3.1 Why #@ works everywhere (the key advantage)
+  h3.7 3.2 Why #@ is a safe, collision-free trigger
+  h3.8 3.3 Public vs internal utilities
+ h2.3 4. The #@ Syntax Specification
+  h3.9 4.1 Grammar
+  h3.10 4.2 Detection regex
+  h3.11 4.3 Token cleanup
+  h3.12 4.4 Path resolution
+ h2.4 5. Behavior by File Type
+  h3.13 5.1 Text files (everything that isn't a recognized image)
+  h3.14 5.2 Image files
+  h3.15 5.3 Other binary files (non-image, NUL detected)
+  h3.16 5.4 Missing / directory / read error
+ h2.5 6. Output Format & Assembly
+  h3.17 6.1 Format: Pi-native <file> tags
+  h3.18 6.2 Assembly
+ h2.6 7. Technical Reference (verified APIs)
+ h2.7 8. File Structure
+ h2.8 9. Algorithm (pseudocode)
+ h2.9 10. Edge Cases (implementer checklist)
+ h2.10 11. Acceptance Criteria & Test Plan
+  h3.19 Manual test matrix
+  h3.20 Automated sanity check (optional)
+ h2.11 12. Implementation Notes & Gotchas
+ h2.12 13. Design Rationale & Tradeoffs
+  h3.21 13.1 Why unconditional (no size gate)
+  h3.22 13.2 The tradeoff (be honest about it)
+  h3.23 13.3 Why a separate symbol instead of reusing @
+  h3.24 13.4 Why no config
+  h3.25 13.5 Relationship to a possible future size-gated @ extension
+ h2.13 Appendix A — Minimal skeleton
+---
+code:16 para:43 list:19 table:5 quote:5
