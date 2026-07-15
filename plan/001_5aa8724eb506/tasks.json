@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "#@file Whole-File Injection Extension (MVP)",
-      "status": "Planned",
+      "status": "Complete",
       "description": "Deliver a single-file TypeScript extension for Pi (@earendil-works/pi-coding-agent v0.80.7) that unconditionally injects entire file contents into the model's prompt when the user writes #@<path>. The extension hooks the 'input' event (fires for all prompt contexts: interactive TUI, initial CLI/-p message, RPC), reads the referenced file in full, and appends its contents in <file> tag blocks below the original prompt text. No size limits, no configuration, no dependencies beyond Pi's exported APIs. Target: ~150-220 lines in sharp-at-file.ts.",
       "milestones": [
         {
@@ -148,7 +148,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Acceptance Validation & Documentation",
-          "status": "Planned",
+          "status": "Complete",
           "description": "Validate the completed extension against the PRD §11 acceptance criteria (14-case manual test matrix including format parity with processFileArguments and @ non-interference). Then sync changeset-level documentation (README.md) covering usage, behavior, and known limitations.",
           "tasks": [
             {
@@ -181,14 +181,14 @@
               "type": "Task",
               "id": "P1.M2.T5",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Complete",
               "description": "Final documentation task (Mode B per SOW §5): create README.md covering the extension's purpose, installation, usage examples, behavior summary, known limitations, and relationship to Pi's existing @ syntax. This depends on all implementing subtasks and the validation results.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T5.S1",
                   "title": "Create README.md: extension purpose, installation, usage, behavior, known limitations",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
