@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Extension Scaffold, Constants & Parsing Helpers",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Create the sharp-at-file.ts file with verified imports, module-level constants (detection regex, MIME table, trailing punctuation set), and the pure helper functions for token cleanup, tilde expansion + path resolution, and extension extraction. The factory is registered as a stub that will be filled by T3.S2.",
               "subtasks": [
                 {
@@ -41,7 +41,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Token parsing & path resolution helpers: cleanToken, expandTildeAndResolve, extOf",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -62,14 +62,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "File-Type Detection & Format Helpers",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Implement the pure helper functions for binary detection (NUL-byte heuristic) and the three <file> block format functions (text, image, binary). These match the exact output format of Pi's built-in processFileArguments for text/image cases and add a dedicated binary note for non-image binaries.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Binary detection + text/image/binary format block helpers",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
