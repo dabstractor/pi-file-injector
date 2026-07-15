@@ -319,10 +319,20 @@ type InputEventResult =
 
 ## 8. File Structure
 
-Single-file extension, no dependencies, no `package.json`:
+Single-file extension, no runtime dependencies. The repo ships two files at the root:
 
-- **Global:** `~/.pi/agent/extensions/sharp-at-file.ts`
-- **Project-local:** `.pi/extensions/sharp-at-file.ts`
+- **`sharp-at-file.ts`** — the extension itself (zero npm imports beyond Pi's own packages).
+- **`package.json`** — a thin `"pi"` manifest (`{ "pi": { "extensions": ["sharp-at-file.ts"] } }`)
+  that makes the **directory** a loadable pi package. This is required so `pi install .` /
+  `pi install /abs/path` work, and so handing the directory to the loader (via a package
+  registration or `-e <dir>`) resolves to `sharp-at-file.ts` instead of crashing with
+  `Cannot find module '<dir>'` — a directory with no manifest and no `index.ts` has no entry
+  point for jiti to import.
+
+Install locations:
+
+- **Global:** `~/.pi/agent/extensions/sharp-at-file.ts` (copy), or `pi install .` (package).
+- **Project-local:** `.pi/extensions/sharp-at-file.ts` (copy).
 
 Internal sections (in order):
 1. Imports (§7)
@@ -490,8 +500,10 @@ function formatBinaryBlock(abs: string): string {
 
 Load the extension:
 ```bash
-pi -e ./sharp-at-file.ts            # quick test
-# or place in ~/.pi/agent/extensions/sharp-at-file.ts and use /reload
+pi -e ./sharp-at-file.ts            # quick test (file)
+pi -e .                             # quick test (directory — resolves via package.json manifest)
+# or install as a package:  pi install .
+# or copy to ~/.pi/agent/extensions/sharp-at-file.ts and use /reload
 ```
 
 ### Manual test matrix
@@ -601,6 +613,15 @@ export default function (pi: ExtensionAPI) {
 }
 
 // ... injectFiles() + helpers per §9 ...
+```
+
+**Companion file — `package.json`:** the skeleton above is the whole extension, but the repo also
+needs a `package.json` with a `"pi"` manifest so the *directory* is loadable (see §8). Without it,
+`pi install .` / `-e <dir>` / a package registration all fail with `Cannot find module '<dir>'`:
+
+```json
+{ "name": "pi-auto-reader", "version": "0.1.0", "private": true, "type": "module",
+  "pi": { "extensions": ["sharp-at-file.ts"] } }
 ```
 
 **Done-definition:** all 14 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files; prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.

@@ -20,9 +20,15 @@ a CLI argument *before* the session starts; interactively, bare `@` is just path
 
 ## Installation
 
-Pick whichever placement fits your workflow. The extension is a single `.ts` file with **zero npm
-dependencies** — no build step, no `package.json`, no `tsconfig`. Pi loads `.ts` extensions via
-[jiti](https://github.com/unjs/jiti) (transpile-on-load), so copying the file is the whole install.
+The extension is a single `.ts` file with **zero npm dependencies** and **no build step** — Pi
+loads `.ts` extensions via [jiti](https://github.com/unjs/jiti) (transpile-on-load). There are two
+install models: **copy the `.ts`** into an auto-discovered extensions dir, or install the **repo as
+a pi package** with `pi install`. The repo carries a thin `package.json` whose `"pi"` manifest
+declares `sharp-at-file.ts`, so the directory itself is a loadable package — this is what makes
+`pi install .` work and what prevents the `Cannot find module '<dir>'` crash if the directory is
+ever handed to the loader directly (e.g. registered as a package or passed to `-e`).
+
+Pick whichever placement fits your workflow.
 
 ### Global (recommended for "always on")
 
@@ -43,20 +49,36 @@ cp sharp-at-file.ts .pi/extensions/sharp-at-file.ts
 
 Project-local extensions load after the project is trusted.
 
+### As a package (`pi install`)
+
+The repo is a valid pi package — its `package.json` declares `sharp-at-file.ts` under a `"pi"`
+manifest — so you can install it by path instead of copying a file:
+
+```bash
+pi install .                            # current directory
+pi install /abs/path/to/pi-auto-reader  # absolute path
+```
+
+This registers the directory in `~/.pi/agent/settings.json` (`packages`) and loads the extension
+from there on every `pi` start. Use `pi remove .` (or the path you installed with) to uninstall.
+Pick this **or** the copy method — not both (see the warning below).
+
 ### ⚠ Upgrading? Install exactly ONE copy (delete the old one)
 
-Pi loads **project-local** `.pi/extensions/` **before** the **global** `~/.pi/agent/extensions/`
-copy. If you upgrade by adding a new copy in one location while a **stale** copy remains in the
-other, **both run on every prompt**. The extension's per-token dedup is **one-directional**: a copy
-that runs *after* a stale (pre-dedup) copy cannot stop that stale copy from re-injecting the same
-file, so you can silently get **two identical `<file>` blocks** (doubled tokens) — see
-[`validation_report.md`](validation_report.md) finding **F-NEW-1**.
+Pi can load this extension from several places — the **global** `~/.pi/agent/extensions/` dir, a
+**project-local** `.pi/extensions/` dir, **and** any directory registered via `pi install`. If more
+than one of these resolves to `sharp-at-file.ts`, **all of them run on every prompt**. The
+extension's per-token dedup is **one-directional**: a copy that runs *after* a stale (pre-dedup)
+copy cannot stop that stale copy from re-injecting the same file, so you can silently get **two
+identical `<file>` blocks** (doubled tokens) — see [`validation_report.md`](validation_report.md)
+finding **F-NEW-1**.
 
 **When upgrading, delete the old copy first** — don't just add the new one elsewhere:
 
 ```bash
 rm -f ~/.pi/agent/extensions/sharp-at-file.ts   # remove a stale GLOBAL copy
 rm -f .pi/extensions/sharp-at-file.ts           # …and/or a stale PROJECT-LOCAL copy
+pi remove .                                      # …and/or a `pi install` package registration
 # then install the new copy in exactly ONE of the locations above
 ```
 
