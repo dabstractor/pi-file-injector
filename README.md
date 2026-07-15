@@ -109,7 +109,10 @@ Notes on the table:
 where `<path>` is a maximal run of non-whitespace characters.
 
 **Where it matches:** at the start of the prompt, **or** immediately after a non-word character
-(space, `(`, `[`, `>`, etc.). It does **not** match mid-word — `foo#@bar` injects nothing.
+(space, `(`, `[`, `>`, etc.). It does **not** match mid-word — `foo#@bar` injects nothing. The word
+boundary is **Unicode-aware**: `#@` does not trigger after non-ASCII letters or numbers in any
+language either (e.g. `café#@x`, `Öster#@x`, or CJK like `日本語#@x` inject nothing), exactly as it
+does not trigger after ASCII letters/digits/underscore.
 
 **Trailing punctuation is trimmed.** `` `#@a.ts.` `` resolves to `a.ts`; `` `(#@a.txt)` `` resolves
 to `a.txt`. The trimmed characters are exactly:

@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Core Dedup Fix & Regex Update (Issues 1, 2, 5, 6)",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Replace the F1 sentinel-based dedup with per-token dedup in injectFiles (fixes Issues 1, 2, 6), and update the detection regex to use Unicode-aware word boundaries (fixes Issue 5). These are the code changes; tests ride with each subtask per the implicit TDD workflow.",
           "tasks": [
             {
@@ -62,14 +62,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Unicode-aware regex boundary (Issue 5)",
-              "status": "Ready",
+              "status": "Complete",
               "description": "The detection regex FILE_INJECT_RE = /(^|(?<=\\W))#@(\\S+)/g uses \\W in a non-`u` JS regex, which classifies non-ASCII letters (é, ö, ñ, CJK) as non-word. This causes #@ to trigger mid-word in any non-Latin script (e.g. café#@secret.txt injects, despite #@ being mid-word). The fix adds the `u` flag and uses Unicode property escapes for the word boundary.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Update FILE_INJECT_RE with Unicode property escapes",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/system_context.md § 'Unicode Regex Fix' and architecture/code_changes_analysis.md § 'Issue 5'. Verified in Node.js: the proposed regex /(^|(?<![\\p{L}\\p{N}_]))#@(\\S+)/gu correctly blocks café#@secret.txt and 日本語#@file while still matching Review #@a.ts, #@a.ts (start-of-string), and foo#@bar (mid-word, correctly blocked). The `u` flag is required for \\p{L} (Unicode Letter) and \\p{N} (Unicode Number) property escapes. The negative lookbehind (?<![\\p{L}\\p{N}_]) means 'not preceded by a Unicode letter, number, or underscore' — the correct Unicode-aware word boundary.\n2. INPUT: The module-level constant FILE_INJECT_RE at line ~6 of sharp-at-file.ts: `const FILE_INJECT_RE = /(^|(?<=\\W))#@(\\S+)/g;`\n3. LOGIC: Replace the regex with: `const FILE_INJECT_RE = /(^|(?<![\\p{L}\\p{N}_]))#@(\\S+)/gu;`. The capture group structure is unchanged: group 2 still captures the path token (\\S+). The ^ alternation still handles start-of-string (where the lookbehind has no preceding char). No other code changes needed — matchAll(FILE_INJECT_RE) and the m[2] access pattern work identically.\n4. OUTPUT: FILE_INJECT_RE now uses Unicode-aware word boundaries. Non-ASCII letters before #@ no longer satisfy the boundary condition. The matchAll iteration, capture groups, and downstream token processing are unaffected.\n5. MOCKING: No external services. Verify with the test harness: add test cases for café#@file (no match), 日本語#@file (no match), Review #@a.ts (match), #@a.ts at start (match), foo#@bar (no match).\n6. DOCS: [Mode A] Update README.md §Syntax subsection ('Where it matches') to note that #@ uses Unicode-aware word boundaries — it does not trigger after non-ASCII letters in any language (é, ö, ñ, CJK, etc.). This rides WITH the work.",
@@ -93,14 +93,14 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Update harness for dedup and sentinel-removal behaviors",
-              "status": "Planned",
+              "status": "Researching",
               "description": "The F1 test currently codifies sentinel-based behavior (it expects the handler to return 'continue' because SENTINEL_RE matches). With the sentinel removed (P1.M1.T1.S2), this test must be rewritten to verify per-token dedup instead. Additionally, new tests must be added for the co-load non-sentinel scenario (Issue 1) and the sentinel-in-prompt scenario (Issue 2).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Rewrite F1 test and add co-load + sentinel-in-prompt tests",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",
