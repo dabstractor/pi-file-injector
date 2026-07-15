@@ -571,7 +571,7 @@ Unconditional injection means a careless `#@` on a huge file can **blow the cont
 ### 13.3 Why a separate symbol instead of reusing `@`
 - `@` is overloaded (autocomplete + CLI inject). Overloading it further with "inject whole file interactively" would be ambiguous and would change existing behavior.
 - `#@` is unambiguous, collision-free (§3.2), and signals stronger intent — the `#` reads as "force/sharp/inject."
-- It composes with Pi's existing `@` autocomplete: a user can type `#` then use `@`-completion to fill the path, yielding `#@path`.
+- The `#` does **not** piggyback on Pi's `@` autocomplete on its own — Pi's file-completion gate only fires for `@` at a token boundary, and `#` glued in front closes it. Path completion for `#@` is provided by a separate autocomplete provider (see §14).
 
 ### 13.4 Why no config
 Configuring this feature would defeat its purpose. The contract is "always, entirely." Adding knobs (size, format, image toggle) reintroduces exactly the complexity the user asked to remove. If size-gated injection is later wanted, that is the *other* extension (`@` with a threshold), not this one.
@@ -582,6 +582,51 @@ This PRD and a size-gated `@` extension are **complementary, not competing**:
 - `@file` (gated) → small files inline, large files delegate to `read` (the token-economics sweet-spot feature).
 
 They can coexist: `#@` for "I know I want all of it," `@` for "inline it if it's small."
+
+---
+
+## 14. Interactive Path Autocomplete (TUI)
+
+`#@` is a two-character trigger, and Pi's built-in `@` file-completion (gitignore-aware, powered by
+`fd`) only fires when `@` sits at a token boundary. A `#` glued immediately in front of the `@`
+closes that gate, so — out of the box — typing `#@` yields **no** path suggestions; the user must
+type the full path by hand.
+
+### 14.1 Hook
+
+Pi exposes `ctx.ui.addAutocompleteProvider(factory)` (TUI/RPC modes only; see Pi's
+`docs/extensions.md` → "Autocomplete Providers"). The factory wraps the built-in provider (received
+as `current`) and can override three levers: `getSuggestions`, `applyCompletion`, and
+`shouldTriggerFileCompletion` (the gate). The extension registers it on `session_start`, guarded for
+headless print/json modes. This is purely a TUI affordance — headless `pi -p "...#@file..."` is
+unaffected (the user types the full path; injection still runs via the `input` handler).
+
+### 14.2 Implementation (shipped) — line-rewrite reuse (Option 1)
+
+**Option 2 (gate override) was tried first and rejected.** Overriding only
+`shouldTriggerFileCompletion` to return `true` at `#@<partial>` (delegating the rest to the built-in)
+produced **no suggestions**: Pi's built-in `@`-query extraction is itself boundary-strict
+(`CombinedAutocompleteProvider.extractAtPrefix` requires `@` at a token boundary), so opening the
+gate alone is insufficient. Reverted.
+
+**Shipped: Option 1 — line-rewrite reuse.** In `getSuggestions`, detect `#@<partial>` at the cursor,
+rewrite that one `#` into a space (so the built-in sees a clean `@<partial>` at a valid boundary),
+delegate to `current.getSuggestions(...)`, then remap the result back to `#@`: `prefix "@<partial>"`
+→ `"#@<partial>"` and each item value `@<path>` → `#@<path>`. `applyCompletion` is implemented
+inline for `#@` prefixes (deterministic replace, cursor placed after the inserted value) and
+delegates otherwise; `shouldTriggerFileCompletion` delegates to the built-in unchanged. This reuses
+Pi's entire file engine — gitignore-aware `fd` listing, sorting, fuzzy matching — with **zero**
+reimplementation; only a one-character line rewrite and a prefix/value remap are added.
+
+A last-resort **Option 4** (reimplement file listing via `fd`/`git ls-files`, à la Pi's
+`github-issue-autocomplete` example) remains documented but was **not** needed — reuse through
+`current` works.
+
+### 14.3 Non-goal
+
+No suffix-style `@<file>#` trigger. It would inherit Pi's `@` completion for free but demands a
+trailing `#` the user must type (and often backspace an inserted boundary for), and it makes `#` a
+suffix marker that collides with prose. `#@` (prefix) with a completion provider is strictly better.
 
 ---
 

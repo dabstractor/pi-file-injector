@@ -130,10 +130,10 @@ function makeMockCtx(cwd, { hasUI = true } = {}) {
   };
 }
 
-function captureHandler() {
+function captureHandler(event = "input") {
   const slot = {};
-  const pi = { on: (_event, cb) => { slot.cb = cb; } };
-  mod.default(pi); // registers the handler on slot.cb
+  const pi = { on: (ev, cb) => { if (ev === event) slot.cb = cb; } }; // capture by event name (factory registers both input + session_start)
+  mod.default(pi); // registers handlers; slot.cb holds the one for `event`
   return slot;
 }
 
@@ -683,6 +683,58 @@ await runCase("U1", "U1 — Unicode word-boundary: #@ does not fire mid-word in 
   r = await mod.injectFiles("foo#@bar", [], FIX);
   assert(r.injected === 0, `(e) foo#@bar must NOT inject (ASCII mid-word, still blocked), got ${r.injected}`);
   assert(r.text === "foo#@bar", `(e) foo#@bar text must be unchanged when not matched`);
+});
+
+// ── A1: #@ autocomplete reuses pi's @ file engine via line-rewrite (Option 1) ─────
+// The factory also registers a `session_start` handler that installs an autocomplete provider via
+// ctx.ui.addAutocompleteProvider, so `#@` gets path completion by reusing pi's built-in `@` engine
+// (PRD §14). Option 2 (gate override) was tried and produced nothing — reverted. This case pins
+// the shipped Option 1 behavior: rewrite '#'→space, delegate, remap prefix/items back to #@, and a
+// deterministic applyCompletion for #@ prefixes. Headless-guarded (no ctx.ui → no-op).
+await runCase("A1", "A1 — #@ autocomplete: rewrites '#'→space for built-in, remaps result to #@, deterministic apply", async () => {
+  const slot = captureHandler("session_start");
+  assert(typeof slot.cb === "function", "factory must register a session_start handler");
+
+  // Headless guard: no ctx.ui.addAutocompleteProvider → no-op, must not throw.
+  await slot.cb({}, { cwd: TMPDIR });
+  await slot.cb({}, { cwd: TMPDIR, ui: {} });
+
+  // Fake built-in: simulates pi's @ file completion. Captures the lines it received and returns
+  // file items whose prefix/value carry the '@' (as pi does), so we can assert the #@ remap.
+  let seenLines = null;
+  const fakeCurrent = {
+    getSuggestions: async (lines) => { seenLines = lines.map((l) => l.slice()); return { prefix: "@src/", items: [{ value: "@src/index.ts", label: "index.ts", description: "" }, { value: "@src/util.ts", label: "util.ts", description: "" }] }; },
+    applyCompletion: (lines, line, col) => ({ lines, cursorLine: line, cursorCol: col }),
+    shouldTriggerFileCompletion: () => false,
+  };
+  let providerFactory = null;
+  const ctx = { cwd: TMPDIR, ui: { addAutocompleteProvider: (f) => { providerFactory = f; } } };
+  await slot.cb({}, ctx);
+  assert(typeof providerFactory === "function", "session_start must call ctx.ui.addAutocompleteProvider with a factory");
+
+  const provider = providerFactory(fakeCurrent);
+  assert(Array.isArray(provider.triggerCharacters) && provider.triggerCharacters.includes("@"),
+    `triggerCharacters must include "@" (got ${JSON.stringify(provider.triggerCharacters)})`);
+
+  // getSuggestions: #@<partial> → rewrite '#' to space, delegate, remap to #@.
+  const out = await provider.getSuggestions(["Review #@src/"], 0, "Review #@src/".length, { signal: { aborted: false } });
+  assert(seenLines && seenLines[0] === "Review  @src/", `built-in must see '#' rewritten to space, got ${JSON.stringify(seenLines && seenLines[0])}`);
+  assert(out && out.prefix === "#@src/", `prefix must be remapped to '#@src/', got ${JSON.stringify(out && out.prefix)}`);
+  assert(out && out.items.length === 2 && out.items.every((it) => it.value.startsWith("#@")), `every item value must be remapped to start with '#@' (got ${JSON.stringify(out && out.items.map((i) => i.value))})`);
+  assert(out.items[0].value === "#@src/index.ts", `first item value must be '#@src/index.ts', got ${out.items[0].value}`);
+
+  // Non-#@ input delegates to the built-in UNCHANGED (no rewrite, no remap — prefix stays '@src/').
+  const out2 = await provider.getSuggestions(["Review @src/"], 0, "Review @src/".length, { signal: { aborted: false } });
+  assert(out2 && out2.prefix === "@src/", "non-#@ must delegate to built-in unchanged (prefix '@src/', not remapped)");
+
+  // applyCompletion: #@ prefix → deterministic replace; cursor lands after the inserted value.
+  const applied = provider.applyCompletion(["Review #@src/"], 0, "Review #@src/".length, { value: "#@src/index.ts", label: "index.ts" }, "#@src/");
+  assert(applied.lines[0] === "Review #@src/index.ts", `apply must produce 'Review #@src/index.ts', got ${JSON.stringify(applied.lines[0])}`);
+  assert(applied.cursorCol === "Review #@src/index.ts".length, `cursor must land at end of inserted value (got ${applied.cursorCol})`);
+
+  // applyCompletion: non-#@ prefix delegates to the built-in (returns defined value).
+  const delegated = provider.applyCompletion(["x"], 0, 1, { value: "y", label: "y" }, "z");
+  assert(delegated !== undefined, "non-#@ apply must delegate to built-in (return defined)");
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

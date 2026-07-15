@@ -249,4 +249,70 @@ export default function (pi: ExtensionAPI) {
     if (ctx.hasUI) ctx.ui.notify(`#@ injected ${injected} ${injected === 1 ? "file" : "files"}`, "info"); // F4 — proper pluralization; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
   });
+
+  // ── #@ path autocomplete (TUI/RPC only) ─────────────────────────────────────
+  // pi's built-in `@` completion lists files (gitignore-aware, via `fd`) but only fires when `@`
+  // sits at a token boundary; `#` glued in front closes it, so `#@` gets no completion on its own
+  // (verified: merely opening the shouldTriggerFileCompletion gate for `#@` yields nothing — pi's
+  // @-query extraction is itself boundary-strict). So instead we REUSE pi's file engine without
+  // reimplementing it: when the cursor is at `#@<partial>`, rewrite that one '#' into a space
+  // (giving the built-in a clean `@<partial>` at a valid boundary), delegate getSuggestions to the
+  // built-in, then remap the result back to `#@` (prefix `@<partial>` → `#@<partial>`; each item
+  // value `@<path>` → `#@<path>`). applyCompletion is handled here for our `#@` prefix so insertion
+  // is deterministic; everything else delegates. TUI/RPC only (headless print/json is a no-op);
+  // `pi -p "...#@file..."` is unaffected.
+  pi.on("session_start", (_event, ctx) => {
+    if (!ctx.ui || typeof ctx.ui.addAutocompleteProvider !== "function") return; // headless print/json guard
+    ctx.ui.addAutocompleteProvider((current) => ({
+      triggerCharacters: ["@"], // typing the @ in #@ (re)evaluates suggestions
+      async getSuggestions(lines, cursorLine, cursorCol, options) {
+        const line = lines[cursorLine] ?? "";
+        const before = line.slice(0, cursorCol);
+        const m = before.match(/#@([^@\s]*)$/); // our trigger ending at the cursor
+        if (!m) return current.getSuggestions(lines, cursorLine, cursorCol, options); // not #@ → built-in owns it
+        const partial = m[1];
+
+        // Rewrite the '#' immediately before our '@' into a space. The '@', the partial, and the
+        // cursor position are unchanged, so the built-in lists exactly the files it would for a
+        // normal `@<partial>` mention — gitignore-aware, sorted, fuzzy — via `fd`.
+        const hashIdx = cursorCol - partial.length - 2; // index of '#' (before '@' + partial)
+        if (hashIdx < 0) return current.getSuggestions(lines, cursorLine, cursorCol, options);
+        const rewrittenLine = line.slice(0, hashIdx) + " " + line.slice(hashIdx + 1);
+        const rewrittenLines = lines.slice();
+        rewrittenLines[cursorLine] = rewrittenLine;
+
+        const inner = await current.getSuggestions(rewrittenLines, cursorLine, cursorCol, options);
+        if (options.signal?.aborted || !inner || inner.items.length === 0) return inner; // nothing / aborted
+        // Only remap built-in FILE suggestions (prefix `@…`). If the built-in somehow returned
+        // non-@ items, pass them through untouched so we don't mangle slash-command suggestions.
+        if (!inner.prefix.startsWith("@")) return inner;
+
+        const items = inner.items.map((it) => {
+          let v = it.value;
+          if (!v.startsWith("#@")) v = v.startsWith("@") ? "#" + v : "#@" + v; // @path → #@path
+          return v === it.value ? it : { ...it, value: v };
+        });
+        return { prefix: `#@${partial}`, items };
+      },
+      applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+        // Deterministic insert for our #@ items: replace `prefix` (which ends at the cursor) with
+        // `item.value`, place the cursor just past it. Delegate anything else to the built-in.
+        if (typeof prefix === "string" && prefix.startsWith("#@")) {
+          const line = lines[cursorLine] ?? "";
+          const before = line.slice(0, cursorCol);
+          if (before.endsWith(prefix)) {
+            const start = cursorCol - prefix.length;
+            const value = typeof item?.value === "string" ? item.value : "";
+            const newLines = lines.slice();
+            newLines[cursorLine] = before.slice(0, start) + value + line.slice(cursorCol);
+            return { lines: newLines, cursorLine, cursorCol: start + value.length };
+          }
+        }
+        return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+      },
+      shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+        return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true; // built-in decides
+      },
+    }));
+  });
 }
