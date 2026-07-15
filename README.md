@@ -202,9 +202,12 @@ node ./sharp-at-file.test.mjs     # model-free; exits 0 iff all assertions pass
 ```
 
 The harness imports the **real** `sharp-at-file.ts` (via jiti, exactly like Pi's loader), runs all
-14 PRD §11 acceptance cases plus edge cases, the three handler guards, and the headless/notify path,
-and prints a pass/fail matrix. At last run: **23 passed, 0 failed.** No network, no model API key,
-and no Pi process are required. See
+14 PRD §11 acceptance cases plus edge cases, the three handler guards, the headless/notify path,
+**co-load dedup** (a non-sentinel co-loaded copy must not double-inject a file), the
+**sentinel-in-prompt** regression (a prompt containing the literal marker still injects its files),
+and **Unicode word-boundary** tests (`#@` does not fire mid-word in any language), and prints a
+pass/fail matrix. At last run: **31 passed, 0 failed.** No network, no model API key, and no Pi
+process are required. See
 [`plan/001_5aa8724eb506/P1M2T4S1/validation_report.md`](plan/001_5aa8724eb506/P1M2T4S1/validation_report.md)
 for the full recorded results, including the two live-`pi` integration confirmations (the `-p` path
 and the end-to-end format parity with `@file`).
