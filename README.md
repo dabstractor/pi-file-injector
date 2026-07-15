@@ -79,7 +79,8 @@ not inline-replace). These are the exact prompts the test harness exercises, so 
 | File type | What `#@path` does | Output appended to your prompt |
 |---|---|---|
 | **Text** (`.ts`, `.md`, `.json`, `.log`, …) | Entire file contents injected, no truncation | `<file name="/abs/path">`<br>`<entire contents>`<br>`</file>` |
-| **Image** (`.png` `.jpg`/`.jpeg` `.gif` `.webp` `.bmp`) | Attached as an image (auto-resized ≤2000×2000 so providers accept it) AND a reference tag | `<file name="/abs/path"></file>` *(plus the image is attached)* |
+| **Image** (`.png` `.jpg`/`.jpeg` `.gif` `.webp` `.bmp`) | Attached as an image (auto-resized ≤2000×2000 so providers accept it) AND a reference tag — but only after its first bytes pass a magic-number sniff (see notes); a mislabeled file (text named `.png`) falls through to the **text/binary** row instead of attaching as garbage | `<file name="/abs/path"></file>` *(plus the image is attached)* |
+| **Empty image** (0-byte `.png`/`.jpg`/etc.) | Attaches **nothing** — an empty `ImageContent` would be rejected by providers, so a note block is emitted instead | `<file name="/abs/path"><empty image file — 0 bytes; nothing to attach></file>` |
 | **Other binary** (a NUL byte is detected, and it's not an image) | NOT decoded — a clear note instead of garbage | `<file name="/abs/path"><binary file — contents not injected; use the read tool if needed></file>` |
 | **Missing file** | Token left exactly as you wrote it | *(nothing appended)* |
 | **Directory** (`#@src/`) | Token left exactly as you wrote it | *(nothing appended)* |
@@ -102,6 +103,19 @@ Notes on the table:
 - A broken `#@` **never** breaks your prompt. Each file is isolated in its own `try`/`catch`, so a
   missing file, a directory, a permission error, or an unreadable file just leaves the `#@token`
   verbatim and processing continues with the rest.
+- **Images are validated by both extension *and* actual bytes (magic-number sniff).** A file is
+  attached as an image only if its extension is a recognized image type *and* its first bytes match
+  that type's signature (PNG/JPEG/GIF/WEBP/BMP; files under 12 bytes always fail). A mislabeled file
+  (e.g. a text body saved as `fake.png`) therefore falls through to the **text/binary** path and is
+  injected as text — it is **not** attached as decoded garbage labeled as an image. This is a
+  deliberate, safer improvement over routing by extension alone. *(Harness cases `F3a`, `F3b`.)*
+- **A 0-byte image file attaches nothing.** An empty `ImageContent` would be rejected by providers,
+  so instead of attaching an empty image the extension emits a note block —
+  `<file name="…"><empty image file — 0 bytes; nothing to attach></file>` (the `—` is the same em
+  dash, U+2014, used in the binary note) — and attaches no image, while still referencing the path.
+  Note the contrast: a 0-byte *text* file is unaffected and injects as `<file name="…">\n\n</file>`;
+  only 0-byte *images* get this special-case. This is a deliberate divergence, made to avoid a
+  provider-rejected empty image. *(Harness case `F5`.)*
 
 ## Syntax
 

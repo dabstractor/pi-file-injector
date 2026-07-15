@@ -86,7 +86,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Test Harness Coverage Expansion",
-          "status": "Complete",
+          "status": "Ready",
           "description": "The existing 28-case harness has critical blind spots: (1) the F1 test only re-feeds through the same sentinel-stamping handler — it never simulates a non-sentinel co-loaded copy; (2) no test covers a user prompt containing the sentinel string; (3) no test covers Unicode boundary behavior. These gaps allowed Issues 1, 2, and 5 to slip through. This milestone updates the harness to cover the new per-token dedup behavior and adds regression tests for all three scenarios.",
           "tasks": [
             {
@@ -122,14 +122,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Add Unicode regex boundary regression tests",
-              "status": "Complete",
+              "status": "Ready",
               "description": "No existing test covers the Unicode \\W lookbehind quirk. Add regression tests verifying that #@ does not trigger after non-ASCII letters, while existing ASCII patterns still work correctly.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Add Unicode boundary test cases",
-                  "status": "Complete",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S1"
@@ -156,14 +156,14 @@
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Document intentional F3/F5 deviations in README (Issues 3, 4)",
-              "status": "Ready",
+              "status": "Complete",
               "description": "The F3 magic-number sniff and F5 empty-image handling are deliberate improvements over the literal PRD that are not documented. Update the README behavior-by-file-type table and notes to explicitly document these as intentional enhancements, preventing user confusion.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Document F3 magic-number sniff and F5 empty-image handling in README",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/system_context.md § 'Spec Deviations'. F3 (hasValidImageMagic at sharp-at-file.ts ~lines 29-52) validates that a file with an image extension has actual image bytes before attaching it as an ImageContent. A mislabeled file (text named .png) falls through to the text/binary path. F5 (formatEmptyImageBlock at ~line 78) special-cases 0-byte images: instead of emitting an empty <file>\\n\\n</file> (PRD §10), it emits <file name=\"<abs>\"><empty image file — 0 bytes; nothing to attach></file> and attaches no image (an empty ImageContent would be rejected by providers). Both behaviors are verified by the harness (cases F3a, F3b, F5).\n2. INPUT: README.md. The behavior-by-file-type table under § 'Behavior by file type' has rows for Text, Image, Other binary, Missing file, Directory, Read/permission error. The known limitations section lists current limitations.\n3. LOGIC: Make these README.md changes:\n   (a) In the Image row of the behavior-by-file-type table, add a note: image files are validated by BOTH extension AND actual file bytes (magic-number sniff). A file with an image extension but non-image content falls through to the text/binary path. This prevents attaching decoded garbage as an image.\n   (b) Add a new row or note for empty image files (0-byte .png/.jpg/etc.): produces <empty image file — 0 bytes; nothing to attach> note block, no image attached. This avoids sending an empty ImageContent that providers would reject.\n   (c) In the 'Notes on the table' section below the table, add bullet points explaining both the F3 magic-number validation and F5 empty-image handling as intentional enhancements.\n4. OUTPUT: README.md behavior-by-file-type section now documents both the F3 magic-number sniff and F5 empty-image handling. Users reading the README will understand these behaviors are deliberate.\n5. MOCKING: No external services. This is pure documentation work.\n6. DOCS: [Mode A] This subtask IS the documentation work — it updates README.md § 'Behavior by file type' and § 'Notes on the table' to document the F3/F5 deviations.",
