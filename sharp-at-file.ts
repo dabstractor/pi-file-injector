@@ -74,6 +74,74 @@ export function formatBinaryBlock(abs: string): string {
   return '<file name="' + abs + '"><binary file \u2014 contents not injected; use the read tool if needed></file>';
 }
 
+/**
+ * PRD §9 — core assembly. Iterate every `#@<path>` token in `text`, resolve+stat+classify+read each,
+ * append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image), and return the
+ * transformed prompt + merged images + count. NEVER throws (each file is isolated in try/catch);
+ * tokens that miss/are directories/throw are left verbatim. The original prompt text is NOT modified —
+ * blocks are appended after `\n\n---\n\n`, joined with `\n\n` (PRD §6.2). `injected` is a COUNT:
+ * 0 => caller (T3.S2) returns {action:"continue"}; >0 => {action:"transform", text, images}.
+ */
+export async function injectFiles(
+  text: string,
+  imagesIn: ImageContent[],
+  ctx: { cwd: string },
+): Promise<{ text: string; images: ImageContent[]; injected: number }> {
+  const blocks: string[] = [];
+  const images = [...imagesIn]; // MERGE — runner REPLACES the array on transform; seed originals (item §3a)
+  let count = 0;
+
+  for (const m of text.matchAll(FILE_INJECT_RE)) {
+    const raw = m[2]; // capture group 2 = path token after #@ (group 1 is the zero-width ^ anchor)
+    const token = cleanToken(raw); // trim trailing punctuation (S2)
+    if (!token) continue; // empty after trim => skip, leave verbatim
+
+    const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
+
+    let st;
+    try {
+      st = await fs.stat(abs);
+    } catch {
+      continue; // missing file => leave token verbatim (PRD §5.4)
+    }
+    if (!st.isFile()) continue; // directory / socket / etc. => leave token verbatim (PRD §5.4)
+
+    const ext = extOf(abs); // lowercase ext, "" for no-dot/hidden (S2)
+    const mime = MIME_BY_EXT[ext]; // undefined => not a recognized image => text/binary path
+
+    try {
+      if (mime) {
+        // IMAGE path (PRD §5.2) — classified by MIME first; SKIPS the NUL-byte check entirely.
+        const buf = await fs.readFile(abs);
+        const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
+        images.push({
+          type: "image",
+          data: resized?.data ?? buf.toString("base64"), // null => raw base64 of ORIGINAL bytes
+          mimeType: resized?.mimeType ?? mime, // null => original mime
+        });
+        blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file> (T2.S1 guards null)
+      } else {
+        // TEXT / BINARY path (PRD §5.1 / §5.3)
+        const buf = await fs.readFile(abs);
+        if (isBinary(buf)) {
+          blocks.push(formatBinaryBlock(abs)); // §5.3 note — no decoded garbage (em dash U+2014)
+        } else {
+          blocks.push(formatTextFileBlock(abs, buf.toString("utf8"))); // ENTIRE file, no truncation (§5.1)
+        }
+      }
+      count++;
+    } catch {
+      // read/resize error => leave THIS token verbatim, keep processing the rest (PRD §5.4, §12.5)
+      continue;
+    }
+  }
+
+  if (count === 0) return { text, images: imagesIn, injected: 0 }; // ORIGINAL ref — nothing changed (item §3i)
+
+  const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
+  return { text: finalText, images, injected: count };
+}
+
 export default function (pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     return { action: "continue" };
