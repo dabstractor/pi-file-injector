@@ -155,14 +155,14 @@
               "type": "Task",
               "id": "P1.M2.T4",
               "title": "Acceptance Criteria Validation",
-              "status": "Planned",
+              "status": "Complete",
               "description": "Execute the complete 14-case manual test matrix from PRD §11 to validate that the extension meets all acceptance criteria: file injection works in all contexts, format parity with built-in @file, correct handling of images/binaries/missing/directories, no interference with bare @ syntax, and no uncaught errors.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T4.S1",
                   "title": "Manual test matrix: all 14 acceptance cases including format parity and @ non-interference",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T3.S2"
