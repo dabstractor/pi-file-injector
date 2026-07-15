@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Per-token dedup replaces sentinel mechanism (Issues 1, 2, 6)",
-              "status": "Ready",
+              "status": "Complete",
               "description": "The F1 sentinel dedup is cooperation-based: it only prevents re-injection if the prior copy also stamped the sentinel. When a non-sentinel copy co-loads (e.g. a stale global version), the sentinel guard fails to fire, and every #@file is injected twice. Additionally, the sentinel guard tests the raw user prompt before injection, so any prompt containing the literal sentinel string silently disables ALL #@ injection. The fix: add per-token dedup in injectFiles (skip a resolved path if a <file name=\"<abs>\"> block for it already exists in the text), then remove the sentinel entirely (constant, regex, handler guard, assembly insertion). This restores the exact PRD §6.2 assembly format.",
               "subtasks": [
                 {
@@ -42,7 +42,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Remove sentinel mechanism entirely",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"

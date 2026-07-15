@@ -16,15 +16,6 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 const TRAILING_PUNCT = ".,;:!?\")]}>'";
 
-/** F1 — hidden sentinel stamped on the injected section. A SECOND copy of this extension
- *  (e.g. loaded globally AND project-locally, or two -e copies) re-processes the same
- *  message; the sentinel lets it detect we already injected and skip, avoiding duplicate
- *  blocks. An HTML comment is invisible to the model and survives unchanged through the
- *  transform pipeline. It is emitted ONLY on the appended section — never inside the
- *  per-file <file> block — so it does NOT affect the byte-identical block parity (Phase 5). */
-const INJECT_SENTINEL = "<!--#@file-injected-->";
-const SENTINEL_RE = /<!--#@file-injected-->/;
-
 /** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
  *  bytes match the declared image type before attaching. A mislabeled file (text body named
  *  `.png`) fails the sniff → falls through to the text/binary path instead of attaching
@@ -204,11 +195,7 @@ export async function injectFiles(
 
   if (count === 0) return { text, images: imagesIn, injected: 0 }; // ORIGINAL ref — nothing changed (item §3i)
 
-  // F1 — stamp a hidden sentinel on the appended section so a SECOND copy of this extension
-  // (loaded from a distinct path) can detect we already injected and skip, avoiding duplicate
-  // blocks. Placed AFTER the original prompt + separator, OUTSIDE every <file> block, so it does
-  // not touch the byte-identical block content (Phase 5 parity).
-  const finalText = `${text}\n\n---\n\n${INJECT_SENTINEL}\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
+  const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
   return { text: finalText, images, injected: count };
 }
 
@@ -242,10 +229,6 @@ export default function (pi: ExtensionAPI) {
     if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
     if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
-    // F1 — if THIS message was already transformed by another copy of this extension (loaded
-    // from a distinct path — e.g. global + project-local, or two -e copies), our sentinel is
-    // present. Skip to avoid re-injecting the same files (duplicate blocks / token waste).
-    if (SENTINEL_RE.test(event.text)) return { action: "continue" };
 
     const { text, images, injected } = await injectFiles(event.text, event.images ?? [], ctx);
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1)
