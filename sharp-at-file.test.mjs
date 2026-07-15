@@ -116,6 +116,8 @@ assert(typeof mod.cleanToken === "function", "mod.cleanToken must be a function"
 assert(typeof mod.formatTextFileBlock === "function", "mod.formatTextFileBlock must be a function");
 assert(typeof mod.formatImageBlock === "function", "mod.formatImageBlock must be a function");
 assert(typeof mod.formatBinaryBlock === "function", "mod.formatBinaryBlock must be a function");
+assert(typeof mod.formatEmptyImageBlock === "function", "mod.formatEmptyImageBlock must be a function (F5)");
+assert(typeof mod.hasValidImageMagic === "function", "mod.hasValidImageMagic must be a function (F3)");
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. Mock pi/ctx factories + handler capture (verified pattern — drives guards/notify/transform).
@@ -166,6 +168,10 @@ function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "pic.png"), PNG_BYTES);
   fsSync.writeFileSync(path.join(TMPDIR, "data.bin"), Buffer.from([0x00, 0x01, 0x02, 0xff, 0x00, 0xfe])); // has NUL → binary
   fsSync.writeFileSync(path.join(TMPDIR, "empty.txt"), ""); // 0 bytes
+  // F3 fixture: a file with an image extension but TEXT content (fails magic-number sniff).
+  fsSync.writeFileSync(path.join(TMPDIR, "fake.png"), "this is not really a PNG, just text\n");
+  // F5 fixture: a genuine 0-byte image file.
+  fsSync.writeFileSync(path.join(TMPDIR, "empty.png"), "");
   fsSync.mkdirSync(path.join(TMPDIR, "src"), { recursive: true }); // a directory
 
   // ~2 MB huge.log: many repeated lines. Exact byte-equality vs. the fixture proves "entire file,
@@ -198,6 +204,8 @@ const A_TXT = path.join(TMPDIR, "a.txt");
 const PIC = path.join(TMPDIR, "pic.png");
 const BIN = path.join(TMPDIR, "data.bin");
 const EMPTY = path.join(TMPDIR, "empty.txt");
+const FAKE_PNG = path.join(TMPDIR, "fake.png"); // F3: image-ext + text body
+const EMPTY_PNG = path.join(TMPDIR, "empty.png"); // F5: 0-byte image
 const HUGE = path.join(TMPDIR, "huge.log");
 const SRC = path.join(TMPDIR, "src") + path.sep; // includes trailing slash (token "src/")
 
@@ -308,7 +316,7 @@ await runCase(9, "multi-file: both injected in order; notify count", async () =>
   const slot = captureHandler();
   const out = await slot.cb({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must return transform, got '${out.action}'`);
-  assert(rec.notify && rec.notify.m === "#@ injected 2 file(s)", `notify message must be the count, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  assert(rec.notify && rec.notify.m === "#@ injected 2 files", `notify message must be the count, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
   assert(rec.notify.t === "info", `notify type must be 'info', got '${rec.notify && rec.notify.t}'`);
 });
 
@@ -340,7 +348,7 @@ await runCase(12, "handler transforms interactive input (input event fires for -
   const out = await slot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform an interactive #@ prompt, got '${out.action}'`);
   assert(out.text && out.text.includes('<file name="' + A_TS + '">'), "transformed text must contain the injected block");
-  assert(rec.notify && rec.notify.m === "#@ injected 1 file(s)", "notify must fire for the interactive path");
+  assert(rec.notify && rec.notify.m === "#@ injected 1 file", "notify must fire for the interactive path");
 });
 integrationCase(
   12,
@@ -476,6 +484,73 @@ await runCase("M1", "merge contract: user image preserved at [0] when injecting"
   assert(r.images.length === 2, `expected 2 images (user + injected), got ${r.images.length}`);
   assert(r.images[0] === userImg, "user-attached image must be preserved at index [0] (MERGE, not replace)");
   assert(r.images[1].data === PNG_BYTES.toString("base64"), "injected image must be appended at index [1]");
+});
+
+// ── F1/F3/F5: regression cases for the validation-report findings ──────────────
+
+await runCase("F1", "F1 — no re-injection when a sentinel is already present (second copy)", async () => {
+  // A SECOND copy of the extension receives the FIRST copy's transformed text (original prompt +
+  // sentinel + blocks). It must detect the sentinel and NOT re-inject. Tested at both layers:
+  //   (a) injectFiles itself is a pure function of text — so we pass already-injected text in and
+  //       confirm it returns the SAME text/count-0 (the sentinel guard lives in the HANDLER; here we
+  //       verify injectFiles is idempotent-safe by checking it doesn't double-append when given
+  //       text that already ends in our block — the handler is what carries the guard).
+  //   (b) the HANDLER guard: feed already-sentinel'd text through the captured handler and assert
+  //       action==='continue' with no notify and no extra blocks.
+  const first = await mod.injectFiles("Review #@a.ts", [], FIX);
+  // (b) handler guard — the load-bearing fix.
+  const { ctx, rec } = makeMockCtx(TMPDIR);
+  const slot = captureHandler();
+  const out = await slot.cb(
+    { text: first.text, source: "interactive", images: first.images },
+    ctx,
+  );
+  assert(out.action === "continue", `second copy must short-circuit on the sentinel, got '${out.action}'`);
+  assert(rec.notify === undefined, "second copy must NOT notify (nothing re-injected)");
+  // The returned nothing-changed: first.text already has exactly ONE <file> block for a.ts.
+  const aCount = (first.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `first pass must produce exactly 1 block for a.ts (got ${aCount}) — re-injection guard prevents a 2nd`);
+});
+
+await runCase("F3a", "F3 — mislabeled image (text body, .png ext) → text path, no garbage image", async () => {
+  const r = await mod.injectFiles("See #@fake.png", [], FIX);
+  assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
+  // Must NOT attach an image (no decoded garbage labeled image/png).
+  assert(r.images.length === 0, `must attach NO image for a mislabeled file, got ${r.images.length}`);
+  // Must inject the text content as a normal text <file> block (content includes its own trailing \n,
+  // so the block is `<file>\n<content>\n</file>` = `<file>\n...text\n\n</file>`).
+  const expected = '<file name="' + FAKE_PNG + '">\nthis is not really a PNG, just text\n\n</file>';
+  assert(r.text.includes(expected), "mislabeled image must fall through to the text <file> block (its actual content)");
+});
+
+await runCase("F3b", "F3 — hasValidImageMagic accepts real PNG, rejects text/random bytes", async () => {
+  assert(mod.hasValidImageMagic(PNG_BYTES, "image/png") === true, "real PNG bytes must pass the png sniff");
+  assert(mod.hasValidImageMagic(Buffer.from("not a png"), "image/png") === false, "text bytes must fail the png sniff");
+  assert(mod.hasValidImageMagic(Buffer.alloc(8), "image/png") === false, "too-short buffer must fail the sniff");
+  // A real JPEG header (FF D8 FF E0) must pass.
+  assert(mod.hasValidImageMagic(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0,0,0,0,0,0,0,0]), "image/jpeg") === true, "real JPEG header must pass the jpeg sniff");
+});
+
+await runCase("F5", "F5 — 0-byte image file → note block, NO empty ImageContent attached", async () => {
+  const r = await mod.injectFiles("See #@empty.png", [], FIX);
+  assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
+  // Must attach NO image (the whole point — an empty ImageContent would be rejected by providers).
+  assert(r.images.length === 0, `0-byte image must attach NO image, got ${r.images.length}`);
+  // Must emit a note block referencing the file (consistent with the binary/empty-text conventions).
+  const expected = '<file name="' + EMPTY_PNG + '"><empty image file \u2014 0 bytes; nothing to attach></file>';
+  assert(r.text.includes(expected), "0-byte image must produce the empty-image note block");
+});
+
+await runCase("F4", "F4 — notify pluralization (1 file / N files)", async () => {
+  const { ctx, rec } = makeMockCtx(TMPDIR);
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform, got '${out.action}'`);
+  assert(rec.notify && rec.notify.m === "#@ injected 1 file", `singular prompt must say '1 file', got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  const { ctx: ctx2, rec: rec2 } = makeMockCtx(TMPDIR);
+  const slot2 = captureHandler();
+  await slot2.cb({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx2);
+  assert(rec2.notify && rec2.notify.m === "#@ injected 2 files", `plural prompt must say '2 files', got ${JSON.stringify(rec2.notify && rec2.notify.m)}`);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

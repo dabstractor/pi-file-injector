@@ -16,6 +16,45 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 const TRAILING_PUNCT = ".,;:!?\")]}>'";
 
+/** F1 — hidden sentinel stamped on the injected section. A SECOND copy of this extension
+ *  (e.g. loaded globally AND project-locally, or two -e copies) re-processes the same
+ *  message; the sentinel lets it detect we already injected and skip, avoiding duplicate
+ *  blocks. An HTML comment is invisible to the model and survives unchanged through the
+ *  transform pipeline. It is emitted ONLY on the appended section — never inside the
+ *  per-file <file> block — so it does NOT affect the byte-identical block parity (Phase 5). */
+const INJECT_SENTINEL = "<!--#@file-injected-->";
+const SENTINEL_RE = /<!--#@file-injected-->/;
+
+/** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
+ *  bytes match the declared image type before attaching. A mislabeled file (text body named
+ *  `.png`) fails the sniff → falls through to the text/binary path instead of attaching
+ *  decoded garbage labeled as an image. Returns true if `buf`'s header matches `mime`. */
+export function hasValidImageMagic(buf: Buffer, mime: string): boolean {
+  // Common image signatures (first bytes only; a full parser is out of scope for routing).
+  if (buf.length < 12) return false;
+  switch (mime) {
+    case "image/png":
+      return (
+        buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+        buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+      );
+    case "image/jpeg":
+      return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+    case "image/gif":
+      return buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38; // "GIF8"
+    case "image/webp":
+      // "RIFF" .... "WEBP"
+      return (
+        buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+        buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+      );
+    case "image/bmp":
+      return buf[0] === 0x42 && buf[1] === 0x4d; // "BM"
+    default:
+      return false;
+  }
+}
+
 /** PRD §4.3 — trim every trailing char in TRAILING_PUNCT, repeatedly, until none remain. "" if empty. */
 export function cleanToken(raw: string): string {
   let s = raw;
@@ -74,6 +113,13 @@ export function formatBinaryBlock(abs: string): string {
   return '<file name="' + abs + '"><binary file \u2014 contents not injected; use the read tool if needed></file>';
 }
 
+/** F5 — a 0-byte image file attaches nothing (an empty ImageContent is rejected by providers);
+ *  instead emit a note block so the path is still referenced in the prompt. Reuses the em dash
+ *  (U+2014) convention from the binary note for visual consistency. */
+export function formatEmptyImageBlock(abs: string): string {
+  return '<file name="' + abs + '"><empty image file \u2014 0 bytes; nothing to attach></file>';
+}
+
 /**
  * PRD §9 — core assembly. Iterate every `#@<path>` token in `text`, resolve+stat+classify+read each,
  * append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image), and return the
@@ -110,9 +156,23 @@ export async function injectFiles(
     const mime = MIME_BY_EXT[ext]; // undefined => not a recognized image => text/binary path
 
     try {
-      if (mime) {
+      const buf = await fs.readFile(abs); // read ONCE; reused by image + text/binary paths
+
+      // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
+      // Align with the text path's empty-file handling: emit a note block, attach nothing.
+      if (mime && buf.length === 0) {
+        blocks.push(formatEmptyImageBlock(abs));
+        count++;
+        continue;
+      }
+
+      // F3 — validate the ACTUAL bytes match the declared image type before attaching.
+      // A mislabeled file (e.g. text named `.png`) fails the magic-number sniff and falls
+      // through to the text/binary path instead of attaching decoded garbage as an image.
+      const isRealImage = mime ? hasValidImageMagic(buf, mime) : false;
+
+      if (mime && isRealImage) {
         // IMAGE path (PRD §5.2) — classified by MIME first; SKIPS the NUL-byte check entirely.
-        const buf = await fs.readFile(abs);
         const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
         images.push({
           type: "image",
@@ -121,8 +181,7 @@ export async function injectFiles(
         });
         blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file> (T2.S1 guards null)
       } else {
-        // TEXT / BINARY path (PRD §5.1 / §5.3)
-        const buf = await fs.readFile(abs);
+        // TEXT / BINARY path (PRD §5.1 / §5.3) — also the F3 fallback for mislabeled image-ext files.
         if (isBinary(buf)) {
           blocks.push(formatBinaryBlock(abs)); // §5.3 note — no decoded garbage (em dash U+2014)
         } else {
@@ -138,7 +197,11 @@ export async function injectFiles(
 
   if (count === 0) return { text, images: imagesIn, injected: 0 }; // ORIGINAL ref — nothing changed (item §3i)
 
-  const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
+  // F1 — stamp a hidden sentinel on the appended section so a SECOND copy of this extension
+  // (loaded from a distinct path) can detect we already injected and skip, avoiding duplicate
+  // blocks. Placed AFTER the original prompt + separator, OUTSIDE every <file> block, so it does
+  // not touch the byte-identical block content (Phase 5 parity).
+  const finalText = `${text}\n\n---\n\n${INJECT_SENTINEL}\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
   return { text: finalText, images, injected: count };
 }
 
@@ -172,11 +235,15 @@ export default function (pi: ExtensionAPI) {
     if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
     if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
+    // F1 — if THIS message was already transformed by another copy of this extension (loaded
+    // from a distinct path — e.g. global + project-local, or two -e copies), our sentinel is
+    // present. Skip to avoid re-injecting the same files (duplicate blocks / token waste).
+    if (SENTINEL_RE.test(event.text)) return { action: "continue" };
 
     const { text, images, injected } = await injectFiles(event.text, event.images ?? [], ctx);
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1)
 
-    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${injected} file(s)`, "info"); // user feedback; guarded for print/json headless modes (api_verification §5)
+    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${injected} ${injected === 1 ? "file" : "files"}`, "info"); // F4 — proper pluralization; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
   });
 }
