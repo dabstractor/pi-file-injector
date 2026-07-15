@@ -144,6 +144,13 @@ export async function injectFiles(
 
     const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
 
+    // PER-TOKEN DEDUP — if a <file> block for this exact absolute path already exists in `text`
+    // (injected by a prior copy of this extension in the runner's input-handler chain), skip
+    // re-injecting. Cooperation-independent: works even when the prior copy was a non-sentinel
+    // version (the default `pi -e` path when a global copy co-loads). Fixes Issue 1. Uses a plain
+    // substring test so path chars ([ ] . ( ) …) need no escaping; matches all 4 block prefixes.
+    if (text.includes('<file name="' + abs + '">')) continue;
+
     let st;
     try {
       st = await fs.stat(abs);
