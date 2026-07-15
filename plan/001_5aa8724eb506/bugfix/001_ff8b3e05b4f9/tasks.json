@@ -86,7 +86,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Test Harness Coverage Expansion",
-          "status": "Planned",
+          "status": "Researching",
           "description": "The existing 28-case harness has critical blind spots: (1) the F1 test only re-feeds through the same sentinel-stamping handler — it never simulates a non-sentinel co-loaded copy; (2) no test covers a user prompt containing the sentinel string; (3) no test covers Unicode boundary behavior. These gaps allowed Issues 1, 2, and 5 to slip through. This milestone updates the harness to cover the new per-token dedup behavior and adds regression tests for all three scenarios.",
           "tasks": [
             {
@@ -122,14 +122,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Add Unicode regex boundary regression tests",
-              "status": "Planned",
+              "status": "Researching",
               "description": "No existing test covers the Unicode \\W lookbehind quirk. Add regression tests verifying that #@ does not trigger after non-ASCII letters, while existing ASCII patterns still work correctly.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Add Unicode boundary test cases",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S1"

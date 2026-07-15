@@ -197,6 +197,12 @@ F1b, F2 added).
 // block. (Pre-verified live.) Do NOT try to assert the ghost path by name — it's brittle; the count-1
 // check covers it.
 
+// IDEMPOTENCY — if the harness ALREADY shows F1b/F2 (a parallel implementer may have landed them,
+//   or this PRP is being applied after a prior pass), the oldText anchor (the OLD sentinel-named F1
+//   block) will NOT be found. The PRE-FLIGHT idempotency guard handles this: if F1b/F2 exist and the
+//   harness is 30/30, the task is done — do NOT force the edit. (The repo was observed at this exact
+//   30-case target state during research; the F1/F1b/F2 case names there match this PRP's newText.)
+
 // GOTCHA — the .ts line-140 comment "works even when the prior copy was a non-sentinel version" is
 // explanatory prose, NOT a sentinel mechanism. Do NOT "clean it up" — it's out of scope (P1.M1.T1 owns it).
 
@@ -214,9 +220,16 @@ the existing `a.ts` fixture (`A_TS`, `A_TS_CONTENT`, `FIX = { cwd: TMPDIR }`).
 ### Implementation Tasks (ordered by dependencies)
 ```yaml
 PRE-FLIGHT:
-  - CONFIRM the F1 anchor is present & unique:
+  - IDEMPOTENCY GUARD (run FIRST — a parallel pass may have already landed these cases):
+      if grep -qE 'await runCase\("F1b"|await runCase\("F2"' sharp-at-file.test.mjs; then
+        echo "F1b/F2 already present → task already complete; verifying and STOPPING."
+        node ./sharp-at-file.test.mjs && exit 0   # must report 30/30; if so, NOTHING more to do.
+      fi
+    (If this guard fires, the oldText anchor below will NOT be found — that is expected; the target
+     state already exists. Do NOT force the edit.)
+  - CONFIRM the F1 anchor is present & unique (baseline 28-case state):
       grep -cE 'await runCase\("F1",' sharp-at-file.test.mjs        # → 1
-    CONFIRM no F1b/F2 collision:
+    CONFIRM no F1b/F2 collision (baseline):
       grep -nE 'await runCase\("F1b"|await runCase\("F2"' sharp-at-file.test.mjs   # → (none)
     CONFIRM the source fix is in place (these cases REQUIRE it to pass):
       grep -qE "text.includes\('<file name=\"' \+ abs \+ \"'>" sharp-at-file.ts && echo "dedup present" || echo "MISSING dedup"
