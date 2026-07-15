@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+venv/
+
+# Build artifacts
+dist/
+build/
+
+# Environment files
+.env
+
+# OS-specific files
+.DS_Store
+
+# pi-subagents debug artifacts (project-scoped run transcripts/outputs)
+.pi-subagents/
