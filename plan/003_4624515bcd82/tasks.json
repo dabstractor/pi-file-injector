@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Markdown Transitive Imports (PRD §5.6)",
-      "status": "Ready",
+      "status": "Complete",
       "description": "Add markdown transitive imports to the existing, fully-implemented `#@file` extension: a delivered `.md`/`.markdown` file is scanned for further `#@<path>` directives, each resolved import is delivered (and recursed if markdown), bounded by a single global dedup set and a single shared context budget that accounts for the total filesize of all files (text + image + binary + imports). Requires a structural refactor of the linear `injectFiles` core into shared mutable `State` + recursive helpers (MI-1) before the recursion (MI-2) can be added, then a README sync (MI-3). Single-file extension; no new dependencies; no new Pi API surface.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Implement & Validate Markdown Imports",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Three tasks: (T1) refactor the linear core to shared `State` + recursive helpers with ZERO behavior change (regression gate = the existing 1044-line test suite green); (T2) add the markdown transitive-import feature + total-size budget accounting (cases 15-20 + fixtures); (T3) sync README for the new capability (Mode B).",
           "tasks": [
             {
@@ -167,14 +167,14 @@
               "type": "Task",
               "id": "P1.M1.T3",
               "title": "Sync changeset-level documentation (README markdown imports)",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Mode B cross-cutting doc sync (SOW §5). The README is paged-delivery-current but has no markdown-import content. Depends on ALL implementing subtasks so it runs last and summarizes the whole changeset coherently.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T3.S1",
                   "title": "Add markdown transitive imports to README (Why/Usage/Table/Syntax/Limits)",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

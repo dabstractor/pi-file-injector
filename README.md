@@ -8,6 +8,8 @@ Pi's built-in `@file` injects a file only when you pass it on the command line b
 
 `#@` always delivers the entire file to the model, in every context: the editor, a `pi -p` one-shot, and RPC. When the file fits the remaining context it is injected whole; when it exceeds the budget it is delivered as a head block plus a paging directive that the model reads through.
 
+`#@spec.md` pulls in everything `spec.md` references with the same `#@` directive — spec-and-its-dependencies in one token, loop-safe via dedup (each file is injected at most once).
+
 ## Install
 
 ```bash
@@ -30,6 +32,12 @@ See #@a.ts.
 
 On submit, the file contents appear below a `---` rule. The `#@` trigger is stripped from each reference, so `Review #@a.ts` reaches the model as `Review a.ts` with the file appended underneath.
 
+Markdown files can import other files. If `spec.md` itself contains `#@api.md`, a single `#@spec.md` delivers both — `spec.md` first, then `api.md` — and the import marker is stripped from `spec.md` the same way a top-level marker is:
+
+```text
+#@spec.md          # spec.md contains: see #@api.md
+```
+
 Path completion works in the editor. Type `#@` and the same file list Pi shows for `@` appears; Tab completes it as `#@<path>`.
 
 Bare `@` is unchanged, so `Review @a.ts` behaves as before.
@@ -42,6 +50,8 @@ Bare `@` is unchanged, so `Review @a.ts` behaves as before.
 | Image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) | Attached as an image. |
 | Other binary | Not injected. A short note says it was skipped. |
 | Missing file, directory, or permission error | Left as written. Nothing is appended. |
+
+A delivered markdown file (`.md` or `.markdown`) is also scanned for relative `#@` imports. Each import it references is delivered as its own block, and is scanned in turn if it is also markdown — so a single `#@spec.md` can pull in a whole tree of docs. The same file-type rules (text / image / binary / missing) apply to each import unchanged.
 
 Text uses Pi's native block format, the same one `@file` uses:
 
@@ -67,6 +77,13 @@ Images are matched by their real bytes, not just the extension. A text file rena
 
 **Paths:** relative (against your current directory), absolute (`#@/etc/hosts`), tilde (`#@~/notes.md`), and `../` all work.
 
+**Markdown imports:** a `#@` inside a delivered `.md` or `.markdown` file is itself an import, using the same grammar. Four rules narrow it:
+
+- **Relative paths only.** Imports resolve against the markdown file's own directory, not your current directory. Absolute (`#@/etc/hosts`) and tilde (`#@~/notes.md`) imports inside a markdown file are ignored and left verbatim.
+- **Code is the escape hatch.** A `#@` inside a fenced or inline code span is not an import — it stays verbatim. So a doc can show `` `#@example.ts` `` as an example without importing anything.
+- **Each file is injected at most once.** Across the whole prompt — top-level tokens, every import, and cycles — a given file appears in one block only. Shared dependencies dedup; cycles terminate.
+- **Shared budget.** Imports draw on the same context budget as the top-level prompt. When the running total exceeds the window, later files page (head block plus a `read`-tool directive) instead of overflow.
+
 ## Limits
 
 - **No size knob.** `#@` has no user-facing size setting. Oversize text files are delivered as a head block (first ~8 KB) plus a paging directive; the model reads the rest via the `read` tool. The model never holds a file larger than its context window all at once — that is a property of the medium, not of this extension.
@@ -74,6 +91,9 @@ Images are matched by their real bytes, not just the extension. A text file rena
 - **No directories.** `#@src/` is left as-is. Use a `read` or `ls` tool.
 - **No globs.** `#@src/*.ts` is a literal path, not a pattern. It resolves only if a file named `*.ts` exists.
 - **A backtick right after `#@` blocks it.** Inside a code span like `` `#@a.ts` ``, nothing is injected. To suppress `#@` anywhere, write `# @` with a space.
+- **Markdown imports are relative-only.** A `#@` inside a `.md`/`.markdown` file that points at an absolute or tilde path is ignored, never resolved.
+- **Only markdown is scanned.** A `#@` inside an injected `.ts`, `.json`, image, or any other non-markdown file is inert — only `.md`/`.markdown` pull in further files.
+- **No autocomplete for in-file imports.** The `#@` path completer runs in the editor prompt only. Import directives live inside markdown files (written by hand), where your editor's normal file completion applies.
 
 ## `#@` versus `@`
 
