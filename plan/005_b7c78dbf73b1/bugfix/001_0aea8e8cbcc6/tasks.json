@@ -11,14 +11,14 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Issue 1: Restore verbatim-on-error for unreadable markdown imports",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Restore the 'strip ⟺ deliverable' invariant in the markdown transitive-import path. Two coordinated, low-risk changes to file-injector.ts: (1) the PRIMARY fix — add an `fs.access(abs, R_OK)` readability gate to the `injectMarkdown` Step 3.5 injectability filter so a marker is stripped only when the import is genuinely readable (this alone fixes the reported bug); (2) the SECONDARY hygiene fix — un-claim `abs` from `injectedSet` on `injectFile`'s failure path so a failed read does not poison the dedup set ('claim ⟺ delivered'). Each subtask ships its own test per the implicit TDD workflow. The missing/directory/readable happy paths are unchanged.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Gate markdown-import marker stripping on readability + un-claim on failure",
-              "status": "Researching",
+              "status": "Complete",
               "description": "The bug lives in `injectMarkdown` (file-injector.ts:824-877). Its Step 3.5 (lines 848-856) filters scanTokens records to `injectable` using ONLY `fs.stat(r.abs)` + `st.isFile()` — it confirms the import is a regular file but NOT that it is readable. Step 4 (862-865) then strips the marker from every injectable record, Step 5 (867-868) emits the parent block (pre-order, BEFORE the read), and Step 6 (870-875) recurses into `injectFile` where `fs.readFile` (line 689) finally runs and can throw. So an exists-but-unreadable import gets stripped then never delivers. Contrast: the top-level path (processTokenStream:648-666) strips by post-hoc success (`if (ok) resolved.push(...)`) and is already correct. This task closes the asymmetry: S1 adds the R_OK gate; S2 cleans up the related claim-before-read poisoning.",
               "subtasks": [
                 {
@@ -41,7 +41,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Un-claim abs from injectedSet on injectFile failure (claim ⟺ delivered)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -69,14 +69,14 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Verify & retain the T2.S1-f readConfig test-isolation fix",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Confirm that the PRD Issue 2 'Suggested Fix' is already realized in file-injector.test.mjs (uncommitted), that it correctly isolates the project dedicated file so T2.S1-f passes regardless of the developer's real global config, and that the full suite is green. Do NOT re-implement from scratch — the fix is in the tree; only re-apply the PRD pattern if verification finds it absent (e.g. a fresh checkout). The implementation behavior under test (dedicated file overrides settings.json key within a scope, gated by trust) is intentional and correct and is NOT changed.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Verify T2.S1-f isolation fix is present, correct vs PRD §4.6, and the suite is green",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/005_b7c78dbf73b1/bugfix/001_0aea8e8cbcc6/architecture/test_harness_analysis.md (§'Issue 2 — the fix is ALREADY in the working tree'). `git status` shows `file-injector.test.mjs` MODIFIED (uncommitted) and `file-injector.ts` UNMODIFIED. `git diff file-injector.test.mjs` shows the T2.S1-a/c/d/f family rewritten around a module-level `GLOBAL_BASELINE = await mod.readConfig({cwd: <nonexistent>, isProjectTrusted:()=>false})`. The current T2.S1-f (file-injector.test.mjs ~1999-2018): captures `fileValid` (existing PROJ_FILE_PATH content), writes `{}` to PROJ_FILE_PATH to NEUTRALIZE the higher-precedence dedicated file, writes `settings.json` `fileInjector.markdownBareAtImports = flip` (flip = negation of baseline), asserts untrusted→baseline and trusted→flip, restores in finally. A full run prints `Result: 120 passed, 0 failed` with `✓ case T2.S1-f`. This EXACTLY matches the PRD Issue 2 'Suggested Fix'.\n2. INPUT: file-injector.test.mjs T2.S1-f (~lines 1999-2018) and its helpers `PROJ_FILE_PATH` (~1976), `PROJ_SETTINGS_PATH` (~1975), `writeSettings` (~1977), `GLOBAL_BASELINE` (~1908). PRD §4.6 config sources / trust gate (the PRD.md main doc, referenced within h3.1).\n3. LOGIC: VERIFY (read-only checks) that (a) `git diff file-injector.test.mjs` contains the T2.S1-f isolation (PROJ_FILE_PATH='{}' neutralization + GLOBAL_BASELINE + flip + finally restore); (b) the case asserts BOTH untrusted→baseline AND trusted→flip AND that they differ (the trust gate); (c) the dedicated-file precedence case T2.S1-g still proves the dedicated file overrides the settings.json key (so neutralizing it in T2.S1-f is the right isolation, not a masking of real behavior). Then RUN `node ./file-injector.test.mjs` and confirm `✓ case T2.S1-f` and `Result: 121 passed, 0 failed` (120 + the new E5 from P1.M1.T1.S1). If verification finds the isolation ABSENT (a fresh checkout without the uncommitted edit), apply the exact PRD Issue 2 'Suggested Fix' pattern: capture PROJ_FILE_PATH, write '{}' to it for the case duration, use flip, restore in finally — mirroring sibling T2.S1-e. Ensure the change is RETAINED (do not revert it). The product code (readConfig) is NOT modified.\n4. OUTPUT: A confirmed, suite-green T2.S1-f that is deterministic regardless of the developer's real global ~/.pi/agent config. No source change to file-injector.ts.\n5. MOCKING: None. readConfig reads the REAL global sources at runtime; the test isolates the PROJECT sources under TMPDIR and asserts relative to the captured baseline, which is the correct hermetic pattern.\n6. DOCS: none — test-harness-only change with no user-facing/config/API surface. (The optional bare-@ behavior it configures is already documented in README.md:103 and PRD §4.6.)",

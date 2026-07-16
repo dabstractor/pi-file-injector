@@ -665,8 +665,10 @@ async function processTokenStream(
 /**
  * PRD §9 / §5.1-§5.3 — stat → claim → classify → emit → count. Claims `abs` in state.injectedSet AFTER
  * stat+isFile succeed but BEFORE read, so a self-import or mid-recursion re-entry dedups to verbatim
- * (recursion-readiness for T2 markdown; behavior-neutral at top level). NEVER throws: stat miss / !isFile
- * / read or resize error → return false (token left verbatim, PRD §5.4 / §12.5).
+ * (recursion-readiness for T2 markdown; behavior-neutral at top level). The pre-read claim is REVOKED on
+ * the read/resize failure path (claim ⟺ delivered, PRD §12.5) so a file that fails delivery does not
+ * poison dedup. NEVER throws: stat miss / !isFile / read or resize error → return false (un-claimed) +
+ * token left verbatim (PRD §5.4 / §12.5).
  *
  * Classification (preserve F3/F5; NO markdown branch yet — T2.S3): (1) empty image (mime && buf.length===0)
  * → F5 note; (2) real image (mime && hasValidImageMagic) → attach ImageContent + image block; (3) binary
@@ -681,7 +683,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
     return false; // missing → leave verbatim (PRD §5.4)
   }
   if (!st.isFile()) return false; // directory / socket / etc. → leave verbatim (PRD §5.4)
-  state.injectedSet.add(abs); // CLAIM — dedup incl. self-import (recursion-readiness)
+  state.injectedSet.add(abs); // CLAIM — dedup incl. self-import (recursion-readiness); REVOKED on failure (claim ⟺ delivered, see catch)
 
   const ext = extOf(abs); // lowercase ext, "" for no-dot/hidden (S2)
   const mime = MIME_BY_EXT[ext]; // undefined → not a recognized image → text/binary path
@@ -724,6 +726,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
     state.count++; // exactly one delivery per claimed file
     return true;
   } catch {
+    state.injectedSet.delete(abs); // failure → UN-CLAIM so the path is NOT poisoned (claim ⟺ delivered; PRD §12.5)
     return false; // read/resize error → leave THIS token verbatim (PRD §5.4, §12.5)
   }
 }

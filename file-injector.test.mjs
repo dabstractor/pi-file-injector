@@ -644,6 +644,41 @@ await runCase("E5", "markdown import of unreadable file → marker verbatim", as
   }
 });
 
+await runCase("E6", "injectFile read-failure un-claims abs (claim ⟺ delivered) — no poisoned dedup", async () => {
+  if (process.getuid() === 0) {
+    // chmod is ineffective when running as root — skip with a note (same caveat as E4/E5).
+    console.log("      (skipped: running as root — chmod 000 is ineffective)");
+    return;
+  }
+  const secret = path.join(TMPDIR, "unclaim_secret.txt"); // UNIQUE fixture name (no shared-fixture collision)
+  fsSync.writeFileSync(secret, "unreadable\n");
+  fsSync.chmodSync(secret, 0o000);
+  try {
+    // minimal State — the TS interface is erased at runtime; a structurally-compatible plain object works.
+    // bareAt is REQUIRED (State L325) even though unused on the failure path.
+    const state = {
+      injectedSet: new Set(),
+      blocks: [],
+      images: [],
+      remaining: null,
+      count: 0,
+      paged: 0,
+      bareAt: false,
+    };
+    // ctx is UNUSED on the failure path (stat OK → claim → readFile throws → catch → delete → return false
+    // before any block/image push), but pass a structurally-valid ctx for cleanliness.
+    const result = await mod.injectFile(secret, state, { cwd: TMPDIR, getContextUsage: () => undefined });
+    assert(result === false, `failed read must return false, got ${result}`);
+    // THE FIX: the failure path must UN-CLAIM abs so a later duplicate reference can retry (not be silently suppressed)
+    assert(state.injectedSet.has(secret) === false,
+      `failed injectFile must NOT leave the path claimed (claim ⟺ delivered; a poisoned dedup set suppresses later retries), got has=${state.injectedSet.has(secret)}`);
+    assert(state.count === 0, `nothing delivered on failure, got count=${state.count}`);
+    assert(state.blocks.length === 0, `no block pushed on failure, got blocks.length=${state.blocks.length}`);
+  } finally {
+    fsSync.chmodSync(secret, 0o644); // restore so TMPDIR cleanup can remove it
+  }
+});
+
 await runCase("G1", "guard: source==='extension' → continue (loop prevention)", async () => {
   const { ctx, rec } = makeMockCtx(TMPDIR);
   const slot = captureHandler();

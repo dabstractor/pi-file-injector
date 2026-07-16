@@ -52,4 +52,4 @@ h1.0 PRD: #@file Whole-File Injection & Markdown Import Extension for Pi
   h3.34 14.4 Scope note (markdown imports are injection-only)
  h2.14 Appendix A — Minimal skeleton
 ---
-code:21 para:91 list:26 table:5 quote:6
+code:22 para:91 list:25 table:6 quote:6
