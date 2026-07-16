@@ -96,7 +96,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "estimateImageTokens + total-size budget for image/binary",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S1"
@@ -116,7 +116,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S3",
                   "title": "injectMarkdown (6-step) + wire markdown into injectFile + cases 15-19",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1",

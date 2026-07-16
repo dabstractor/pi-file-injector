@@ -335,6 +335,35 @@ export function inCode(index: number, ranges: [number, number][]): boolean {
   return false;
 }
 
+/**
+ * PRD §5.6.2 — conservative image-token estimate for budget accounting. Images consume the shared
+ * `remaining` budget but are NEVER paged (§5.2: resized + attached). This estimate lets a later file's
+ * inline-vs-paged decision see a budget that already reflects the image.
+ *
+ * Formula (Anthropic Vision guide, https://docs.claude.com/en/docs/build-with-claude/vision): an image
+ * is tiled into 512×512 blocks; each tile ≈ 170 tokens; plus a flat 85-token base. So
+ *   tokens = max(1, ⌈width/512⌉) · max(1, ⌈height/512⌉) · 170 + 85
+ * computed on the RESIZED dimensions (resizeImage caps the longest edge to 2000, so the worst case is
+ * ⌈2000/512⌉=4 tiles per side → 4·4·170+85 = 2805 = IMAGE_FALLBACK_TOKENS).
+ *
+ * When `resized` is null (resizeImage could not process the bytes → the raw-base64 fallback path),
+ * dimensions are unavailable, so return the flat `IMAGE_FALLBACK_TOKENS` (the 2000×2000 worst case — a
+ * CONSERVATIVE upper bound appropriate for a budget guard that must not under-count). ResizedImage.width
+ * and .height are required numbers (pi's ResizedImage type), so no per-field null-check is needed; the
+ * Math.max(1, ⌈x/512⌉) guard makes even a 0 dimension safe (→ 1 tile).
+ *
+ * PURE: no I/O, no state mutation. Exported for unit testing + the module-surface sanity list.
+ *
+ * @param resized the resizeImage result (null on the raw-base64 fallback path)
+ * @returns the conservative image token cost
+ */
+export function estimateImageTokens(resized: ResizedImage | null): number {
+  if (resized === null) return IMAGE_FALLBACK_TOKENS;
+  const tilesW = Math.max(1, Math.ceil(resized.width / 512));
+  const tilesH = Math.max(1, Math.ceil(resized.height / 512));
+  return tilesW * tilesH * 170 + 85;
+}
+
 /** Shared ctx type for injectFiles / processTokenStream / injectFile (DRY; jiti erases at runtime). */
 type Ctx = {
   cwd: string;
@@ -435,7 +464,9 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
     if (mime && buf.length === 0) {
       // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
       // Align with the text path's empty-file handling: emit a note block, attach nothing.
-      state.blocks.push(formatEmptyImageBlock(abs));
+      const f5Block = formatEmptyImageBlock(abs);
+      state.blocks.push(f5Block);
+      subtract(state, Math.ceil(f5Block.length / 4)); // §5.6.2 — note consumes budget
     } else if (mime && hasValidImageMagic(buf, mime)) {
       // F3 — validate the ACTUAL bytes match the declared image type before attaching.
       // A mislabeled file (e.g. text named `.png`) fails the magic-number sniff and falls
@@ -447,9 +478,12 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
         mimeType: resized?.mimeType ?? mime, // null => original mime
       });
       state.blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file>
+      subtract(state, estimateImageTokens(resized)); // §5.6.2 — image consumes budget (tile estimate; never paged)
     } else if (isBinary(buf)) {
       // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014)
-      state.blocks.push(formatBinaryBlock(abs));
+      const binBlock = formatBinaryBlock(abs);
+      state.blocks.push(binBlock);
+      subtract(state, Math.ceil(binBlock.length / 4)); // §5.6.2 — note consumes budget
     } else {
       // PLAIN TEXT (PRD §5.1 + §5.5) — inline-vs-paged decision (lifted verbatim into emitText)
       emitText(abs, buf.toString("utf8"), state);

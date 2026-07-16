@@ -125,6 +125,7 @@ assert(typeof mod.emitText === "function", "mod.emitText must be a function (inl
 assert(typeof mod.isAbsoluteOrTilde === "function", "mod.isAbsoluteOrTilde must be a function (§4.5 markdown relative-only guard)");
 assert(typeof mod.computeCodeRanges === "function", "mod.computeCodeRanges must be a function (§5.6.1 code-region detection)");
 assert(typeof mod.inCode === "function", "mod.inCode must be a function (binary search over code ranges)");
+assert(typeof mod.estimateImageTokens === "function", "mod.estimateImageTokens must be a function (§5.6.2 image token estimate)");
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. Mock pi/ctx factories + handler capture (verified pattern — drives guards/notify/transform).
@@ -1136,6 +1137,84 @@ await runCase("CC9", "§5.6.1 — inCode: index before first range, after last, 
   // The literal substring " more " between the inline span and the fence is a prose gap.
   const gapIdx = txt.indexOf("more");
   assert(mod.inCode(gapIdx, r) === false, `index in a prose gap is not in code (gapIdx=${gapIdx}, ranges=${JSON.stringify(r)})`);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ── TOTAL-SIZE BUDGET (PRD §5.6.2) — image/binary consume remaining ──────────
+// EIT = Estimate Image Tokens (pure unit cases pinning the 512-tile formula).
+// BG  = Budget interaction (under PAGED_FIX, prove image/binary/empty-image consumed budget so a
+//         later large text file pages). The tiny 1×1 pic.png fixture makes resizeImage return null
+//         deterministically → estimateImageTokens takes the IMAGE_FALLBACK (2805) path in BG1; that is
+//         the EXPECTED cost (the formula path is covered directly by EIT1–EIT3 with fake objects).
+await runCase("EIT1", "§5.6.2 — estimateImageTokens(null) === IMAGE_FALLBACK_TOKENS (2805, raw-base64 path)", async () => {
+  // null resized = resizeImage could not process the bytes → the raw-base64 fallback path.
+  assert(mod.estimateImageTokens(null) === 2805, "null resized must yield IMAGE_FALLBACK_TOKENS (2805)");
+});
+
+await runCase("EIT2", "§5.6.2 — estimateImageTokens: 512×512 / 1×1 === 255 (1·1·170+85)", async () => {
+  // Exactly 512px per side = 1 tile each → 1·1·170+85 = 255. A sub-tile 1×1 also clamps to 1 tile/side.
+  assert(mod.estimateImageTokens({ width: 512, height: 512 }) === 255,
+    "512×512 must yield 255 (1·1·170+85)");
+  assert(mod.estimateImageTokens({ width: 1, height: 1 }) === 255,
+    "1×1 must clamp to 1 tile/side → 255 (Math.max(1,·) guard)");
+});
+
+await runCase("EIT3", "§5.6.2 — estimateImageTokens: 513×513 === 765, 2000×2000 === 2805 (derives the constant)", async () => {
+  // 513px spills to 2 tiles/side → 2·2·170+85 = 765. 2000px (resizeImage's longest-edge cap) → 4
+  // tiles/side → 4·4·170+85 = 2805, which MUST equal IMAGE_FALLBACK_TOKENS (proves the constant's origin).
+  assert(mod.estimateImageTokens({ width: 513, height: 513 }) === 765,
+    "513×513 must yield 765 (2·2·170+85)");
+  assert(mod.estimateImageTokens({ width: 2000, height: 2000 }) === 2805,
+    "2000×2000 must yield 2805 (= IMAGE_FALLBACK_TOKENS; 4·4·170+85)");
+});
+
+await runCase("BG1", "§5.6.2 — image + huge.log under PAGED_FIX: image consumed budget, huge.log paged (emission order)", async () => {
+  // Shared-budget interaction: the image is decided FIRST (emission order is source order), its 2805
+  // cost is subtracted from remaining, THEN huge.log is decided against the shrunken remaining.
+  // remaining under PAGED_FIX = 50000 - 10000 - 8192 - 8192 = 23616; after pic.png subtract 2805 → 20811;
+  // 0.6·20811 = 12486.6; huge.log fileCost = ⌈2097152/4⌉ = 524288 >> 12486.6 → PAGED. The image is
+  // NEVER paged (attached). The EIT1–EIT3 pure cases PIN the 2805 cost value, so 'image consumed
+  // budget' is structurally entailed: huge.log's decision ran after the subtract and it paged.
+  const r = await mod.injectFiles("Describe #@pic.png and summarize #@huge.log", [], PAGED_FIX);
+  assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
+  assert(r.paged === 1, `exactly one paged (huge.log; image never pages), got paged=${r.paged}`);
+  assert(r.images.length === 1, `pic.png attached (never paged), got images=${r.images.length}`);
+  // Emission order: the image reference block appears BEFORE the huge.log head block (pic.png was
+  // decided first, budget consumed, THEN huge.log decided against the reduced remaining).
+  const imgIdx = r.text.indexOf('<file name="' + PIC + '">');
+  const hugeHeadIdx = r.text.indexOf('<file name="' + HUGE + '">\n');
+  assert(imgIdx !== -1, "image reference block must be present");
+  assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
+  assert(imgIdx < hugeHeadIdx, `image block must precede the huge.log head block (emission order), got img=${imgIdx} huge=${hugeHeadIdx}`);
+});
+
+await runCase("BG2", "§5.6.2 — binary + huge.log under PAGED_FIX: binary note consumed budget (no-flip guard)", async () => {
+  // The binary cost is tiny (≈17 tokens; Math.ceil(noteLen/4)), so this is mostly a no-flip regression
+  // guard + emission-order check: the binary note is decided first, its cost subtracted, THEN huge.log
+  // decides and still pages (huge.log fileCost ≈ 524288 >> 0.6·remaining).
+  const r = await mod.injectFiles("Inspect #@data.bin and summarize #@huge.log", [], PAGED_FIX);
+  assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
+  assert(r.paged === 1, `exactly one paged (huge.log), got paged=${r.paged}`);
+  assert(r.images.length === 0, `binary attaches NO image, got images=${r.images.length}`);
+  const binIdx = r.text.indexOf('<file name="' + BIN + '">');
+  const hugeHeadIdx = r.text.indexOf('<file name="' + HUGE + '">\n');
+  assert(binIdx !== -1, "binary note block must be present");
+  assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
+  assert(binIdx < hugeHeadIdx, `binary note block must precede the huge.log head block (emission order), got bin=${binIdx} huge=${hugeHeadIdx}`);
+});
+
+await runCase("BG3", "§5.6.2 — empty-image (F5) + huge.log under PAGED_FIX: empty-image note consumed budget (no-flip guard)", async () => {
+  // F5 attaches nothing (0-byte image). The empty-image note cost (≈17 tokens) is subtracted, then
+  // huge.log decides and still pages. No-flip regression guard + emission-order check.
+  const r = await mod.injectFiles("See #@empty.png and summarize #@huge.log", [], PAGED_FIX);
+  assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
+  assert(r.paged === 1, `exactly one paged (huge.log), got paged=${r.paged}`);
+  assert(r.images.length === 0, `F5 attaches NO image (0-byte), got images=${r.images.length}`);
+  const emptyIdx = r.text.indexOf('<file name="' + EMPTY_PNG + '">');
+  const hugeHeadIdx = r.text.indexOf('<file name="' + HUGE + '">\n');
+  assert(emptyIdx !== -1, "empty-image note block must be present");
+  assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
+  assert(emptyIdx < hugeHeadIdx, `empty-image note block must precede the huge.log head block (emission order), got empty=${emptyIdx} huge=${hugeHeadIdx}`);
 });
 
 // 10. Summary + cleanup + exit.
