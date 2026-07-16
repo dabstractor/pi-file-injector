@@ -89,18 +89,30 @@ Images are matched by their real bytes, not just the extension. A text file rena
 
 Off by default — `#@` works with no config at all, and stays the only thing that ever triggers injection at the prompt. This is the one opt-in.
 
-If your docs already reference files as a bare `@file.md` (no `#`), you can make a delivered markdown file treat that the same way as `#@file.md`. Put this in `file-injector.json`:
+If your docs already reference files as a bare `@file.md` (no `#`), you can make a delivered markdown file treat that the same way as `#@file.md`. Set `markdownBareAtImports` to `true`. It can live in either of two forms — a dedicated file, or under the `fileInjector` key inside Pi's own `settings.json`, alongside your other Pi settings:
 
 ```json
+// ~/.pi/agent/file-injector.json — dedicated file
 { "markdownBareAtImports": true }
 ```
+```jsonc
+// or, inside ~/.pi/agent/settings.json — namespaced key
+{
+  "defaultModel": "anthropic/claude-sonnet-4",
+  "fileInjector": { "markdownBareAtImports": true }
+}
+```
 
-The file is read from two places — a project file overrides a global one:
+Both forms are read from a global and a project location and shallow-merged in this order (each later one wins; within the same scope the dedicated file beats the `settings.json` key):
 
-1. **Global:** `~/.pi/agent/file-injector.json`
-2. **Project:** `.pi/file-injector.json` in your current directory — honored **only in a trusted project**, so an untrusted checkout can't turn it on.
+1. Global `~/.pi/agent/settings.json` → `fileInjector`
+2. Global `~/.pi/agent/file-injector.json`
+3. Project `.pi/settings.json` → `fileInjector` — **trusted project only**
+4. Project `.pi/file-injector.json` — **trusted project only**
 
-When it's on, a bare `@api.md` inside a delivered markdown file imports exactly like `#@api.md`: relative-only paths, extension shorthand, code-exempt, deduped against everything else, and drawing on the same shared budget. `#@` keeps working unchanged and is never matched twice — a `#@api.md` is one import, not two. A missing or unreadable config file (or one that doesn't set the key) leaves everything at the default, so it never errors.
+The project sources are honored only in a trusted project, so an untrusted checkout can't turn it on. (`settings.json` is open-schema, so Pi preserves the `fileInjector` key through `/settings` edits.)
+
+When it's on, a bare `@api.md` inside a delivered markdown file imports exactly like `#@api.md`: relative-only paths, extension shorthand, code-exempt, deduped against everything else, and drawing on the same shared budget. `#@` keeps working unchanged and is never matched twice — a `#@api.md` is one import, not two. A missing or malformed source (or one that doesn't set the key) leaves everything at the default, so it never errors.
 
 It affects markdown content only — a bare `@path` you type in your prompt is never injected. See [Limits](#limits).
 

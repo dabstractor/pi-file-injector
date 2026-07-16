@@ -191,11 +191,24 @@ Everything else — token cleanup (§4.3), dedup, file-type handling, paging, bu
 
 By default a markdown import **requires** the `#@` prefix (§4.5). Some doc conventions write file references as a bare `@file.md` (no `#`); to support those without making `#@` mandatory inside markdown, the extension exposes one opt-in setting.
 
-**Config file:** `file-injector.json`, read from two locations (project overrides global, merged shallowly):
-1. **Global:** `~/.pi/agent/file-injector.json` — `path.join(getAgentDir(), "file-injector.json")`.
-2. **Project:** `<cwd>/.pi/file-injector.json` — `path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json")`, honored **only when `ctx.isProjectTrusted()`** (an untrusted project cannot enable it).
+**Config sources.** The setting may live in either of two forms — a dedicated extension file, or a namespaced key (`pi-file-injector`, matching the `name` in `package.json`) inside Pi's own `settings.json`, co-located with the rest of the user's settings. Pi exposes no public settings accessor to extensions, so both forms are read directly from disk (same pattern as the dedicated file). `settings.json` is open-schema and Pi preserves unknown keys through `/settings` edits and flushes, so the namespaced key is stable. The setting is read from up to four locations and shallow-merged in precedence order — each row overrides the one above; project scope overrides global; within a scope the dedicated file overrides the `settings.json` key:
 
+| # | Source | Path | Key / form | Trust |
+|---|---|---|---|---|
+| 1 | Global settings | `~/.pi/agent/settings.json` | `pi-file-injector` (object) | always |
+| 2 | Global extension file | `~/.pi/agent/file-injector.json` | whole file | always |
+| 3 | Project settings | `<cwd>/.pi/settings.json` | `pi-file-injector` (object) | trusted only |
+| 4 | Project extension file | `<cwd>/.pi/file-injector.json` | whole file | trusted only |
+
+```jsonc
+// ~/.pi/agent/settings.json — namespaced key among other Pi settings
+{
+  "defaultModel": "anthropic/claude-sonnet-4",
+  "pi-file-injector": { "markdownBareAtImports": true }
+}
+```
 ```json
+// ~/.pi/agent/file-injector.json — dedicated file
 { "markdownBareAtImports": true }
 ```
 
@@ -203,7 +216,7 @@ By default a markdown import **requires** the `#@` prefix (§4.5). Some doc conv
 
 **Scope.** Bare-`@` matching is **markdown-only**. The top-level user prompt is unaffected (always `#@`, §4.4); a bare `@path` at the prompt stays Pi's existing behavior and is never injected by this extension. Non-resolving bare tokens (e.g. `@username` with no matching file) are left verbatim, so a prose mention imports only when it happens to name a real file relative to the markdown's directory.
 
-**Loading.** Config is read on `session_start` (which provides `ctx.cwd` and `ctx.isProjectTrusted()`) and cached for the session; the `input` handler reads the cached value. A missing or malformed config file → default (`markdownBareAtImports: false`), never an error.
+**Loading.** Config is read on `session_start` (which provides `ctx.cwd` and `ctx.isProjectTrusted()`) and cached for the session; the `input` handler reads the cached value. All four sources are tried in precedence order; a missing or malformed source (or a missing `pi-file-injector` key) is skipped → default (`markdownBareAtImports: false`), never an error.
 
 ---
 
@@ -482,7 +495,7 @@ Install locations:
 
 Internal sections (in order):
 1. Imports (§7)
-2. Constants: `FILE_INJECT_RE`, `BARE_AT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
+2. Constants: `FILE_INJECT_RE`, `BARE_AT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, `PACKAGE_NAME` (settings.json key), budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
 3. Pure/IO helpers: `cleanToken`, `isAbsoluteOrTilde`, `expandTildeAndResolve`, `resolveImportPath` (exact → `.md`/`.markdown`), `isRegularFile`, `readConfig` (§4.6), `extOf`, `isBinary`, `headSlice`, `headStartLine`, `headCompleteLineCount`, `estimateImageTokens`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`, `formatPagedDirectiveBlock`
 4. Markdown helpers: `computeCodeRanges(content)` → sorted `[start,end][]`; `inCode(index, ranges)` → boolean
 5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,prefixLen,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`
@@ -733,13 +746,23 @@ async function resolveImportPath(token: string, baseDir: string, tryMdExt: boole
 async function isRegularFile(p: string): Promise<boolean> {
   try { return (await fs.stat(p)).isFile(); } catch { return false; }
 }
-// §4.6 — read file-injector.json (global, then project-if-trusted; project overrides global).
+// §4.6 — read config from settings.json (namespaced key) + file-injector.json, global then project.
+// Precedence (later wins): global settings key → global file → project settings key → project file.
+const PACKAGE_NAME = "pi-file-injector";   // matches package.json "name"; the settings.json key
 async function readConfig(ctx: any): Promise<FileInjectorConfig> {
   const tryRead = async (p: string) => {
     try { return JSON.parse((await fs.readFile(p, "utf8")).trim() || "{}"); } catch { return {}; }
   };
-  let cfg: FileInjectorConfig = await tryRead(path.join(getAgentDir(), "file-injector.json"));
-  if (ctx.isProjectTrusted()) cfg = { ...cfg, ...(await tryRead(path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json"))) };
+  const namespaced = (raw: any): FileInjectorConfig =>
+    raw && typeof raw === "object" && raw[PACKAGE_NAME] && typeof raw[PACKAGE_NAME] === "object"
+      ? raw[PACKAGE_NAME] : {};
+  let cfg: FileInjectorConfig = {};
+  cfg = { ...cfg, ...namespaced(await tryRead(path.join(getAgentDir(), "settings.json"))) };
+  cfg = { ...cfg, ...(await tryRead(path.join(getAgentDir(), "file-injector.json"))) };
+  if (ctx.isProjectTrusted()) {
+    cfg = { ...cfg, ...namespaced(await tryRead(path.join(ctx.cwd, CONFIG_DIR_NAME, "settings.json"))) };
+    cfg = { ...cfg, ...(await tryRead(path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json"))) };
+  }
   return cfg;
 }
 function extOf(abs: string): string {
@@ -894,7 +917,9 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 | `@api.md` at the top level (option on) | Unaffected — top-level is `#@`-only; Pi's normal `@` behavior. |
 | `user@host.com` in markdown (option on) | Not matched (`@` mid-word); left verbatim. |
 | Project `markdownBareAtImports: true` in an **untrusted** project | Ignored (`isProjectTrusted()` false); global value used. |
-| Missing/malformed `file-injector.json` | Defaults to `false`; no error, no behavior change. |
+| Missing/malformed config (settings key or `file-injector.json`) | Defaults to `false`; no error, no behavior change. |
+| `markdownBareAtImports` under `pi-file-injector` in `settings.json` | Read like the dedicated file; co-located with the user's other Pi settings. |
+| Both `settings.json` key and `file-injector.json` set in the same scope | Dedicated `file-injector.json` wins within that scope; project overrides global. |
 
 ---
 
@@ -940,6 +965,7 @@ pi -e .                             # quick test (directory — resolves via pac
 | 26 | bare-`@` on | config `markdownBareAtImports:true`; `notes.md` with `@api.md` (exists); `#@notes.md` | `notes.md` block (marker→`api.md`) then `api.md` block; notify `2 whole`. |
 | 27 | bare-`@` on, `#@` still works | config on; `notes.md` with `#@api.md`; `#@notes.md` | `#@api.md` matched once, injected once; notify `2 whole`. |
 | 28 | bare-`@` on, top-level unaffected | config on; prompt `#@notes.md` (notes imports `@x.md`); also type `@other.md` in prompt | `@other.md` at top level left as Pi's `@` behavior (not injected); only the `#@` chain runs. |
+| 29 | bare-`@` via settings.json | `markdownBareAtImports:true` under `pi-file-injector` in settings.json; `notes.md` with `@api.md` (exists); `#@notes.md` | Same as #26 but via the settings.json key: `api.md` imported (bare), notify `2 whole`. |
 
 ### Automated sanity check (optional)
 
@@ -978,7 +1004,7 @@ pi.registerCommand("sharp-at-test", {
 16. **Strip resolved markers in both scopes.** Top-level resolved markers are stripped from the user prompt; resolved import markers are stripped from each markdown file's content *before* it becomes a block (§5.6 step 4). Failed/deduped/absolute/inside-code markers keep `#@` verbatim everywhere.
 17. **Scan before inject (top-level).** `processTokenStream` runs `scanTokens` once over the whole prompt *before* injecting anything, so a later top-level token whose path an earlier token's import already claimed is left verbatim (cross-subtree dedup). Markdown does its own scan+strip+emit+recurse in `injectMarkdown`.
 18. **Extension shorthand is markdown-only and keyed on the resolved abs.** `resolveImportPath` tries exact → `.md` → `.markdown` only for *extensionless* markdown-import tokens (`tryMdExt: true`); top-level tokens pass `tryMdExt: false` (exact-only — the user has §14 autocomplete and types the full name). Dedup runs on the *resolved* abs, so `#@PRD` and `#@PRD.md` in one file collapse to one injection — which is why `scanTokens` is `async` (it stats candidate paths before checking `injectedSet`/`localSeen`).
-19. **The bare-`@` option is markdown-only, opt-in, and never double-matches `#@`.** `markdownBareAtImports` (default `false`, read from `file-injector.json` on `session_start`, project config honored only when `ctx.isProjectTrusted()`) adds bare-`@` matching to markdown scanning only — never the top-level prompt (Pi's `@` is left untouched, §3.2). `BARE_AT_RE` uses `(?<=[^\w#])` so an `@` preceded by `#` is not matched, hence `#@file` fires once. Each match carries `prefixLen` (2 for `#@`, 1 for `@`); Step 4 strips `slice(index, index + prefixLen)`. Non-resolving bare tokens (prose `@mentions`) stay verbatim.
+19. **The bare-`@` option is markdown-only, opt-in, and never double-matches `#@`.** `markdownBareAtImports` (default `false`, read from `file-injector.json` or the `pi-file-injector` key in `settings.json` (§4.6) on `session_start`, project sources honored only when `ctx.isProjectTrusted()`) adds bare-`@` matching to markdown scanning only — never the top-level prompt (Pi's `@` is left untouched, §3.2). `BARE_AT_RE` uses `(?<=[^\w#])` so an `@` preceded by `#` is not matched, hence `#@file` fires once. Each match carries `prefixLen` (2 for `#@`, 1 for `@`); Step 4 strips `slice(index, index + prefixLen)`. Non-resolving bare tokens (prose `@mentions`) stay verbatim.
 
 ---
 
