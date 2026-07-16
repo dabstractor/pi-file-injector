@@ -796,21 +796,35 @@ await runCase("A1", "A1 — #@ autocomplete: rewrites '#'→space for built-in, 
 
 // ── PAGED DELIVERY (PRD §5.5) — budget-aware inline-vs-paged ────────────────────────────
 
-await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + directive, paged=1", async () => {
+await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + directive, paged=1, NO LINE GAP (Finding 1)", async () => {
   const r = await mod.injectFiles("Summarize #@huge.log", [], PAGED_FIX);
   assert(r.injected === 1, `huge.log delivered (count includes paged), got injected=${r.injected}`);
   assert(r.paged === 1, `huge.log must be PAGED under PAGED_FIX, got paged=${r.paged}`);
-  // head block = first HEAD_BYTES (8192) of the content
+  // head block = first HEAD_CHARS (8192) of the content (UTF-16 code units; surrogate-safe)
   const expectedHead = '<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>';
-  assert(r.text.includes(expectedHead), "paged head block must contain the first 8192 bytes");
-  // directive block = the exported helper's output
-  const expectedDirective = mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length);
-  assert(r.text.includes(expectedDirective), "paged directive block must be present (full path + size + read instruction)");
-  // HARDCODED pin (Issue 4): the directive must resume PAST the injected ~2000-line head. Pi's read
-  // offset is 1-indexed (offset:0 and offset:1 BOTH start at line 1, re-reading the head), so the
-  // directive must say offset:2001 (first line after the head), not offset:0/1. Guards the regression.
-  assert(r.text.includes("offset:2001, limit:2000"),
-    "paged directive must point past the injected head (offset:2001), not re-read it (offset:0/1)");
+  assert(r.text.includes(expectedHead), "paged head block must contain the first 8192 chars");
+  // directive block = the exported helper's output. startLine = (newlines in head) + 1 and
+  // injectedLines = (newlines in head) — complete lines only; a partial trailing line is re-read,
+  // never lost. Finding 1: the directive must resume at exactly the line AFTER the complete head
+  // lines, for ANY line length — not a hardcoded offset:2001 (which silently loses content).
+  const head = HUGE_LOG_CONTENT.slice(0, 8192);
+  let nl = 0; for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 10) nl++;
+  const injectedLines = nl;
+  const expectedStart = nl + 1;
+  const expectedDirective = mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length, expectedStart, injectedLines);
+  assert(r.text.includes(expectedDirective),
+    `paged directive must resume at offset:${expectedStart} (head=${injectedLines} complete lines), got directive=${JSON.stringify((r.text.match(/<file name="[^"]*huge.log"><large file[\s\S]*?<\/file>/) || [])[0])}`);
+  // CORRECTNESS PROBE (closes Coverage Gap #1): simulate the model following the directive and assert
+  // ZERO lines are skipped. Union {complete head lines ∪ offset-stepped reads of READ_LIMIT} must cover
+  // all lines. This is what validate.sh's discovery probe does — it is how Finding 1 was caught. The
+  // old hardcoded offset:2001 failed here for huge.log (lost lines 113–2000); the computed offset passes.
+  const total = HUGE_LOG_CONTENT.split("\n").length;
+  const seen = new Set();
+  for (let i = 1; i <= injectedLines; i++) seen.add(i);
+  for (let off = expectedStart; off <= total; off += 2000) for (let k = 0; k < 2000; k++) seen.add(off + k);
+  let lost = 0, first = -1;
+  for (let i = 1; i <= total; i++) if (!seen.has(i)) { lost++; if (first < 0) first = i; }
+  assert(lost === 0, `directive + head must cover every line; ${lost} of ${total} lines never delivered (first gap at line ${first}); Finding 1 regression`);
   // #@ stripped from the injected marker; the path stays
   assert(r.text.startsWith("Summarize huge.log"), "#@huge.log must be stripped to huge.log (path stays)");
   assert(r.images.length === 0, "text-file paging attaches NO images");
@@ -825,8 +839,8 @@ await runCase("PD2", "§5.5 mixed: small whole + large paged under tight budget"
     "a.ts must be injected WHOLE (fits budget)");
   assert(r.text.includes('<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>'),
     "huge.log must be paged (head block)");
-  assert(r.text.includes(mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length)),
-    "huge.log directive block present");
+  assert(r.text.includes((function(){const h=HUGE_LOG_CONTENT.slice(0,8192);let nl=0;for(let i=0;i<h.length;i++)if(h.charCodeAt(i)===10)nl++;return mod.formatPagedDirectiveBlock(HUGE,HUGE_LOG_CONTENT.length,nl+1,nl);})()),
+    "huge.log directive block present (startLine + injectedLines derived from actual head line count)");
 });
 
 await runCase("PD3", "§5.5 O-1 fallback: budget unknown (FIX) → huge.log injected WHOLE, paged=0", async () => {
@@ -856,6 +870,102 @@ await runCase("PD5", "§5.5 binaries unaffected by budget: data.bin note under P
   assert(r.images.length === 0, `binary attaches NO image, got ${r.images.length}`);
   const expectedNote = '<file name="' + BIN + '"><binary file \u2014 contents not injected; use the read tool if needed></file>';
   assert(r.text.includes(expectedNote), "binary note block present (unaffected by budget)");
+});
+
+// ── PAGED DIRECTIVERY (Findings 1–3 from the validation report) ───────────────────────
+// PD6–PD8 close Coverage Gaps #2/#3 (byte-head-vs-line-window alignment; small-file-paged edge).
+// These are the exact scenarios validate.sh used to DISCOVER Findings 1–3; they now assert the FIX.
+
+// A TINY budget so even a small file trips the page threshold (PAGED_THRESHOLD * remaining is small).
+//   remaining = 6000 - 500 - 8192 - 8192 = < 0 → clamped to 0 → PAGED_THRESHOLD * 0 = 0
+//   ⇒ any file with fileCost > 0 (i.e. any non-empty text file) PAGES.
+const TINY_FIX = {
+  cwd: TMPDIR,
+  getContextUsage: () => ({ tokens: 500, contextWindow: 6000, percent: 8 }),
+  model: { contextWindow: 6000, maxTokens: 8192 },
+};
+
+await runCase("PD6", "§5.5 Finding 2: sub-head-sized file under tight budget → WHOLE, no spurious directive", async () => {
+  // Finding 2: a file ≤ HEAD_CHARS (8192) that pages ONLY because of a very tight budget previously
+  // got a head block equal to its ENTIRE content PLUS a 'read the rest' directive pointing past EOF
+  // (offset:2001) → the read tool would throw 'Offset beyond end of file'. Fixed: when the whole
+  // content fits the head slice, inject whole and do not page (no directive, paged=0).
+  const small = path.join(TMPDIR, "small.txt");
+  fsSync.writeFileSync(small, "AB".repeat(2000)); // 4000 chars, single line, < HEAD_CHARS
+  try {
+    const r = await mod.injectFiles("Read #@small.txt", [], TINY_FIX);
+    assert(r.injected === 1, `small.txt delivered, got injected=${r.injected}`);
+    assert(r.paged === 0, `small.txt must NOT page (content fits head) — no spurious directive, got paged=${r.paged}`);
+    // The WHOLE content is injected inline (head block = full content).
+    const expectedBlock = '<file name="' + small + '">\n' + "AB".repeat(2000) + '\n</file>';
+    assert(r.text.includes(expectedBlock), "whole content must be injected inline (no head slice)");
+    // And NO directive block is emitted (would point past EOF).
+    assert(!r.text.includes("<large file"), "no 'large file' directive for a sub-head-sized file (Finding 2)");
+  } finally {
+    fsSync.rmSync(small, { force: true });
+  }
+});
+
+await runCase("PD7", "§5.5 Finding 1: long-lined file (head < 1 line) → directive offset derived from head, 0% loss", async () => {
+  // Finding 1 worst case: a file of 10001-char lines. The 8192-char head contains LESS than one
+  // complete line, so the old hardcoded offset:2001 pointed past EOF → 100% data loss. The fix derives
+  // startLine from the ACTUAL head line count (1 for a head that ends mid-first-line), so the model
+  // re-reads line 1 onward — at most redundant, never data loss.
+  const longlines = path.join(TMPDIR, "longlines.log");
+  const LL_LINE = "X".repeat(10000);
+  const LL_CONTENT = (LL_LINE + "\n").repeat(300);
+  fsSync.writeFileSync(longlines, LL_CONTENT);
+  try {
+    const r = await mod.injectFiles("Summarize #@longlines.log", [], PAGED_FIX);
+    assert(r.injected === 1, `longlines.log delivered, got injected=${r.injected}`);
+    assert(r.paged === 1, `longlines.log must be PAGED, got paged=${r.paged}`);
+    // The head ends mid-first-line → 0 complete lines (no newline in head) → injectedLines=0,
+    // startLine=1 (model re-reads from line 1; line 1's tail is redundant, lines 2–300 are new).
+    assert(r.text.includes("offset:1, limit:2000"),
+      `long-lined file: directive must resume at offset:1 (head ends mid-first-line), not offset:2001; got text=${JSON.stringify((r.text.match(/<file name="[^"]*longlines.log"><large file[\s\S]*?<\/file>/) || [])[0])}`);
+    // CORRECTNESS PROBE: following the directive covers every line (0 lost). The old code lost all 301.
+    const total = LL_CONTENT.split("\n").length; // 301 (trailing empty after final \n)
+    const seen = new Set();
+    for (let off = 1; off <= total; off += 2000) for (let k = 0; k < 2000; k++) seen.add(off + k);
+    let lost = 0;
+    for (let i = 1; i <= total; i++) if (!seen.has(i)) lost++;
+    assert(lost === 0, `following the directive must cover every line; ${lost} of ${total} lost (was 100% before the fix)`);
+  } finally {
+    fsSync.rmSync(longlines, { force: true });
+  }
+});
+
+await runCase("PD8", "§5.5 Finding 3: head slice is surrogate-safe (no lone trailing surrogate)", async () => {
+  // Finding 3: content.slice(0, HEAD_CHARS) can land between a surrogate pair, emitting a lone
+  // high surrogate as the last char of the head block (malformed UTF-16). The fix backs up past the
+  // pair. Build a fixture where HEAD_CHARS (8192) falls exactly inside a surrogate pair.
+  // '😀' is U+1F600 → surrogate pair (0xD83D 0xDE00); two UTF-16 code units per emoji.
+  const EMOJI = "\uD83D\uDE00"; // 😀
+  // 4095 emoji = 8190 code units; + one ASCII char (8191) + first surrogate of next emoji (8192)
+  // → the naive slice(0,8192) ends on a lone high surrogate. headSlice must back up to 8191.
+  const body = EMOJI.repeat(4095) + "A" + EMOJI.repeat(100); // head boundary lands mid-pair at index 8192
+  const emojiFile = path.join(TMPDIR, "emoji.txt");
+  // Pad so the file is larger than HEAD_CHARS (so it pages). Use TINY_FIX so even this modestly-sized
+  // file trips the page threshold (any non-empty text file pages under TINY_FIX).
+  const padded = body + "\n" + "x".repeat(20000);
+  fsSync.writeFileSync(emojiFile, padded);
+  try {
+    const r = await mod.injectFiles("Read #@emoji.txt", [], TINY_FIX);
+    assert(r.injected === 1, `emoji.txt delivered, got injected=${r.injected}`);
+    assert(r.paged === 1, `emoji.txt must be PAGED, got paged=${r.paged}`);
+    // Extract the head block content and assert its last code unit is NOT a lone high surrogate.
+    const m = r.text.match(new RegExp('<file name="' + emojiFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">\\n([\\s\\S]*?)\\n</file>'));
+    assert(m, "head block must be present");
+    const head = m[1];
+    const last = head.charCodeAt(head.length - 1);
+    const prev = head.charCodeAt(head.length - 2);
+    const isLoneHigh = last >= 0xD800 && last <= 0xDBFF && !(prev >= 0xDC00 && prev <= 0xDFFF);
+    assert(!isLoneHigh, `head must not end on a lone high surrogate (last=0x${last.toString(16)}); Finding 3 surrogate-safe slice`);
+    // The head must still be ~HEAD_CHARS (backing up at most 1 unit from the surrogate-safe slice).
+    assert(Math.abs(head.length - 8192) <= 1, `head length must be 8191–8192 after surrogate-safe slice, got ${head.length}`);
+  } finally {
+    fsSync.rmSync(emojiFile, { force: true });
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

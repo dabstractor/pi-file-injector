@@ -19,9 +19,10 @@ const TRAILING_PUNCT = ".,;:!?\")]}>'";
 /** §5.5 — paged-delivery budget constants (defaults pinned by PRD §5.5 "Constants (defaults to pin)"). */
 const PAGED_THRESHOLD = 0.6;    // inject whole if fileCost <= PAGED_THRESHOLD * remaining
 const MARGIN = 8192;            // safety bytes subtracted from remaining context
-const HEAD_BYTES = 8192;        // head block size (~2000 lines, matches read tool DEFAULT_MAX_LINES=2000)
+const HEAD_CHARS = 8192;        // head block size in UTF-16 code units (matches read tool DEFAULT_MAX_LINES=2000 at ~4 chars/line)
 const DEFAULT_WINDOW = 200000;  // fallback context window when ctx.model?.contextWindow is absent
 const DEFAULT_RESERVE = 8192;   // fallback for ctx.model?.maxTokens when model is absent
+const READ_LIMIT = 2000;        // read tool DEFAULT_MAX_LINES — page size emitted in the directive
 
 /** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
  *  bytes match the declared image type before attaching. A mislabeled file (text body named
@@ -118,15 +119,49 @@ export function formatEmptyImageBlock(abs: string): string {
   return '<file name="' + abs + '"><empty image file \u2014 0 bytes; nothing to attach></file>';
 }
 
+/** Return the UTF-16 head slice, advanced past a lone high surrogate so the head block never ends
+ *  mid-surrogate-pair (a JS string is UTF-16; a naive slice(0, HEAD_CHARS) can split a pair and emit
+ *  a malformed trailing char). Backs up by at most 1 code unit only when the cut lands between a
+ *  high (0xD800–0xDBFF) and low (0xDC00–0xDFFF) surrogate, leaving the pair intact on the next page. */
+function headSlice(content: string): string {
+  let s = content.slice(0, HEAD_CHARS);
+  const last = s.charCodeAt(s.length - 1);
+  const next = content.charCodeAt(HEAD_CHARS);
+  if (last >= 0xD800 && last <= 0xDBFF && next >= 0xDC00 && next <= 0xDFFF) {
+    s = s.slice(0, -1); // drop the lone high surrogate so the pair reads whole on the next page
+  }
+  return s;
+}
+
+/** Count the COMPLETE lines fully contained in the head slice, so the directive can resume at the next
+ *  line with ZERO data loss (Pi read offset is 1-indexed). A line is complete if it ends with '\n'
+ *  within the head; the line count therefore equals the number of newlines in the head. If the head
+ *  ends mid-line, that final partial line is NOT counted as complete — the directive re-reads it in
+ *  full (redundant tail, never data loss). The directive resumes at (newlineCount + 1). */
+function headStartLine(head: string): number {
+  let n = 0;
+  for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 0x0A) n++;
+  return n + 1; // 1-indexed: first line AFTER the complete lines delivered in the head
+}
+
+/** Count complete lines in the head (for the directive's "first N lines injected" wording). Equals
+ *  the number of newlines, since every newline terminates a complete line. */
+function headCompleteLineCount(head: string): number {
+  let n = 0;
+  for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 0x0A) n++;
+  return n;
+}
+
 /** PRD §5.5 — directive block for a paged (oversize) text file. Emits a <file name="abs"> note
  *  giving the full path + estimated size and instructing the model to read the REMAINDER past the
- *  ~2000-line head via the read tool at offset:2001, limit:2000 (Pi read offset is 1-indexed, so
- *  offset:2001 is the first line AFTER the 8192-byte head; DEFAULT_MAX_LINES=2000), incrementing
- *  offset by 2000 until the whole file is read. Reuses the em dash (U+2014) from
- *  formatBinaryBlock/formatEmptyImageBlock. The head block is NOT this helper — it is
- *  formatTextFileBlock(abs, content.slice(0, HEAD_BYTES)). */
-export function formatPagedDirectiveBlock(abs: string, totalBytes: number): string {
-  return '<file name="' + abs + '"><large file \u2014 estimated ' + totalBytes + ' bytes; first ~2000 lines injected above. Use the read tool to read the rest: offset:2001, limit:2000, incrementing offset by 2000 until the entire file is read></file>';
+ *  injected head via the read tool. `startLine` is the 1-indexed line at which the model should
+ *  resume (computed from the ACTUAL line count of the head so the directive is internally
+ *  consistent for ANY line length — never the hardcoded 2001 that assumed 8192 chars = 2000 lines);
+ *  Pi read offset is 1-indexed, limit is DEFAULT_MAX_LINES=READ_LIMIT=2000, and the model increments
+ *  offset by READ_LIMIT until done. `injectedLines` is the count of complete lines in the head (for
+ *  the wording). Reuses the em dash (U+2014) from formatBinaryBlock/formatEmptyImageBlock. */
+export function formatPagedDirectiveBlock(abs: string, totalBytes: number, startLine: number, injectedLines: number): string {
+  return '<file name="' + abs + '"><large file \u2014 estimated ' + totalBytes + ' bytes; first ' + injectedLines + ' lines injected above. Use the read tool to read the rest: offset:' + startLine + ', limit:' + READ_LIMIT + ', incrementing offset by ' + READ_LIMIT + ' until the entire file is read></file>';
 }
 
 /**
@@ -264,11 +299,30 @@ export async function injectFiles(
             blocks.push(formatTextFileBlock(abs, content));
             if (remainingBudget !== null) remainingBudget = Math.max(0, remainingBudget - fileCost);
           } else {
-            // PAGED — head block (first HEAD_BYTES) + directive (PRD §5.5 Page path)
-            blocks.push(formatTextFileBlock(abs, content.slice(0, HEAD_BYTES)));
-            blocks.push(formatPagedDirectiveBlock(abs, content.length));
-            paged++;
-            remainingBudget = Math.max(0, remainingBudget - Math.ceil(HEAD_BYTES / 4));
+            // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
+            //
+            // FINDING 2: if the WHOLE content already fits in the head, there is nothing to page —
+            // inject it whole and do NOT emit a directive (a sub-head-sized file that tripped the
+            // page threshold only because of a tight budget would otherwise get a 'read the rest'
+            // directive pointing past EOF, causing a spurious read error for content already delivered).
+            //
+            // FINDING 1: derive the directive's resume offset from the ACTUAL line count of the head
+            // (headStartLine = newlines+1; headCompleteLineCount = newlines). The old hardcoded
+            // offset:2001 assumed the 8192-char head equals 2000 lines, which is only true for ~4-char
+            // lines; for realistic files it silently lost the lines between the head's real end and
+            // line 2000 (up to 100% for long-lined files). The directive now points exactly past the
+            // COMPLETE lines the head delivered, so no content is skipped regardless of line length
+            // (a head ending mid-line re-reads that partial line — redundant tail, never data loss).
+            const head = headSlice(content);
+            if (content.length <= HEAD_CHARS) {
+              // whole content fits the head slice → deliver inline, never page (FINDING 2)
+              blocks.push(formatTextFileBlock(abs, content));
+            } else {
+              blocks.push(formatTextFileBlock(abs, head));
+              blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+              paged++;
+              remainingBudget = Math.max(0, remainingBudget - Math.ceil(HEAD_CHARS / 4));
+            }
           }
         }
       }
