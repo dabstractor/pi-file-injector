@@ -20,85 +20,9 @@ a CLI argument *before* the session starts; interactively, bare `@` is just path
 
 ## Installation
 
-The extension is a single `.ts` file with **zero npm dependencies** and **no build step** — Pi
-loads `.ts` extensions via [jiti](https://github.com/unjs/jiti) (transpile-on-load). There are two
-install models: **copy the `.ts`** into an auto-discovered extensions dir, or install the **repo as
-a pi package** with `pi install`. The repo carries a thin `package.json` whose `"pi"` manifest
-declares `file-injector.ts`, so the directory itself is a loadable package — this is what makes
-`pi install .` work and what prevents the `Cannot find module '<dir>'` crash if the directory is
-ever handed to the loader directly (e.g. registered as a package or passed to `-e`).
-
-Pick whichever placement fits your workflow.
-
-### Global (recommended for "always on")
-
 ```bash
-mkdir -p ~/.pi/agent/extensions
-cp file-injector.ts ~/.pi/agent/extensions/file-injector.ts
+pi install git:github.com/dabstractor/pi-file-injector
 ```
-
-Then start `pi` (or run `/reload` if a session is already running — extensions in the
-auto-discovered locations hot-reload).
-
-### Project-local (per-repo)
-
-```bash
-mkdir -p .pi/extensions
-cp file-injector.ts .pi/extensions/file-injector.ts
-```
-
-Project-local extensions load after the project is trusted.
-
-### As a package (`pi install`)
-
-The repo is a valid pi package — its `package.json` declares `file-injector.ts` under a `"pi"`
-manifest — so you can install it by path instead of copying a file:
-
-```bash
-pi install .                            # current directory
-pi install /abs/path/to/pi-file-injector  # absolute path
-```
-
-This registers the directory in `~/.pi/agent/settings.json` (`packages`) and loads the extension
-from there on every `pi` start. Use `pi remove .` (or the path you installed with) to uninstall.
-Pick this **or** the copy method — not both (see the warning below).
-
-### ⚠ Upgrading? Install exactly ONE copy (delete the old one)
-
-Pi can load this extension from several places — the **global** `~/.pi/agent/extensions/` dir, a
-**project-local** `.pi/extensions/` dir, **and** any directory registered via `pi install`. Co-loads
-are now largely self-healing: the `#@` trigger is **stripped** once a file injects, so a later copy
-(legacy or current) finds no marker to re-inject — and per-token dedup suppresses earlier copies.
-The only residual double-injection case is **two stale (pre-strip, pre-dedup) copies**, a narrow
-user error. Even so, one copy is the clean rule — see [`validation_report.md`](validation_report.md)
-finding **F-NEW-1** for the history.
-
-**When upgrading, delete the old copy first** — don't just add the new one elsewhere:
-
-```bash
-rm -f ~/.pi/agent/extensions/file-injector.ts   # remove a stale GLOBAL copy
-rm -f .pi/extensions/file-injector.ts           # …and/or a stale PROJECT-LOCAL copy
-pi remove .                                      # …and/or a `pi install` package registration
-# then install the new copy in exactly ONE of the locations above
-```
-
-The safe rule: **one copy, one location.** The `pi -e ./file-injector.ts` quick-test path is always
-safe regardless (it co-loads cleanly and dedups against any global copy).
-
-### Quick test (one-off, no install)
-
-```bash
-pi -e ./file-injector.ts
-```
-
-…or combined with an initial message, the `-p` form documents the same path:
-
-```bash
-pi -e ./file-injector.ts -p "Review #@a.ts"
-```
-
-> `pi -e` is for quick tests; it does **not** hot-reload. Use one of the auto-discovery locations
-> above for day-to-day use.
 
 ## Quick start
 
