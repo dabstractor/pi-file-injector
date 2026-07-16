@@ -602,6 +602,28 @@ await runCase("F1d", "F1d — co-load: stripping #@ post-inject makes dedup bidi
   assert(aCountRev === 1, `reverse order (legacy→dedup) yields exactly 1 a.ts block (got ${aCountRev})`);
 });
 
+await runCase("DUP1", "DUP1 — within-prompt same-path repeat injects ONCE (text) (Issue 1)", async () => {
+  const r = await mod.injectFiles("Compare #@a.ts with #@a.ts", [], FIX);
+  assert(r.injected === 1, `same path twice must inject ONCE, got injected=${r.injected}`);
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `must contain exactly ONE <file> block for a.ts, got ${aCount}`);
+});
+
+await runCase("DUP2", "DUP2 — two path forms of the same file inject ONCE (Issue 1)", async () => {
+  // 'a.ts' and './a.ts' both resolve to the same absolute path → dedup to one injection.
+  const r = await mod.injectFiles("Diff #@a.ts against #@./a.ts", [], FIX);
+  assert(r.injected === 1, `two path forms (same file) must inject ONCE, got injected=${r.injected}`);
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `must contain exactly ONE <file> block for a.ts, got ${aCount}`);
+});
+
+await runCase("DUP3", "DUP3 — within-prompt same-image repeat attaches ONCE (Issue 1)", async () => {
+  const r = await mod.injectFiles("See #@pic.png and #@pic.png", [], FIX);
+  assert(r.images.length === 1, `same image twice must attach ONCE, got images.length=${r.images.length}`);
+  const picCount = (r.text.match(new RegExp('<file name="' + PIC.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(picCount === 1, `must contain exactly ONE <file> reference block for pic.png, got ${picCount}`);
+});
+
 await runCase("F2", "F2 — sentinel string in prompt no longer gates injection (Issue 2)", async () => {
   // Issue 2 regression: the old sentinel guard tested the RAW user prompt and short-circuited on ANY
   // `<!--#@file-injected-->` substring, silently dropping ALL #@ tokens. With the sentinel removed

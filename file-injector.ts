@@ -185,6 +185,12 @@ export async function injectFiles(
     priorPaths.add(m[1]);
   }
 
+  // WITHIN-RUN DEDUP (Issue 1) — paths injected by THIS pass. Checked alongside priorPaths at the
+  // top of the loop so a same-path repeat in one prompt (e.g. "Compare #@a.ts with #@a.ts", or
+  // "#@a.ts" + "#@./a.ts") injects ONCE. SEPARATE from priorPaths so the F1c invariant holds (a
+  // prior block for X must not block a NEW path Y). Populated after each successful inject below.
+  const injectedThisRun = new Set<string>();
+
   for (const m of text.matchAll(FILE_INJECT_RE)) {
     const raw = m[2]; // capture group 2 = path token after #@ (group 1 is the zero-width ^ anchor)
     const token = cleanToken(raw); // trim trailing punctuation (S2)
@@ -196,7 +202,7 @@ export async function injectFiles(
     // prior copy in the runner's input-handler chain, or by Pi's own @file expander), skip
     // re-injecting. Cooperation-independent: works even when the prior copy was a non-sentinel
     // version (the default `pi -e` path when a global copy co-loads). Fixes Issue 1.
-    if (priorPaths.has(abs)) continue;
+    if (priorPaths.has(abs) || injectedThisRun.has(abs)) continue;
 
     let st;
     try {
@@ -216,6 +222,7 @@ export async function injectFiles(
       // Align with the text path's empty-file handling: emit a note block, attach nothing.
       if (mime && buf.length === 0) {
         blocks.push(formatEmptyImageBlock(abs));
+        injectedThisRun.add(abs); // within-run dedup (Issue 1)
         count++;
         continue;
       }
@@ -256,6 +263,7 @@ export async function injectFiles(
           }
         }
       }
+      injectedThisRun.add(abs); // within-run dedup (Issue 1) — covers text-inline/paged/image/binary
       count++;
     } catch {
       // read/resize error => leave THIS token verbatim, keep processing the rest (PRD §5.4, §12.5)
