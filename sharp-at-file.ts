@@ -206,9 +206,14 @@ export async function injectFiles(
     }
   }
 
-  if (count === 0) return { text, images: imagesIn, injected: 0 }; // ORIGINAL ref — nothing changed (item §3i)
+  if (count === 0) return { text, images: imagesIn, injected: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
-  const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
+  // Strip the #@ trigger from each inline marker — the PATH stays put as a readable reference. The
+  // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
+  // every #@ is 2 tokens of pure noise. Reached only when count > 0, so the nothing-injected path
+  // above still returns the prompt byte-for-byte (missing/dir/error tokens keep their #@ verbatim).
+  const strippedText = text.replace(FILE_INJECT_RE, (_m, _boundary, path) => path);
+  const finalText = `${strippedText}\n\n---\n\n${blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
   return { text: finalText, images, injected: count };
 }
 

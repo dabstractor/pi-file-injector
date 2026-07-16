@@ -66,12 +66,12 @@ Pick this **or** the copy method — not both (see the warning below).
 ### ⚠ Upgrading? Install exactly ONE copy (delete the old one)
 
 Pi can load this extension from several places — the **global** `~/.pi/agent/extensions/` dir, a
-**project-local** `.pi/extensions/` dir, **and** any directory registered via `pi install`. If more
-than one of these resolves to `sharp-at-file.ts`, **all of them run on every prompt**. The
-extension's per-token dedup is **one-directional**: a copy that runs *after* a stale (pre-dedup)
-copy cannot stop that stale copy from re-injecting the same file, so you can silently get **two
-identical `<file>` blocks** (doubled tokens) — see [`validation_report.md`](validation_report.md)
-finding **F-NEW-1**.
+**project-local** `.pi/extensions/` dir, **and** any directory registered via `pi install`. Co-loads
+are now largely self-healing: the `#@` trigger is **stripped** once a file injects, so a later copy
+(legacy or current) finds no marker to re-inject — and per-token dedup suppresses earlier copies.
+The only residual double-injection case is **two stale (pre-strip, pre-dedup) copies**, a narrow
+user error. Even so, one copy is the clean rule — see [`validation_report.md`](validation_report.md)
+finding **F-NEW-1** for the history.
 
 **When upgrading, delete the old copy first** — don't just add the new one elsewhere:
 
@@ -111,10 +111,13 @@ See #@a.ts.          # trailing punctuation is trimmed automatically
 Review @a.ts         # bare @ is UNCHANGED — no injection by this extension
 ```
 
-When you submit one of these, the file contents appear below a `---` rule in your message, and the
-original `#@path` marker stays in place as a readable reference (the extension **appends**, it does
-not inline-replace). These are the exact prompts the test harness exercises, so you can run
-`node ./sharp-at-file.test.mjs` and watch them pass.
+When you submit one of these, the file contents appear below a `---` rule in your message. The
+extension **appends** (it does not inline-replace) and strips the `#@` trigger from each reference,
+so `Review #@a.ts` reaches the model as `Review a.ts` — the path stays as a readable link to the
+appended block, and the 2-token `#@` syntax is dropped as noise. (Tokens that don't resolve —
+missing file, directory, read error — are left byte-for-byte verbatim, `#@` included.) These are the
+exact prompts the test harness exercises, so you can run `node ./sharp-at-file.test.mjs` and watch
+them pass.
 
 **Path completion:** in the TUI, `#@` autocompletes file paths — type `#@` and start the path, and
 the same gitignore-aware file list Pi uses for `@` pops up; Tab completes it as `#@<path>`. (The

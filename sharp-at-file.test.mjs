@@ -220,7 +220,7 @@ console.log("\nsharp-at-file.ts — PRD §11 acceptance matrix (model-free)\n");
 await runCase(1, "single text file injected, original preserved", async () => {
   const r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
-  assert(r.text.startsWith("Review #@a.ts"), "original prompt text must be preserved verbatim at start");
+  assert(r.text.startsWith("Review a.ts"), "path stays inline as a reference (#@ trigger stripped on inject)");
   assert(r.text.includes("\n\n---\n\n"), "blocks must be appended after a '\\n\\n---\\n\\n' separator");
   const expectedBlock = '<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>';
   assert(r.text.includes(expectedBlock), `expected block to equal the processFileArguments template`);
@@ -545,14 +545,14 @@ await runCase("F1c", "F1c — structural dedup: prior @file block doesn't block 
   assert(bCount === 1, `b.ts must appear exactly once (newly injected), got ${bCount}`);
 });
 
-await runCase("F1d", "F1d — mixed-pair co-load PINS the one-directional dedup limit (F-NEW-1)", async () => {
-  // Validator finding F-NEW-1, recommendation #3: the harness must exercise a GENUINE mixed pair — a
-  // dedup copy followed by a NON-dedup (legacy) copy — and PIN the documented behavior rather than
-  // silently pass. This mirrors Pi's loader order for project-local(new) + global(stale): the new copy
-  // runs FIRST (injects once), then the stale copy runs SECOND and re-injects because it has no dedup.
-  // The per-token/structural dedup is inherently ONE-DIRECTIONAL: it protects against EARLIER copies,
-  // never a LATER non-cooperating one. This case documents that limit as a known, tracked condition
-  // (the README warns: install exactly one copy; upgrading means deleting the old global copy).
+await runCase("F1d", "F1d — co-load: stripping #@ post-inject makes dedup bidirectional (closes F-NEW-1 dedup→legacy gap)", async () => {
+  // Originally a validator pin for F-NEW-1 (recommendation #3): exercise a GENUINE mixed pair — a
+  // dedup copy followed by a NON-dedup (legacy) copy. The OLD limit was one-directional: a later
+  // non-cooperating legacy copy re-injected because the #@ marker survived the dedup pass. Stripping
+  // the #@ marker after injection (PRD §6.2) CLOSED that gap — the legacy copy now finds no trigger
+  // and cannot re-inject — so this case now asserts the FIXED (bidirectional) behavior. Reverse order
+  // (legacy→dedup) was already clean via per-token/structural dedup. Only TWO stale copies (user
+  // error) could still double-inject; the single-copy guidance still guards that.
   //
   // A faithful legacy injector: uses the repo's OWN exported formatters (identical block format) but
   // OMITS the dedup line — exactly what the stale 182-line global copy does.
@@ -577,13 +577,12 @@ await runCase("F1d", "F1d — mixed-pair co-load PINS the one-directional dedup 
   const first = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(first.injected === 1, `dedup copy must inject a.ts once (got ${first.injected})`);
   const legacyAfter = await legacyInject(first.text, first.images, FIX);
-  // KNOWN LIMITATION (F-NEW-1): the later non-cooperating legacy copy re-injects → 2 blocks total.
-  // This assertion PINS that behavior. If a future change makes dedup bidirectional (e.g. removing the
-  // #@ marker after injection — currently forbidden by PRD §6.2/§9), flip this to ===1 and update the
-  // README. Until then, the mitigation is operational: install only one copy (see README warning).
-  assert(legacyAfter.injected === 1, `legacy copy re-injects a.ts (F-NEW-1 known limit), got ${legacyAfter.injected}`);
+  // FIXED (was F-NEW-1): the dedup copy stripped the #@ marker, so the later legacy copy finds no
+  // trigger → cannot re-inject. Dedup is now effectively bidirectional for any pair involving a
+  // current copy.
+  assert(legacyAfter.injected === 0, `legacy copy cannot re-inject — #@ was stripped on the dedup pass (got ${legacyAfter.injected})`);
   const aCount = (legacyAfter.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
-  assert(aCount === 2, `F-NEW-1: order dedup→legacy yields 2 a.ts blocks (got ${aCount}); see README single-copy guidance`);
+  assert(aCount === 1, `order dedup→legacy now yields exactly 1 a.ts block (got ${aCount}); F-NEW-1 gap closed by #@ stripping`);
   // REVERSE order (legacy FIRST, dedup SECOND) MUST stay clean — the dedup copy suppresses the dup.
   const legacyFirst = await legacyInject("Review #@a.ts", [], FIX);
   assert(legacyFirst.injected === 1, `legacy copy alone injects a.ts once (got ${legacyFirst.injected})`);
@@ -602,7 +601,7 @@ await runCase("F2", "F2 — sentinel string in prompt no longer gates injection 
   const prompt = '<!--#@file-injected--> Review #@a.ts';
   const r = await mod.injectFiles(prompt, [], FIX);
   assert(r.injected === 1, `a.ts must be injected despite the sentinel string in the prompt (got ${r.injected})`);
-  assert(r.text.startsWith(prompt), "original prompt text must be preserved verbatim at the start");
+  assert(r.text.startsWith('<!--file-injected--> Review a.ts'), "both #@ markers stripped (sentinel's #@ too); paths remain as inline references");
   assert(r.text.includes('<file name="' + A_TS + '">'), "injected text must contain the a.ts <file> block");
   // Exactly ONE block (a.ts) — no spurious block from the ghost `#@file-injected-->` token.
   const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
@@ -673,7 +672,7 @@ await runCase("U1", "U1 — Unicode word-boundary: #@ does not fire mid-word in 
   // (c) REGRESSION GUARD: a SPACE before #@ is a boundary → Review #@a.ts still injects → injected===1.
   r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `(c) Review #@a.ts must inject (space before #@ is a boundary), got ${r.injected}`);
-  assert(r.text.startsWith("Review #@a.ts"), `(c) original prompt must be preserved verbatim at start`);
+  assert(r.text.startsWith("Review a.ts"), `(c) path stays inline as a reference (#@ trigger stripped on successful inject)`);
   assert(r.text.includes('<file name="' + A_TS + '">'), `(c) injected text must contain the a.ts <file> block`);
   // (d) REGRESSION GUARD: start-of-string (^ alternation) → #@a.ts still injects → injected===1.
   r = await mod.injectFiles("#@a.ts", [], FIX);

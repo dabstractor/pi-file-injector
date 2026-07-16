@@ -246,7 +246,7 @@ Maintain across all `#@` tokens in the prompt:
 - `images: ImageContent[]` — seeded from `event.images ?? []`, appended to for each image.
 - `injected: number` — count of files successfully injected (blocks appended or images attached); `0` means none.
 
-**Final text:** **append** all blocks below the user's original prompt, separated by a horizontal rule. **Do not modify the original prompt text** (the `#@path` markers remain as harmless reference tokens):
+**Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the `#@` trigger** from each injected marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so `#@` is pure noise). Tokens that did **not** inject (missing / directory / read-error) are left byte-for-byte verbatim, `#@` included:
 
 ```
 <original prompt text, unchanged>
@@ -259,7 +259,7 @@ Maintain across all `#@` tokens in the prompt:
 ...
 ```
 
-> **Why append, not inline-replace?** Files can be large (this is unconditional). Appending keeps the user's prose readable in the transcript and is the least surprising transformation. The original `#@path` markers stay as explicit references.
+> **Why append, not inline-replace?** Files can be large (this is unconditional). Appending keeps the user's prose readable in the transcript and is the least surprising transformation. The `#@` trigger is stripped from each injected reference (the path stays); failed tokens keep their `#@` verbatim.
 
 **Final images:** the accumulated `images` array (unchanged if none).
 
@@ -421,9 +421,12 @@ async function injectFiles(text, imagesIn, ctx) {
     }
   }
 
-  if (count === 0) return { text, images: imagesIn, injected: 0 };
+  if (count === 0) return { text, images: imagesIn, injected: 0 }; // nothing injected → byte-for-byte
 
-  const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`;
+  // strip the #@ trigger from each injected marker (the path stays as the reference; #@ is noise).
+  // Failed tokens took the count===0 path above, so they keep their #@ verbatim.
+  const stripped = text.replace(FILE_INJECT_RE, (_m, _boundary, path) => path);
+  const finalText = `${stripped}\n\n---\n\n${blocks.join("\n\n")}`;
   return { text: finalText, images, injected: count };
 }
 
@@ -473,7 +476,7 @@ function formatBinaryBlock(abs: string): string {
 | No `#@` in prompt | `continue` (no work). |
 | `#@nonexistent.txt` | Token left verbatim; no block; no error. |
 | `#@some/dir/` (directory) | Token left verbatim. |
-| `text #@a.txt more` | `#@a.ts` → wait, `#@a.txt`; file injected, appended below; original text (incl. marker) unchanged. |
+| `text #@a.txt more` | `#@a.ts` → wait, `#@a.txt`; file injected, appended below; inline marker becomes `a.txt` (`#@` stripped, path stays). |
 | Multiple `#@a.txt #@b.md` | Both injected; blocks appended in order; summary notify `2 file(s)`. |
 | `#@huge.log` (50 MB) | **Entire file injected.** No limit. (Documented risk, §13.) |
 | `#@data.bin` (binary, NUL) | Binary note block appended; no garbage. |
@@ -512,7 +515,7 @@ pi -e .                             # quick test (directory — resolves via pac
 |---|---|---|---|
 | 1 | small `a.ts` (~50 words) | `Review #@a.ts` | Prompt sent to model already contains `a.ts` contents in a `<file name="…">` block; **no `read` tool call**. Original prompt text unchanged; block appended after `---`. |
 | 2 | `huge.log` (50 MB) | `Summarize #@huge.log` | **Entire file injected.** No truncation, no limit. (May blow context — that's the documented behavior.) |
-| 3 | `pic.png` | `Describe #@pic.png` | `ImageContent` attached; `<file name="…">…</file>` reference appended; `pic.png` marker stays in text. |
+| 3 | `pic.png` | `Describe #@pic.png` | `ImageContent` attached; `<file name="…">…</file>` reference appended; inline marker becomes `pic.png` (`#@` stripped). |
 | 4 | `data.bin` (binary) | `Inspect #@data.bin` | Binary note block appended; no decoded garbage. |
 | 5 | missing | `Fix #@nope.ts` | Token left verbatim; prompt otherwise unchanged; model handles. |
 | 6 | directory | `List #@src/` | Token left verbatim. |
@@ -551,7 +554,7 @@ pi.registerCommand("sharp-at-test", {
 7. **Images are base64, no data-URL prefix.** `ImageContent.data` is raw base64.
 8. **Image resize is a necessity, not a config.** Providers reject oversized images; `resizeImage` (2000×2000 default) is hardcoded so injection actually succeeds. This does not contradict "no config" — it's required for correctness, and the user still gets "the whole image" (downscaled to fit).
 9. **Binary detection is for routing, not gating.** Use the NUL-byte heuristic *only* to avoid injecting decoded garbage from non-image binaries. Image files skip this check entirely (handled by MIME type first).
-10. **Append, don't inline-replace.** Large files would wreck the transcript bubble. Append blocks below a `---`; keep original text (and `#@` markers) intact.
+10. **Append, don't inline-replace; strip the trigger.** Large files would wreck the transcript bubble. Append blocks below a `---`, and strip `#@` from each injected marker (the path stays as the reference). Failed tokens are left verbatim, `#@` included.
 11. **Entire file, always.** Do not add truncation, word counts, or byte limits anywhere. The one defining behavior of `#@` is "the whole file, every time." If you feel tempted to add a cap, re-read §13 — the cap is a *different feature* (`@` with size-gating), not this one.
 12. **Don't touch `@`.** This extension must not match or transform bare `@path`. Only `#@path`. Verify with test #14.
 
