@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T1.S1 — Extension file scaffold: imports, constants, factory stub"
 prd_ref: "PRD §7 (Technical Reference), §8 (File Structure), §4.2/§5.2/§4.3 (constants), Appendix A (Minimal skeleton)"
-target_file: "./sharp-at-file.ts"
+target_file: "./file-injector.ts"
 target_language: TypeScript (jiti transpile-on-load, no tsconfig/package.json)
 ---
 
@@ -9,12 +9,12 @@ target_language: TypeScript (jiti transpile-on-load, no tsconfig/package.json)
 
 ## Goal
 
-**Feature Goal**: Create the loadable single-file Pi extension scaffold `./sharp-at-file.ts` containing the **complete import surface** (PRD §7), the **three module-level constants** (`FILE_INJECT_RE`, `MIME_BY_EXT`, `TRAILING_PUNCT`), and a **factory stub** (Appendix A) that registers an `input` handler currently returning `{ action: "continue" }` (pure pass-through). This establishes the shared module-level structure that every subsequent subtask (S2 parsing helpers, T2 format helpers, T3 `injectFiles` + real handler) builds upon **in the same file**.
+**Feature Goal**: Create the loadable single-file Pi extension scaffold `./file-injector.ts` containing the **complete import surface** (PRD §7), the **three module-level constants** (`FILE_INJECT_RE`, `MIME_BY_EXT`, `TRAILING_PUNCT`), and a **factory stub** (Appendix A) that registers an `input` handler currently returning `{ action: "continue" }` (pure pass-through). This establishes the shared module-level structure that every subsequent subtask (S2 parsing helpers, T2 format helpers, T3 `injectFiles` + real handler) builds upon **in the same file**.
 
-**Deliverable**: One new file at `./sharp-at-file.ts` (project root: `/home/dustin/projects/pi-auto-reader/sharp-at-file.ts`), approximately 25–30 lines. Pi must be able to import it without errors (`pi -e ./sharp-at-file.ts`), and its default export must be a function `(pi: ExtensionAPI) => void`.
+**Deliverable**: One new file at `./file-injector.ts` (project root: `/home/dustin/projects/pi-file-injector/file-injector.ts`), approximately 25–30 lines. Pi must be able to import it without errors (`pi -e ./file-injector.ts`), and its default export must be a function `(pi: ExtensionAPI) => void`.
 
 **Success Definition**:
-- [ ] File `./sharp-at-file.ts` exists at the project root.
+- [ ] File `./file-injector.ts` exists at the project root.
 - [ ] The six import statements appear verbatim exactly as specified (§7) — no additions, no omissions, no reordering of the two type-only imports above their value-import counterparts.
 - [ ] `FILE_INJECT_RE`, `MIME_BY_EXT`, `TRAILING_PUNCT` are declared `const` at **module scope** (not inside the factory) with the exact verified values.
 - [ ] Default export is `function (pi: ExtensionAPI)` that calls `pi.on("input", async (event, ctx) => { return { action: "continue" }; })`.
@@ -31,7 +31,7 @@ target_language: TypeScript (jiti transpile-on-load, no tsconfig/package.json)
 
 ## Why
 
-- **Establishes the single-file module shell.** PRD §8 mandates one file (`sharp-at-file.ts`) with five internal sections. The scaffold creates sections 1 (imports) + 2 (constants) + the factory signature (section 5), so S2/T2/T3 only ever **add** bodies, never restructure.
+- **Establishes the single-file module shell.** PRD §8 mandates one file (`file-injector.ts`) with five internal sections. The scaffold creates sections 1 (imports) + 2 (constants) + the factory signature (section 5), so S2/T2/T3 only ever **add** bodies, never restructure.
 - **Proves the verified import pattern works** before any logic is written — de-risking the whole milestone. All 6 API claims are pre-verified (see `architecture/api_verification.md`); the scaffold is the executable proof.
 - **Module-level constants are shared state.** `FILE_INJECT_RE`, `MIME_BY_EXT`, `TRAILING_PUNCT` are consumed by S2/T2/T3 in the same file, so they must exist at module scope from the start.
 
@@ -46,7 +46,7 @@ No `package.json`, no `tsconfig.json`, no `node_modules`, no test files. The ext
 
 ### Success Criteria
 
-- [ ] `./sharp-at-file.ts` loads via jiti with default export `typeof === "function"` (validation gate below).
+- [ ] `./file-injector.ts` loads via jiti with default export `typeof === "function"` (validation gate below).
 - [ ] All three constants present at module scope with exact values.
 - [ ] Pass-through verified: a `#@`-containing prompt is returned unchanged.
 
@@ -95,7 +95,7 @@ No `package.json`, no `tsconfig.json`, no `node_modules`, no test files. The ext
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .git/
 ├── .gitignore          # ignores node_modules/, dist/, .pi-subagents/ — does NOT ignore .ts
@@ -111,7 +111,7 @@ No `package.json`, no `tsconfig.json`, no `node_modules`, no test files. The ext
             ├── research/research_notes.md   # this task's research (context for implementer)
             └── PRP.md                       # <-- THIS FILE
 # NOTE: there is NO src/, NO package.json, NO tsconfig — this is a greenfield single-file extension.
-#       sharp-at-file.ts does NOT exist yet.
+#       file-injector.ts does NOT exist yet.
 ```
 
 ### Desired Codebase tree with files to be added
@@ -119,7 +119,7 @@ No `package.json`, no `tsconfig.json`, no `node_modules`, no test files. The ext
 ```bash
 .
 ├── ... (unchanged)
-└── sharp-at-file.ts    # NEW — created by this task. ~25-30 lines.
+└── file-injector.ts    # NEW — created by this task. ~25-30 lines.
                         #   Sections: (1) imports, (2) module-level constants, (3) factory stub.
                         #   Responsibility: be loadable + harmless (pass-through) + expose the
                         #   shared constants that S2/T2/T3 will consume in the same file.
@@ -129,7 +129,7 @@ No `package.json`, no `tsconfig.json`, no `node_modules`, no test files. The ext
 
 ```typescript
 // CRITICAL: Pi loads extensions via 'jiti' (transpile-on-load). NO tsconfig, NO package.json,
-// NO node_modules are required at the extension's location. A bare ./sharp-at-file.ts loads directly.
+// NO node_modules are required at the extension's location. A bare ./file-injector.ts loads directly.
 // (architecture/extension_patterns.md §5; architecture/external_deps.md)
 
 // CRITICAL: The imports `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` are
@@ -164,7 +164,7 @@ No data models are created in this subtask. The only "structure" is the module s
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: CREATE ./sharp-at-file.ts (single file, project root)
+Task 1: CREATE ./file-injector.ts (single file, project root)
   - OBJECTIVE: Establish the loadable module shell (imports + module-level constants + factory stub).
   - WRITE, in this exact order:
       (a) The six import statements (verbatim — see "Exact source" below).
@@ -175,7 +175,7 @@ Task 1: CREATE ./sharp-at-file.ts (single file, project root)
         `export default function (pi: ExtensionAPI) { pi.on("input", async (event, ctx) => {...}) }`
         registration shape — BUT place constants at MODULE scope (PRD §8), not inside the factory.
   - NAMING: FILE_INJECT_RE, MIME_BY_EXT, TRAILING_PUNCT (exact, SCREAMING_SNAKE_CASE module consts).
-  - PLACEMENT: project root. NOT under src/, NOT under plan/. The file's basename is sharp-at-file.ts.
+  - PLACEMENT: project root. NOT under src/, NOT under plan/. The file's basename is file-injector.ts.
   - DO NOT (out of scope for S1): cleanToken, expandTildeAndResolve, extOf, isBinary,
         formatTextFileBlock/formatImageBlock/formatBinaryBlock, injectFiles, handler guards/notify/transform.
   - DO NOT create: package.json, tsconfig.json, any test file, any README. (README is P1.M2.T5.S1.)
@@ -251,8 +251,8 @@ export default function (pi: ExtensionAPI) {
 
 ```yaml
 EXTENSION LOADING (no build step):
-  - mechanism: "Pi's jiti loader transpiles ./sharp-at-file.ts on import. No tsconfig/package.json needed."
-  - discovery: "Explicit: `pi -e ./sharp-at-file.ts`. (Global ~/.pi/agent/extensions/ and project .pi/extensions/
+  - mechanism: "Pi's jiti loader transpiles ./file-injector.ts on import. No tsconfig/package.json needed."
+  - discovery: "Explicit: `pi -e ./file-injector.ts`. (Global ~/.pi/agent/extensions/ and project .pi/extensions/
     discovery are NOT used for this task — the file lives at the project root and is loaded via -e.)"
 
 NO DATABASE / NO CONFIG / NO ROUTES / NO NEW ENV VARS:
@@ -267,10 +267,10 @@ NO DATABASE / NO CONFIG / NO ROUTES / NO NEW ENV VARS:
 
 ```bash
 # 1a. File exists at the right place (project root, not under src/ or plan/).
-test -f ./sharp-at-file.ts && echo "OK: file present" || echo "FAIL: missing ./sharp-at-file.ts"
+test -f ./file-injector.ts && echo "OK: file present" || echo "FAIL: missing ./file-injector.ts"
 
 # 1b. Eyeball the three constants + factory are at MODULE scope (not nested in the factory):
-grep -nE '^(const FILE_INJECT_RE|const MIME_BY_EXT|const TRAILING_PUNCT|export default function)' ./sharp-at-file.ts
+grep -nE '^(const FILE_INJECT_RE|const MIME_BY_EXT|const TRAILING_PUNCT|export default function)' ./file-injector.ts
 # Expected: 4 lines, all anchored at column 1 (no leading whitespace) → confirms module scope.
 
 # Expected: all commands succeed; the grep prints exactly the 4 expected lines.
@@ -289,7 +289,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 if (typeof mod.default !== "function") { console.error("FAIL: default export is not a function (got " + typeof mod.default + ")"); process.exit(1); }
 console.log("PASS: default export is", typeof mod.default);
 '
@@ -306,7 +306,7 @@ console.log("PASS: default export is", typeof mod.default);
 # NOTE: -p will attempt ONE model turn after loading — it requires a configured provider.
 # If no provider/API key is set, the extension still LOADS (load happens before the model call);
 # a model/provider error AFTER "extension loaded" does NOT indicate a scaffold failure.
-pi -e ./sharp-at-file.ts -ne -p "scaffold load check" 2>&1 | tee /tmp/pi_load.log
+pi -e ./file-injector.ts -ne -p "scaffold load check" 2>&1 | tee /tmp/pi_load.log
 grep -qiE "error|invalid factory|does not export" /tmp/pi_load.log && echo "FAIL: load error above" || echo "OK: no load error"
 # Expected: no "Extension does not export a valid factory function" / syntax / import errors.
 # (Optional — Level 2 already proves load. Use this for final confidence if a provider is configured.)
@@ -326,7 +326,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 // Build a minimal stub ExtensionAPI that records the registered input handler, then invoke it.
 let handler = null;
 const pi = { on: (ev, fn) => { if (ev === "input") handler = fn; } };
@@ -346,7 +346,7 @@ console.log("PASS: stub is a no-op pass-through for a #@ prompt");
 ## Final Validation Checklist
 
 ### Technical Validation
-- [ ] Level 1: `./sharp-at-file.ts` exists; the 4 module-scope lines grep at column 1.
+- [ ] Level 1: `./file-injector.ts` exists; the 4 module-scope lines grep at column 1.
 - [ ] Level 2: jiti gate prints `PASS: default export is function` (exit 0).
 - [ ] Level 3 (optional, if provider configured): no load error in `pi -e ... -p` output.
 - [ ] Level 4: stub returns `{"action":"continue"}` for a `#@` prompt.

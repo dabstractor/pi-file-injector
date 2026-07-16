@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T3.S1 — injectFiles: core assembly function (token iteration, file dispatch, block/image assembly)"
 prd_ref: "PRD §5.1–§5.4 (text/image/binary/missing dispatch), §6.2 (assembly/append/join), §9 (algorithm pseudocode), §10 (edge cases), §12 (gotchas)"
-target_file: "./sharp-at-file.ts"  # IN-PLACE EDIT; S1 + S2 + T2.S1 already present (T2.S1 may still be in-flight — see Concurrency note)
+target_file: "./file-injector.ts"  # IN-PLACE EDIT; S1 + S2 + T2.S1 already present (T2.S1 may still be in-flight — see Concurrency note)
 target_language: TypeScript (jiti transpile-on-load; no tsconfig/package.json/test framework)
 depends_on: "P1.M1.T1.S1 (FILE_INJECT_RE/MIME_BY_EXT/imports), P1.M1.T1.S2 (cleanToken/expandTildeAndResolve/extOf), P1.M1.T2.S1 (isBinary/formatTextFileBlock/formatImageBlock/formatBinaryBlock + type ResizedImage)"
 consumed_by: "P1.M1.T3.S2 (input handler: guards, injectFiles call, notify, transform/continue)"
@@ -11,7 +11,7 @@ consumed_by: "P1.M1.T3.S2 (input handler: guards, injectFiles call, notify, tran
 
 ## Goal
 
-**Feature Goal**: Add the **single exported async function `injectFiles`** to `./sharp-at-file.ts` — the
+**Feature Goal**: Add the **single exported async function `injectFiles`** to `./file-injector.ts` — the
 core orchestrator that turns a user prompt containing zero or more `#@<path>` markers into a transformed
 prompt with whole-file contents **appended** below a `---` rule, plus any image files attached as
 `ImageContent`. It is the I/O + assembly heart of the extension: it iterates matches, resolves & stats
@@ -19,7 +19,7 @@ each path, classifies by MIME, reads bytes, resizes images, and assembles `{ tex
 It does **not** decide `transform` vs `continue` (that is the handler's job in T3.S2) — it returns a
 plain result object with an `injected` **count** that the handler translates.
 
-**Deliverable**: One in-place edit to `./sharp-at-file.ts` — insert `export async function injectFiles(...)`
+**Deliverable**: One in-place edit to `./file-injector.ts` — insert `export async function injectFiles(...)`
 at module scope, **immediately before** the `export default function (pi: ExtensionAPI) {` factory line.
 ~45–55 added lines. No new files. The factory stub is left **untouched** (T3.S2 replaces its body).
 
@@ -76,7 +76,7 @@ drop user images if mishandled).
 
 ## What
 
-Insert **one** `export async function injectFiles` declaration into `./sharp-at-file.ts`, positioned at
+Insert **one** `export async function injectFiles` declaration into `./file-injector.ts`, positioned at
 module scope **immediately before** the `export default function (pi: ExtensionAPI) {` factory line
 (PRD §8 internal structure: section 4 "Core", after the section-3 format helpers, before the section-5
 factory). It consumes the already-present helpers/consts (`FILE_INJECT_RE`, `MIME_BY_EXT`,
@@ -191,11 +191,11 @@ export interface ImageContent { type: "image"; data: string; mimeType: string; }
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .gitignore          # ignores node_modules/, dist/, .pi-subagents/ — NOT .ts
 ├── PRD.md              # READ-ONLY source of truth
-├── sharp-at-file.ts    # ← EXISTS after T1.S1+T1.S2 (+ T2.S1 when merged). T3.S1 EDITS THIS.
+├── file-injector.ts    # ← EXISTS after T1.S1+T1.S2 (+ T2.S1 when merged). T3.S1 EDITS THIS.
 └── plan/
     └── 001_5aa8724eb506/
         ├── architecture/{api_verification,system_context,external_deps,extension_patterns}.md
@@ -212,7 +212,7 @@ export interface ImageContent { type: "image"; data: string; mimeType: string; }
 
 ### Starting file state (when T3.S1 begins — after T1.S1+T1.S2, and T2.S1's contract is satisfied)
 
-The file `sharp-at-file.ts` already contains (in order): the 6 imports (T2.S1 adds `type ResizedImage`
+The file `file-injector.ts` already contains (in order): the 6 imports (T2.S1 adds `type ResizedImage`
 to the value-import line) → `FILE_INJECT_RE` / `MIME_BY_EXT` / `TRAILING_PUNCT` (S1) → `cleanToken` /
 `expandTildeAndResolve` / `extOf` (S2) → `isBinary` / `formatTextFileBlock` / `formatImageBlock` /
 `formatBinaryBlock` (T2.S1) → the **factory stub** (`export default function (pi: ExtensionAPI) {
@@ -224,8 +224,8 @@ anchor; T3.S1 does NOT touch it.
 ### Desired Codebase tree with files to be added
 
 ```bash
-# T3.S1 adds NO new files. It edits sharp-at-file.ts in place:
-sharp-at-file.ts
+# T3.S1 adds NO new files. It edits file-injector.ts in place:
+file-injector.ts
   # (S1/S2/T2.S1 regions — unchanged)
   #   imports (6, incl type ResizedImage)
   #   const FILE_INJECT_RE / MIME_BY_EXT / TRAILING_PUNCT
@@ -312,7 +312,7 @@ so the function is testable with a plain object and the real `ctx` from T3.S2 sa
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: EDIT ./sharp-at-file.ts (single insert; file already exists from S1+S2+T2.S1)
+Task 1: EDIT ./file-injector.ts (single insert; file already exists from S1+S2+T2.S1)
   - OBJECTIVE: Add the core assembly orchestrator `injectFiles`.
   - INSERT POINT: immediately before `export default function (pi: ExtensionAPI) {` (unique anchor).
   - WRITE: the function from "Exact source" below, VERBATIM.
@@ -458,7 +458,7 @@ export async function injectFiles(
 ### Integration Points
 
 ```yaml
-MODULE sharp-at-file.ts (in-place insert; no build step):
+MODULE file-injector.ts (in-place insert; no build step):
   - insertion: "Immediately before `export default function (pi: ExtensionAPI) {`."
   - new_imports: NONE. resizeImage + ImageContent + all helpers/constants are already imported/present.
   - concurrency: "Function declarations are hoisted, so textual order vs the T2.S1 helpers is
@@ -488,29 +488,29 @@ DOWNSTREAM CONSUMER (do NOT implement now — satisfy its contract only):
 ### Level 1: Syntax & Placement (Immediate Feedback)
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 
 # 1a. injectFiles is an exported async function at module scope (column 1).
-grep -nE '^export async function injectFiles' sharp-at-file.ts
+grep -nE '^export async function injectFiles' file-injector.ts
 # Expected: exactly 1 line, anchored at column 1.
 
 # 1b. It sits BEFORE the factory (the insertion anchor).
-INJ=$(grep -nE '^export async function injectFiles' sharp-at-file.ts | cut -d: -f1)
-FACTORY=$(grep -nE '^export default function \(pi: ExtensionAPI\)' sharp-at-file.ts | cut -d: -f1)
+INJ=$(grep -nE '^export async function injectFiles' file-injector.ts | cut -d: -f1)
+FACTORY=$(grep -nE '^export default function \(pi: ExtensionAPI\)' file-injector.ts | cut -d: -f1)
 [ -n "$INJ" ] && [ -n "$FACTORY" ] && [ "$INJ" -lt "$FACTORY" ] \
   && echo "OK: injectFiles ($INJ) before factory ($FACTORY)" \
   || echo "FAIL: injectFiles not before factory"
 
 # 1c. The factory stub is STILL a pass-through (T3.S1 must NOT have touched it).
-grep -A2 'pi.on("input"' sharp-at-file.ts | grep -q 'action: "continue"' \
+grep -A2 'pi.on("input"' file-injector.ts | grep -q 'action: "continue"' \
   && echo "OK: factory stub intact" || echo "FAIL: factory stub altered (out of scope)"
 
 # 1d. No out-of-scope T3.S2 handler symbols leaked (guards/notify/transform-live in the factory).
-grep -nE 'event\.source|streamingBehavior|ctx\.ui\.notify|action: "transform"' sharp-at-file.ts \
+grep -nE 'event\.source|streamingBehavior|ctx\.ui\.notify|action: "transform"' file-injector.ts \
   && echo "FAIL: T3.S2 handler symbols present (out of scope)" || echo "OK: no T3.S2 symbols leaked"
 
 # 1e. No new imports were added (S1 already imported everything injectFiles needs).
-grep -cE "^import " sharp-at-file.ts   # Expected: 6 (T2.S1's type ResizedImage is inline on line 3, not a new line)
+grep -cE "^import " file-injector.ts   # Expected: 6 (T2.S1's type ResizedImage is inline on line 3, not a new line)
 
 # Expected: 1a prints 1 line; 1b/1c/1d print OK; 1e prints 6.
 ```
@@ -522,7 +522,7 @@ helpers (for building expected strings), creates real temp files (text/binary/em
 and asserts all 13 scenario groups. **Proven pre-run: 45/45 green.** No model, no API key, non-interactive.
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 cat > /tmp/gate_t3s1.mjs <<'GATE'
 import { createJiti } from "file:///home/dustin/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
 import { pathToFileURL } from "node:url";
@@ -535,7 +535,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 
 let pass = 0, fail = 0;
 const T = (name, cond) => { if (cond) { pass++; } else { fail++; console.error("FAIL:", name); } };
@@ -679,14 +679,14 @@ node /tmp/gate_t3s1.mjs
 ### Level 3: Authoritative Pi Loader (System Validation — optional confidence)
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 # Confirms Pi's REAL loader (with its real getAliases()) still accepts the edited file.
 # -e loads the extension; -ne disables discovery so ONLY our -e file loads; -p makes it non-interactive.
 # NOTE: -p attempts ONE model turn after loading — requires a configured provider. The extension LOADS
 # before any model call; a provider error AFTER load does NOT indicate an injectFiles failure.
 # ALSO: the factory is STILL the pass-through stub (T3.S2 not yet applied), so even a #@ prompt is
 # returned unchanged — that is CORRECT for this subtask.
-pi -e ./sharp-at-file.ts -ne -p "injectFiles load check #@a.txt" 2>&1 | tee /tmp/pi_t3s1.log
+pi -e ./file-injector.ts -ne -p "injectFiles load check #@a.txt" 2>&1 | tee /tmp/pi_t3s1.log
 grep -qiE "error|invalid factory|does not export|is not defined" /tmp/pi_t3s1.log \
   && echo "FAIL: load error above" || echo "OK: no load error"
 # Expected: no "does not export a valid factory function" / syntax / import errors.
@@ -699,17 +699,17 @@ After editing, the file must still contain ALL prior work — none clobbered —
 remain the pass-through (T3.S2 owns its replacement).
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 echo "--- S1 constants ---"
-grep -cE '^const (FILE_INJECT_RE|MIME_BY_EXT|TRAILING_PUNCT)' sharp-at-file.ts        # Expected: 3
+grep -cE '^const (FILE_INJECT_RE|MIME_BY_EXT|TRAILING_PUNCT)' file-injector.ts        # Expected: 3
 echo "--- S2 helpers ---"
-grep -cE '^export function (cleanToken|expandTildeAndResolve|extOf)' sharp-at-file.ts  # Expected: 3
+grep -cE '^export function (cleanToken|expandTildeAndResolve|extOf)' file-injector.ts  # Expected: 3
 echo "--- T2.S1 helpers ---"
-grep -cE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)' sharp-at-file.ts  # Expected: 4
+grep -cE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)' file-injector.ts  # Expected: 4
 echo "--- T3.S1 core ---"
-grep -cE '^export async function injectFiles' sharp-at-file.ts                         # Expected: 1
+grep -cE '^export async function injectFiles' file-injector.ts                         # Expected: 1
 echo "--- factory stub still pass-through ---"
-grep -A2 'pi.on("input"' sharp-at-file.ts | grep -q 'action: "continue"' \
+grep -A2 'pi.on("input"' file-injector.ts | grep -q 'action: "continue"' \
   && echo "OK: factory stub intact (T3.S2 will replace it)" || echo "FAIL: factory stub altered"
 # Expected: 3, 3, 4, 1, and "OK: factory stub intact".
 ```

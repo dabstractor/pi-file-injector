@@ -133,10 +133,10 @@ Its token regex `(?:^|[ \t])#([^\s#]*)$/` **does** capture `#@` tokens syntactic
 
 ---
 
-## Implementation File: `sharp-at-file.ts`
+## Implementation File: `file-injector.ts`
 
-- **Global path:** `~/.pi/agent/extensions/sharp-at-file.ts`
-- **Project-local path:** `.pi/extensions/sharp-at-file.ts`
+- **Global path:** `~/.pi/agent/extensions/file-injector.ts`
+- **Project-local path:** `.pi/extensions/file-injector.ts`
 - **Target size:** ~150–220 lines, single file, zero dependencies beyond Pi's exports + Node builtins.
 
 ### Internal Structure (PRD §8)

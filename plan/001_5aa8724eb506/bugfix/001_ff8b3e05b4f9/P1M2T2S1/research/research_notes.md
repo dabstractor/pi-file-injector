@@ -2,7 +2,7 @@
 
 ## 1. Task contract (verbatim from the work item)
 
-Add ONE new test-case block labeled **`U1`** (Unicode boundary) to `sharp-at-file.test.mjs` with
+Add ONE new test-case block labeled **`U1`** (Unicode boundary) to `file-injector.test.mjs` with
 these 5 assertions, each using `mod.injectFiles(input, [], FIX)` and checking **both `r.injected`
 and `r.text`**:
 
@@ -19,14 +19,14 @@ it). The contract explicitly says "Total case count increases by 1."
 
 ## 2. Baseline state of the repo (read & verified)
 
-- `sharp-at-file.ts` line 8 — **the Unicode regex is ALREADY LIVE** (P1.M1.T2.S1 = Complete):
+- `file-injector.ts` line 8 — **the Unicode regex is ALREADY LIVE** (P1.M1.T2.S1 = Complete):
   ```js
   const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
   ```
   This task does NOT touch the `.ts`. It only adds harness cases that assert this regex's behavior.
-- `sharp-at-file.test.mjs` — currently **30 cases** (P1.M2.T1.S1 = Complete; F1 rewritten + F1b + F2
-  present). `grep -cE 'await runCase\(' sharp-at-file.test.mjs` → `30`.
-- `grep -nE 'await runCase\("U1"|café|日本語' sharp-at-file.test.mjs` → **(none)** — clean baseline,
+- `file-injector.test.mjs` — currently **30 cases** (P1.M2.T1.S1 = Complete; F1 rewritten + F1b + F2
+  present). `grep -cE 'await runCase\(' file-injector.test.mjs` → `30`.
+- `grep -nE 'await runCase\("U1"|café|日本語' file-injector.test.mjs` → **(none)** — clean baseline,
   no collision with the `U1` label or the café/CJK literals.
 - The `a.ts` fixture exists at `TMPDIR/a.ts` (`const A_TS = path.join(TMPDIR, "a.ts");` at line 201);
   `const FIX = { cwd: TMPDIR };` at line 212. Both are the exact inputs the contract requires.
@@ -93,9 +93,9 @@ All 5 contract assertions confirmed against the live fixed extension. The assert
 
 ## 6. Scope boundaries (do NOT collide with sibling tasks)
 
-This task edits **ONLY** `sharp-at-file.test.mjs`, adding **ONLY** the `U1` block. It does **NOT**:
+This task edits **ONLY** `file-injector.test.mjs`, adding **ONLY** the `U1` block. It does **NOT**:
 
-- (a) touch `sharp-at-file.ts` — the Unicode regex is already live (P1.M1.T2.S1, Complete).
+- (a) touch `file-injector.ts` — the Unicode regex is already live (P1.M1.T2.S1, Complete).
 - (b) touch `README.md` — the Unicode-aware "Where it matches" sentence was already added by
   P1.M1.T2.S1; any further README sweep is P1.M3.T1/T2.
 - (c) touch any existing case — F1/F1b/F2 (P1.M2.T1.S1), F3a/F3b/F5/F4, 1-14, E1-E4, G1-G3, H1, M1

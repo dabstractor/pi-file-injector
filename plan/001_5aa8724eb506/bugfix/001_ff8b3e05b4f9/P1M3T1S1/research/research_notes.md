@@ -29,9 +29,9 @@ status Planned). Do not collide.
 
 ---
 
-## 2. The Actual Behavior (verified against sharp-at-file.ts + harness)
+## 2. The Actual Behavior (verified against file-injector.ts + harness)
 
-### F3 — `hasValidImageMagic(buf, mime)` (sharp-at-file.ts lines 18-52)
+### F3 — `hasValidImageMagic(buf, mime)` (file-injector.ts lines 18-52)
 - **Order**: Routes by EXTENSION FIRST (`MIME_BY_EXT[ext]`), THEN validates the actual bytes match
   the declared image type. NOT extension-only (the deviation from PRD §5.2).
 - **Sniffer coverage**: PNG (`89 50 4E 47 0D 0A 1A 0A`), JPEG (`FF D8 FF`), GIF (`47 49 46 38` =
@@ -45,7 +45,7 @@ status Planned). Do not collide.
   text block `<file name="<FAKE_PNG>">\nthis is not really a PNG, just text\n\n</file>`); `F3b`
   (unit-level: real PNG passes, text bytes fail, too-short fails, real JPEG header passes).
 
-### F5 — `formatEmptyImageBlock(abs)` (sharp-at-file.ts line 78)
+### F5 — `formatEmptyImageBlock(abs)` (file-injector.ts line 78)
 - **Exact output**: `<file name="<abs>"><empty image file — 0 bytes; nothing to attach></file>`
   where `—` is **U+2014 (em dash)** (source: `\u2014` in both the .ts and the harness F5 assertion).
 - **Trigger**: `if (mime && buf.length === 0)` in `injectFiles` (~line 149) — ONLY for recognized
@@ -115,7 +115,7 @@ each framed as an intentional enhancement.
 
 ## 5. Parallel / sibling coordination (NO collision)
 
-- **P1.M2.T2.S1** (Implementing, in parallel): edits `sharp-at-file.test.mjs` ONLY (adds the `U1`
+- **P1.M2.T2.S1** (Implementing, in parallel): edits `file-injector.test.mjs` ONLY (adds the `U1`
   Unicode regression case). Disjoint file → zero collision with README work.
 - **P1.M3.T2.S1** (Planned, future): "Update README overview, test count, and known limitations."
   Touches README § overview / Testing / Known limitations — NOT § "Behavior by file type". This task
@@ -134,7 +134,7 @@ No compiler/linter applies to prose. Validation is:
    has 4 bullets (was 2).
 3. **Scope check**: `git diff README.md` shows changes ONLY in the "Behavior by file type" region
    (lines ~77-104); overview / Known limitations / Syntax untouched.
-4. **No harness regression**: `node ./sharp-at-file.test.mjs` still passes (this task doesn't touch
+4. **No harness regression**: `node ./file-injector.test.mjs` still passes (this task doesn't touch
    `.ts` or `.test.mjs`, but confirm nothing was accidentally broken — defensive gate).
 
 ---

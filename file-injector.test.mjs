@@ -1,8 +1,8 @@
-// sharp-at-file.test.mjs — Model-free acceptance harness for the `#@file` injection extension.
+// file-injector.test.mjs — Model-free acceptance harness for the `#@file` injection extension.
 //
 // WHAT THIS IS
 //   A standalone, zero-dependency Node ESM script (the project's "standalone .mjs gate" convention —
-//   no test framework is configured in this repo). It imports the REAL committed `./sharp-at-file.ts`
+//   no test framework is configured in this repo). It imports the REAL committed `./file-injector.ts`
 //   through Pi's own loader mechanism (jiti + the same `alias` map Pi's extension loader uses), spins
 //   up tiny temp fixtures, runs ~25 named assertions covering all 14 PRD §11 acceptance cases + the
 //   §10 edge cases + the 3 handler guards + the headless/notify path, prints a 14-row pass/fail
@@ -17,7 +17,7 @@
 //   gate hermetic: no model API key, no Pi process, no network).
 //
 // RUN
-//   node ./sharp-at-file.test.mjs      # from the repo root; exits 0 on success, 1 on any failure.
+//   node ./file-injector.test.mjs      # from the repo root; exits 0 on success, 1 on any failure.
 
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -67,7 +67,7 @@ const jiti = createJiti(import.meta.url, {
 // 3. Import the REAL committed extension (resolve relative to THIS script → cwd-independent).
 // ──────────────────────────────────────────────────────────────────────────────
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const TS_PATH = path.resolve(SCRIPT_DIR, "sharp-at-file.ts");
+const TS_PATH = path.resolve(SCRIPT_DIR, "file-injector.ts");
 const mod = await jiti.import(TS_PATH);
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -214,7 +214,7 @@ const FIX = { cwd: TMPDIR };
 // ──────────────────────────────────────────────────────────────────────────────
 // 8. The 14 PRD §11 acceptance cases (+ edges + guards).
 // ──────────────────────────────────────────────────────────────────────────────
-console.log("\nsharp-at-file.ts — PRD §11 acceptance matrix (model-free)\n");
+console.log("\nfile-injector.ts — PRD §11 acceptance matrix (model-free)\n");
 
 // Case 1 — single text file; original text preserved; block appended after `---`.
 await runCase(1, "single text file injected, original preserved", async () => {
@@ -353,7 +353,7 @@ await runCase(12, "handler transforms interactive input (input event fires for -
 integrationCase(
   12,
   "initial CLI -p message (live pi)",
-  'pi -e ./sharp-at-file.ts -p "Review #@a.ts"',
+  'pi -e ./file-injector.ts -p "Review #@a.ts"',
   "the prompt the model receives already contains a.ts in a <file name=…> block — confirm via the user-message bubble / transcript (no read tool call).",
 );
 
@@ -395,7 +395,7 @@ await runCase(14, "bare @ unaffected (no #@)", async () => {
 // ──────────────────────────────────────────────────────────────────────────────
 // 9. Edge cases (PRD §10) + 3 handler guards + headless path.
 // ──────────────────────────────────────────────────────────────────────────────
-console.log("\nsharp-at-file.ts — edge cases & guards (PRD §10 / §12)\n");
+console.log("\nfile-injector.ts — edge cases & guards (PRD §10 / §12)\n");
 
 await runCase("E1", "empty 0-byte file → injected as <file>\\n\\n</file>", async () => {
   const r = await mod.injectFiles("See #@empty.txt", [], FIX);

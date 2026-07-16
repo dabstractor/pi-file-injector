@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The `#@file` Whole-File Injection extension (`sharp-at-file.ts`, 249-line repo version) has two Major
+The `#@file` Whole-File Injection extension (`file-injector.ts`, 249-line repo version) has two Major
 bugs and four Minor spec-deviation issues, all stemming from the `F1` anti-duplication sentinel added
 beyond the PRD. The sentinel mechanism is **cooperation-based** (relies on all loaded copies stamping
 the same sentinel string), which fails when a non-participating copy co-loads. The fix is to replace
@@ -11,11 +11,11 @@ path already exists in the text), which is independent of other copies' cooperat
 
 ## Current State
 
-- **Source file**: `sharp-at-file.ts` (249 lines) — PRD-compliant core + F1 sentinel, F3 magic-number
+- **Source file**: `file-injector.ts` (249 lines) — PRD-compliant core + F1 sentinel, F3 magic-number
   sniff, F4 pluralization, F5 empty-image special-case
-- **Test harness**: `sharp-at-file.test.mjs` (28 cases, passes 28/28) — model-free, imports the real
+- **Test harness**: `file-injector.test.mjs` (28 cases, passes 28/28) — model-free, imports the real
   `.ts` via jiti
-- **Stale global copy**: `~/.pi/agent/extensions/sharp-at-file.ts` (182 lines, no sentinel/F3/F5) —
+- **Stale global copy**: `~/.pi/agent/extensions/file-injector.ts` (182 lines, no sentinel/F3/F5) —
   co-exists with the repo copy, causing the duplicate-injection bug
 - **README**: Documents the extension's behavior, installation, and design choices
 
@@ -150,6 +150,6 @@ The existing 28-case harness has these blind spots:
 
 | File | Changes |
 |---|---|
-| `sharp-at-file.ts` | Remove sentinel mechanism; add per-token dedup; update regex |
-| `sharp-at-file.test.mjs` | Update F1 test; add co-load, sentinel-in-prompt, Unicode tests |
+| `file-injector.ts` | Remove sentinel mechanism; add per-token dedup; update regex |
+| `file-injector.test.mjs` | Update F1 test; add co-load, sentinel-in-prompt, Unicode tests |
 | `README.md` | Document F3/F5 deviations; update behavior table; remove sentinel references |

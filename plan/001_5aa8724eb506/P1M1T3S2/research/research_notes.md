@@ -1,12 +1,12 @@
 # Research Notes — P1.M1.T3.S2: Input Event Handler (replace factory stub)
 
-> Subtask: replace the `pi.on("input", ...)` factory **stub body** in `./sharp-at-file.ts` with the real
+> Subtask: replace the `pi.on("input", ...)` factory **stub body** in `./file-injector.ts` with the real
 > handler: 3 short-circuit guards → `injectFiles` call → `notify` (hasUI-guarded) → `transform`/`continue`.
 > Also add a Mode-A JSDoc above the factory. This is the **final wiring subtask** — after it, the
 > extension is fully functional and testable end-to-end.
 
 All claims below are **verified against the installed dist** (`@earendil-works/pi-coding-agent`) and the
-actual current state of `sharp-at-file.ts` (which already contains `injectFiles` from T3.S1 + all
+actual current state of `file-injector.ts` (which already contains `injectFiles` from T3.S1 + all
 S1/S2/T2.S1 helpers). Path:line evidence throughout.
 
 ---
@@ -97,9 +97,9 @@ notify(message: string, type?: "info" | "warning" | "error"): void;
 
 ---
 
-## §3. The current factory stub — EXACT edit anchor (read from sharp-at-file.ts)
+## §3. The current factory stub — EXACT edit anchor (read from file-injector.ts)
 
-The file `sharp-at-file.ts` currently ends with (verified — this is T1.S1's stub, untouched by S1/S2/T2.S1/T3.S1):
+The file `file-injector.ts` currently ends with (verified — this is T1.S1's stub, untouched by S1/S2/T2.S1/T3.S1):
 
 ```ts
 export default function (pi: ExtensionAPI) {

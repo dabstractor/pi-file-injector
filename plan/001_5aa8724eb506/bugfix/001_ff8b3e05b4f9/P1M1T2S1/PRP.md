@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T2.S1 (Bugfix) — Update FILE_INJECT_RE with Unicode property escapes (Issue 5)"
 prd_ref: "Bug-fix PRD §Issue 5 (#@ triggers after non-ASCII word characters), §Overview, §Testing Summary"
-target_file: "./sharp-at-file.ts (line 8 regex) + ./README.md (§Syntax 'Where it matches')"
+target_file: "./file-injector.ts (line 8 regex) + ./README.md (§Syntax 'Where it matches')"
 change_type: one-line regex swap + one-sentence README update (Mode A doc ride-along)
 pi_version: "@earendil-works/pi-coding-agent v0.80.7"
 depends_on: "P1.M1.T1.S1 (per-token dedup) — present; this task is independent of the sentinel work"
@@ -20,15 +20,15 @@ Greek as "non-word." Replace the lookbehind with a Unicode-aware negative lookbe
 Also document the behavior in README §Syntax.
 
 **Deliverable**: Two surgical exact-text edits and nothing else:
-1. `sharp-at-file.ts` line 8 — swap the `FILE_INJECT_RE` regex constant.
+1. `file-injector.ts` line 8 — swap the `FILE_INJECT_RE` regex constant.
 2. `README.md` §Syntax — append one sentence to the "Where it matches" paragraph.
 
 No new files, no new symbols, no new imports, no harness edits, no other code touched.
 
 **Success Definition**:
-- [ ] `grep -n 'const FILE_INJECT_RE = /(^|(?<!(\[\\p{L}\\p{N}_\]))#@(\S+)/gu' sharp-at-file.ts` prints
+- [ ] `grep -n 'const FILE_INJECT_RE = /(^|(?<!(\[\\p{L}\\p{N}_\]))#@(\S+)/gu' file-injector.ts` prints
       exactly one line (the new regex). The old `/g`-only regex is gone.
-- [ ] The existing model-free harness reports **28 passed, 0 failed** (`node ./sharp-at-file.test.mjs`)
+- [ ] The existing model-free harness reports **28 passed, 0 failed** (`node ./file-injector.test.mjs`)
       — no regression (empirically pre-verified: the regex-only change is harness-green).
 - [ ] The throwaway verification script (Level 3, pre-run green: 18/18) shows: `café#@secret.txt` and
       `日本語#@file` → **no match / not injected** (fixed); `Review #@a.ts`, `#@a.ts` (start),
@@ -40,10 +40,10 @@ No new files, no new symbols, no new imports, no harness edits, no other code to
 > **Scope boundary (read carefully):** This task changes ONLY the `FILE_INJECT_RE` regex constant and
 > ONE README sentence. It does **NOT**: (a) add per-token dedup or remove the sentinel — that is
 > **P1.M1.T1** (S1 done, S2 in parallel on disjoint regions); (b) permanently add test cases to
-> `sharp-at-file.test.mjs` — that is **P1.M2.T2.S1** (this task verifies via a throwaway script, per
+> `file-injector.test.mjs` — that is **P1.M2.T2.S1** (this task verifies via a throwaway script, per
 > the sibling-PRP precedent that harness edits belong to M2.*); (c) edit README's behavior-by-file-type
 > table / F3-F5 notes / test-count / overview — that is **P1.M3**; (d) change any helper, the handler
-> body, the assembly, or any other line of `sharp-at-file.ts`.
+> body, the assembly, or any other line of `file-injector.ts`.
 
 ## User Persona
 
@@ -75,7 +75,7 @@ at a true (Unicode) word boundary.
 
 Two exact-text edits:
 
-1. **`sharp-at-file.ts`** — replace the module-level `FILE_INJECT_RE` constant (currently line 8):
+1. **`file-injector.ts`** — replace the module-level `FILE_INJECT_RE` constant (currently line 8):
    ```diff
    - const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
    + const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
@@ -119,7 +119,7 @@ Two exact-text edits:
 
 # MUST READ — the contract that makes this a safe, isolated edit
 - docfile: plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/P1M1T1S2/PRP.md
-  why: "Defines the PARALLEL sentinel-removal work on sharp-at-file.ts. Its edits are on DISJOINT
+  why: "Defines the PARALLEL sentinel-removal work on file-injector.ts. Its edits are on DISJOINT
         regions (sentinel consts ~18-26, assembly ~211, handler ~248) — none touch line 8 or the
         regex. Confirms exact-text anchors on line 8 stay stable across S2's work."
   critical: "This task and S2 edit non-overlapping text. Do NOT coordinate with S2's edits; just make
@@ -131,7 +131,7 @@ Two exact-text edits:
   section: "§Issue 5"
 
 # The files being EDITED
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "Line 8 holds the regex constant. Lines 140-141 consume it: `for (const m of text.matchAll
         (FILE_INJECT_RE)) { const raw = m[2]; ... }`. The regex swap leaves m[0]/m[2] identical for
         every input that should match (verified)."
@@ -151,12 +151,12 @@ Two exact-text edits:
            count, the overview, or any sentinel reference. Only the 'Where it matches' sentence."
 
 # The test harness (run for regression; DO NOT edit it)
-- file: ./sharp-at-file.test.mjs
-  why: "28-case model-free gate. Run `node ./sharp-at-file.test.mjs`. Resolves ./sharp-at-file.ts
+- file: ./file-injector.test.mjs
+  why: "28-case model-free gate. Run `node ./file-injector.test.mjs`. Resolves ./file-injector.ts
         relative to the harness's own dir (cwd-independent). Regex-relevant cases (1, 7, 8, 9, 11,
         13, ~E2 `(#@a.txt)`, E3) all stay green with the new regex — pre-verified by running the full
         harness against a temp copy with only the regex changed (28/28)."
-  pattern: "imports the REAL ./sharp-at-file.ts via jiti + Pi's alias map; exits 1 on any failure."
+  pattern: "imports the REAL ./file-injector.ts via jiti + Pi's alias map; exits 1 on any failure."
   gotcha: "Adding the café/CJK cases to THIS harness is P1.M2.T2.S1's scope — do NOT edit the harness
            here. Verify via the throwaway Level-3 script instead."
 ```
@@ -164,12 +164,12 @@ Two exact-text edits:
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── PRD.md                       # original feature PRD (not the bug-fix PRD)
 ├── README.md                    # extension docs — §Syntax "Where it matches" gets 1 sentence added
-├── sharp-at-file.ts             # ← EDIT line 8 (FILE_INJECT_RE regex). ~249 lines (S2 is fluxing it).
-├── sharp-at-file.test.mjs       # 28-case model-free harness — RUN, do NOT edit (M2.T2.S1 owns additions)
+├── file-injector.ts             # ← EDIT line 8 (FILE_INJECT_RE regex). ~249 lines (S2 is fluxing it).
+├── file-injector.test.mjs       # 28-case model-free harness — RUN, do NOT edit (M2.T2.S1 owns additions)
 └── plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/
     ├── architecture/{system_context.md, code_changes_analysis.md}
     ├── prd_snapshot.md / prd_index.txt / tasks.json / TEST_RESULTS.md
@@ -184,7 +184,7 @@ Two exact-text edits:
 
 ```bash
 .
-├── sharp-at-file.ts             # MODIFIED — line 8 regex: \W → (?<![\p{L}\p{N}_]) + `u` flag. (1 line)
+├── file-injector.ts             # MODIFIED — line 8 regex: \W → (?<![\p{L}\p{N}_]) + `u` flag. (1 line)
 └── README.md                    # MODIFIED — §Syntax "Where it matches": +1 sentence (Unicode-aware).
 # No new files. No harness changes. No other source changes.
 ```
@@ -232,14 +232,14 @@ artifact modified; the README edit is prose only.
 ```yaml
 PRE-FLIGHT (do first):
   - CONFIRM the exact old anchor is present & unique:
-      grep -nc 'const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;' sharp-at-file.ts   # → must print 1
+      grep -nc 'const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;' file-injector.ts   # → must print 1
     If it prints 0 or >1, STOP and re-read the file (S2 may have already merged or the line shifted —
     the FULL-LINE string is what matters, not the line number). If the anchor is genuinely absent
     (already changed?), this task is effectively done — run the gates to confirm.
   - (Optional sanity) confirm the regex is referenced by matchAll downstream:
-      grep -n 'matchAll(FILE_INJECT_RE)' sharp-at-file.ts                          # → one line (~140)
+      grep -n 'matchAll(FILE_INJECT_RE)' file-injector.ts                          # → one line (~140)
 
-Task 1: EDIT ./sharp-at-file.ts — swap the FILE_INJECT_RE regex (Issue 5)
+Task 1: EDIT ./file-injector.ts — swap the FILE_INJECT_RE regex (Issue 5)
   - OBJECTIVE: Replace the ASCII-only \W lookbehind with a Unicode-aware negative lookbehind; add `u`.
   - FIND (exact oldText — UNIQUE in the file; the full regex line, stable across S2's edits):
         const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
@@ -262,11 +262,11 @@ Task 2: EDIT ./README.md — document the Unicode-aware boundary (Mode A)
   - DO NOT touch any other README section (behavior table / F3-F5 / test count / overview / sentinel refs).
 
 POST-FLIGHT:
-  - `grep -n 'FILE_INJECT_RE' sharp-at-file.ts` → the new regex line is present; old gone.
+  - `grep -n 'FILE_INJECT_RE' file-injector.ts` → the new regex line is present; old gone.
   - Run the Validation Loop gates below.
 
 DO NOT (out of scope — owned by sibling tasks):
-  * Edit sharp-at-file.test.mjs (café/CJK cases are P1.M2.T2.S1).
+  * Edit file-injector.test.mjs (café/CJK cases are P1.M2.T2.S1).
   * Touch the per-token dedup line (P1.M1.T1.S1), the sentinel consts/guard/assembly (P1.M1.T1.S2),
     any helper, the handler body, the assembly template, or F3/F5/F4 code/comments (P1.M3).
   * Edit README outside the single "Where it matches" sentence (P1.M3.T1/T2).
@@ -276,7 +276,7 @@ DO NOT (out of scope — owned by sibling tasks):
 ### Implementation Patterns & Key Details
 
 ```typescript
-// The regex AFTER Task 1 (the entire change to sharp-at-file.ts):
+// The regex AFTER Task 1 (the entire change to file-injector.ts):
 const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
 
 // WHY this is exactly correct:
@@ -314,7 +314,7 @@ NO NEW INTEGRATION POINTS:
 ## Validation Loop
 
 > This repo has **no test framework / linter / type-checker** — it is a single-file Pi extension
-> validated by a **model-free Node ESM harness** (`sharp-at-file.test.mjs`, 28 cases). The
+> validated by a **model-free Node ESM harness** (`file-injector.test.mjs`, 28 cases). The
 > Python-oriented `pytest`/`mypy`/`ruff` gates from the base template DO NOT APPLY. The gates below are
 > project-specific and have been **verified on this machine** (the regex-only change was run through the
 > full harness via a temp copy → 28/28; the Level-3 script is pre-run 18/18).
@@ -323,17 +323,17 @@ NO NEW INTEGRATION POINTS:
 
 ```bash
 # 1a. New regex present (exactly one line). The `\p{L}` and `/gu` confirm the fix + the mandatory `u` flag.
-grep -ncE 'const FILE_INJECT_RE = /\(\^\|\(\?<!\[\[]\\p\{L\}\\p\{N\}_\]\)\)#@\(\\S\+\)/gu' sharp-at-file.ts
+grep -ncE 'const FILE_INJECT_RE = /\(\^\|\(\?<!\[\[]\\p\{L\}\\p\{N\}_\]\)\)#@\(\\S\+\)/gu' file-injector.ts
 # Expected: 1   (if 0 → the regex wasn't changed or has a typo; re-read the file). A simpler check:
-grep -nE 'FILE_INJECT_RE = /.+\\p\{L\}.+/gu' sharp-at-file.ts
+grep -nE 'FILE_INJECT_RE = /.+\\p\{L\}.+/gu' file-injector.ts
 # Expected: exactly one matching line.
 
 # 1b. Old ASCII-only regex is GONE.
-grep -ncF 'const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;' sharp-at-file.ts
+grep -ncF 'const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;' file-injector.ts
 # Expected: 0   (was 1). If >0 → the old regex line still present; re-apply Task 1.
 
 # 1c. The `u` flag is present on the FILE_INJECT_RE line (mandatory for \p{L}/\p{N}).
-grep -nE 'FILE_INJECT_RE = /.*\)/gu;' sharp-at-file.ts | grep -q '/gu;' && echo "OK: u flag present" || echo "FAIL: missing u flag"
+grep -nE 'FILE_INJECT_RE = /.*\)/gu;' file-injector.ts | grep -q '/gu;' && echo "OK: u flag present" || echo "FAIL: missing u flag"
 
 # 1d. The file still transpiles via jiti (the `u` flag + property escapes + lookbehind must not break load).
 node --input-type=module -e '
@@ -345,7 +345,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PIPKG + "/dist/index.js",
   "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 if (typeof mod.default !== "function") { console.error("FAIL: default export not a function"); process.exit(1); }
 console.log("PASS: jiti transpile + default-export check (regex loads cleanly)");
 '
@@ -363,7 +363,7 @@ grep -qE 'Unicode-aware' README.md && echo "OK: README updated" || echo "FAIL: R
 # Pre-verified: running the harness against a temp copy with ONLY the regex changed → 28/28.
 # Regex-relevant cases (1, 7, 8, 9, 11, 13, ~E2 "(#@a.txt)", E3) all stay green: ASCII behavior is
 # byte-identical, and the boundary chars the harness uses (space, "(", ".") still match under \p{L}\p{N}_.
-node ./sharp-at-file.test.mjs
+node ./file-injector.test.mjs
 # Expected: "Result: 28 passed, 0 failed." exit 0.
 # If a case FAILS: the regex change broke ASCII matching (e.g. dropped the ^ alternation, or removed a
 # capture group). Re-read the diff; ensure group 2 is still (\S+) and (^|…) alternation is intact.
@@ -392,7 +392,7 @@ const jiti = createJiti(import.meta.url, {
     "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
   },
 });
-const mod = await jiti.import(path.resolve(process.cwd(), "sharp-at-file.ts"));
+const mod = await jiti.import(path.resolve(process.cwd(), "file-injector.ts"));
 
 // (a) Direct regex behavior via the module's exported-by-use path: exercise injectFiles, which uses
 //     matchAll(FILE_INJECT_RE) internally. Injecting (or NOT) proves the regex match decision.
@@ -456,7 +456,7 @@ is already proven by Level 3; this confirms end-to-end with a real model.
 ```bash
 mkdir -p /tmp/saf-e2e && printf 'The canary is INDIGO-FALCON-8821 once.\n' > /tmp/saf-e2e/secret.txt
 # Repo copy ONLY (avoid the stale global copy for a clean Issue-5 signal):
-pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
+pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./file-injector.ts -p \
   'Please review café#@/tmp/saf-e2e/secret.txt — how many times does INDIGO-FALCON-8821 appear? Reply only: CANARY=<number>'
 # Before fix: CANARY=1 (café#@ injected, despite being "mid-word" in café#@…). AFTER this fix: CANARY=0.
 # (The model never sees the file because #@ correctly does not trigger after the é.)
@@ -467,7 +467,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
 ### Technical Validation
 - [ ] Level 1: new regex line present (grep) with `/gu` flag; old `/g`-only regex gone; jiti transpile +
       default-export check PASS; README "Unicode-aware" present.
-- [ ] Level 2: `node ./sharp-at-file.test.mjs` → **28 passed, 0 failed**, exit 0.
+- [ ] Level 2: `node ./file-injector.test.mjs` → **28 passed, 0 failed**, exit 0.
 - [ ] Level 3: `/tmp/verify_unicode_regex.mjs` → all 18 checks PASS, exit 0.
 - [ ] Level 4 (optional): live Issue-5 repro shows `CANARY=0` (was `1`).
 
@@ -486,7 +486,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
 - [ ] The `u` flag is present and the `_` is in `[\p{L}\p{N}_]` (underscore stays a word char).
 - [ ] The capture-group structure (group 2 = `(\S+)`) is unchanged.
 - [ ] Per-token dedup, sentinel code, handler, assembly, F3/F5/F4, helpers — all untouched.
-- [ ] `sharp-at-file.test.mjs` and all README sections outside "Where it matches" — untouched.
+- [ ] `file-injector.test.mjs` and all README sections outside "Where it matches" — untouched.
 
 ### Documentation & Deployment
 - [ ] No new env vars / config / API surface (pure internal regex change).
@@ -505,7 +505,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
   (underscore would no longer be a "word" char). The `_` preserves `\w` semantics.
 - ❌ Don't use line number 8 as the anchor — the parallel S2 sentinel-removal task shifts other regions;
   line 8's NUMBER may move. Use the full-line exact-text anchor (stable & unique).
-- ❌ Don't edit `sharp-at-file.test.mjs` to add café/CJK cases — that is **P1.M2.T2.S1**'s dedicated
+- ❌ Don't edit `file-injector.test.mjs` to add café/CJK cases — that is **P1.M2.T2.S1**'s dedicated
   scope. Verify via the throwaway Level-3 script instead (sibling-PRP precedent: harness edits belong
   to M2.*). Editing the harness here collides with M2.T2.S1.
 - ❌ Don't touch the sentinel constants/guard/assembly (P1.M1.T1.S2, running in parallel) or the

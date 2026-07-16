@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T1.S2 — Remove sentinel mechanism entirely (Issues 2 + 6)"
 prd_ref: "Bug-fix PRD §Issue 2 (sentinel-in-prompt false negative), §Issue 6 (assembly format deviation), §Overview/§Testing Summary"
-target_file: "./sharp-at-file.ts"  # EDIT IN PLACE
+target_file: "./file-injector.ts"  # EDIT IN PLACE
 change_type: pure-deletion (3 surgical edits; no additions, no new files)
 pi_version: "@earendil-works/pi-coding-agent v0.80.7"
 depends_on: "P1.M1.T1.S1 (per-token dedup in injectFiles) — CONFIRMED ALREADY IN FILE at lines 147-152"
@@ -12,24 +12,24 @@ fixes: "Issue 2 (sentinel-in-prompt false negative); Issue 6 (assembly format de
 
 ## Goal
 
-**Feature Goal**: Delete the entire F1 sentinel mechanism from `./sharp-at-file.ts` — the two
+**Feature Goal**: Delete the entire F1 sentinel mechanism from `./file-injector.ts` — the two
 module-level constants (`INJECT_SENTINEL`, `SENTINEL_RE`), the handler guard
 (`if (SENTINEL_RE.test(event.text)) return { action: "continue" }`), the sentinel insertion in the
 assembly template, and the F1 JSDoc/comment blocks above each. After removal, the file references
 neither symbol anywhere, the assembly matches PRD §6.2 exactly, and re-injection prevention is handled
 solely by S1's cooperation-independent per-token dedup.
 
-**Deliverable**: Three surgical in-place edits to `./sharp-at-file.ts` (one block-deletion of the
+**Deliverable**: Three surgical in-place edits to `./file-injector.ts` (one block-deletion of the
 constants, one line-modification of the assembly, one block-deletion of the handler guard + its
 comment). No new files. **No new code is written** — this is a pure subtraction.
 
 **Success Definition**:
-- [ ] `grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts` → **0** (was 4).
+- [ ] `grep -cE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts` → **0** (was 4).
 - [ ] The assembly line reads exactly `` const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`; ``
       (PRD §6.2 format — no `${INJECT_SENTINEL}`).
 - [ ] The handler keeps exactly THREE guards: `source==='extension'`, `streamingBehavior==='steer'`,
       `!event.text?.includes("#@")`. The sentinel guard is gone.
-- [ ] The existing model-free harness reports **28 passed, 0 failed** (`node ./sharp-at-file.test.mjs`)
+- [ ] The existing model-free harness reports **28 passed, 0 failed** (`node ./file-injector.test.mjs`)
       — no regression. (Verified by static analysis: the F1 test asserts behavior, not the sentinel
       string; per-token dedup now satisfies that behavior.)
 - [ ] The throwaway verification script (below) shows: (a) Issue 2 fixed — a prompt containing the
@@ -39,7 +39,7 @@ comment). No new files. **No new code is written** — this is a pure subtractio
 
 > **Scope boundary (read carefully):** This subtask removes ONLY the F1 sentinel. It does **NOT**:
 > (a) add/modify the per-token dedup line — that is **S1** (already done, lines 147-152); (b) change
-> `FILE_INJECT_RE` for Unicode — that is **M1.T2.S1** (Issue 5); (c) edit `sharp-at-file.test.mjs`
+> `FILE_INJECT_RE` for Unicode — that is **M1.T2.S1** (Issue 5); (c) edit `file-injector.test.mjs`
 > (even the F1 test's now-misleading name) — that is **M2.T1.S1**; (d) touch the F3/F5/F4 code or
 > comments (F3/F5 are documentation-only; M3 documents them); (e) edit README.md — that is **M3**.
 > Only F1 (sentinel) is removed.
@@ -74,7 +74,7 @@ and a small but real format/token deviation from the spec (Issue 6).
 
 ## What
 
-Three edits to `./sharp-at-file.ts`. All are deletions or a one-token modification; **no code is
+Three edits to `./file-injector.ts`. All are deletions or a one-token modification; **no code is
 added**. The three remaining handler guards, the per-token dedup line, the block helpers, the regex,
 and all other code are untouched.
 
@@ -125,7 +125,7 @@ and all other code are untouched.
   section: "§Issue 2, §Issue 6, §Overview"
 
 # The file being EDITED
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "Contains the 4 sentinel references to remove: consts at lines 25-26 (with the F1 JSDoc at
         ~18-24), assembly at line 211, handler guard at line 248 (with its 4-line F1 comment at
         ~244-247). Read the injectFiles function and the factory before editing."
@@ -136,12 +136,12 @@ and all other code are untouched.
         unique in the file."
 
 # The test harness (run for regression; DO NOT modify it)
-- file: ./sharp-at-file.test.mjs
+- file: ./file-injector.test.mjs
   why: "28-case model-free gate. The F1 case (search 'F1 — no re-injection') is the only test touching
         sentinel behavior. It asserts `out.action === 'continue'`, `rec.notify === undefined`, and
         `aCount === 1` on the FIRST pass — all BEHAVIORAL, none check the sentinel string. Per-token
         dedup satisfies these after removal → harness stays 28/28."
-  pattern: "imports the REAL ./sharp-at-file.ts via jiti; run `node ./sharp-at-file.test.mjs`."
+  pattern: "imports the REAL ./file-injector.ts via jiti; run `node ./file-injector.test.mjs`."
   gotcha: "The F1 test's NAME/comment will be cosmetically misleading post-removal ('sentinel already
         present') but its assertions still hold. Renaming/adding co-load + sentinel-in-prompt cases is
         M2.T1.S1's scope — do NOT touch the harness here."
@@ -150,13 +150,13 @@ and all other code are untouched.
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── PRD.md                       # original feature PRD (not the bug-fix PRD)
 ├── README.md                    # extension docs (M3 updates, NOT this task)
-├── sharp-at-file.ts             # ← THE FILE BEING EDITED (249 lines). 4 sentinel refs to remove.
+├── file-injector.ts             # ← THE FILE BEING EDITED (249 lines). 4 sentinel refs to remove.
 │                                #     S1 dedup already present (lines 147-152).
-├── sharp-at-file.test.mjs       # 28-case model-free harness — run, do NOT edit
+├── file-injector.test.mjs       # 28-case model-free harness — run, do NOT edit
 └── plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/
     ├── architecture/{system_context.md, code_changes_analysis.md}
     ├── prd_snapshot.md / prd_index.txt / tasks.json / TEST_RESULTS.md
@@ -170,7 +170,7 @@ and all other code are untouched.
 
 ```bash
 .
-└── sharp-at-file.ts             # MODIFIED — 3 surgical deletions/modification. ~16 lines removed.
+└── file-injector.ts             # MODIFIED — 3 surgical deletions/modification. ~16 lines removed.
                                  #   - constants block (F1 JSDoc + INJECT_SENTINEL + SENTINEL_RE) gone
                                  #   - assembly: ${INJECT_SENTINEL}\n\n removed → PRD §6.2 exact
                                  #   - handler: sentinel guard + F1 comment gone (3 guards remain)
@@ -181,7 +181,7 @@ and all other code are untouched.
 
 ```typescript
 // CRITICAL — S1's per-token dedup MUST be in place before this edit. VERIFY before deleting:
-//   grep -n "text.includes('<file name=\"' + abs + '\">')" sharp-at-file.ts  → must print one line.
+//   grep -n "text.includes('<file name=\"' + abs + '\">')" file-injector.ts  → must print one line.
 // If that line is absent, STOP — removing the sentinel would regress Issue 1 (duplicate injection).
 // (It is present at line 152 as of this writing; S1 is implemented.)
 
@@ -192,7 +192,7 @@ and all other code are untouched.
 // GOTCHA — the handler has THREE other guards that must NOT be removed: `source==='extension'`,
 // `streamingBehavior==='steer'`, `!event.text?.includes("#@")`. Only the FOURTH (sentinel) goes.
 
-// GOTCHA — the F1 test in sharp-at-file.test.mjs will still PASS (returns continue via per-token
+// GOTCHA — the F1 test in file-injector.test.mjs will still PASS (returns continue via per-token
 // dedup). Do NOT 'fix' it by editing the harness — that's M2.T1.S1. Its name is cosmetically stale
 // but its assertions hold. Leave it.
 
@@ -215,11 +215,11 @@ unchanged.
 
 ```yaml
 PRE-FLIGHT (do first):
-  - VERIFY S1's dedup is present: `grep -n "text.includes('<file name" sharp-at-file.ts` → one line.
+  - VERIFY S1's dedup is present: `grep -n "text.includes('<file name" file-injector.ts` → one line.
     If absent, STOP (removing the sentinel would regress Issue 1).
-  - RECORD baseline: `grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts` → must print 4.
+  - RECORD baseline: `grep -cE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts` → must print 4.
 
-Task 1: EDIT ./sharp-at-file.ts — Edit A: delete the sentinel constants block
+Task 1: EDIT ./file-injector.ts — Edit A: delete the sentinel constants block
   - OBJECTIVE: Remove the F1 JSDoc + INJECT_SENTINEL + SENTINEL_RE (currently lines ~18-26).
   - FIND (exact oldText — UNIQUE in the file):
         const TRAILING_PUNCT = ".,;:!?\")]}>'";
@@ -241,7 +241,7 @@ Task 1: EDIT ./sharp-at-file.ts — Edit A: delete the sentinel constants block
   - EFFECT: TRAILING_PUNCT now directly precedes the F3 JSDoc (one blank line between). The two
     sentinel consts and their 7-line JSDoc are gone.
 
-Task 2: EDIT ./sharp-at-file.ts — Edit B: fix the assembly line (Issue 6)
+Task 2: EDIT ./file-injector.ts — Edit B: fix the assembly line (Issue 6)
   - OBJECTIVE: Drop ${INJECT_SENTINEL}\n\n from the finalText template; remove the F1 comment above.
   - FIND (exact oldText — UNIQUE; the `const finalText = ` string appears exactly once):
         // F1 — stamp a hidden sentinel on the appended section so a SECOND copy of this extension
@@ -253,7 +253,7 @@ Task 2: EDIT ./sharp-at-file.ts — Edit B: fix the assembly line (Issue 6)
         const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`; // append; original text untouched (PRD §6.2)
   - EFFECT: assembly is now EXACT PRD §6.2: <text>\n\n---\n\n<block1>\n\n<block2>. No sentinel token.
 
-Task 3: EDIT ./sharp-at-file.ts — Edit C: delete the handler sentinel guard (Issue 2)
+Task 3: EDIT ./file-injector.ts — Edit C: delete the handler sentinel guard (Issue 2)
   - OBJECTIVE: Remove the 4-line F1 comment + the SENTINEL_RE guard from the input handler.
   - FIND (exact oldText — UNIQUE; sits after the !includes("#@") guard, before the injectFiles call):
         if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
@@ -271,13 +271,13 @@ Task 3: EDIT ./sharp-at-file.ts — Edit C: delete the handler sentinel guard (I
     caused Issue 2 (bailing on a raw prompt containing the sentinel string) is gone.
 
 POST-FLIGHT:
-  - `grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts` → must print 0 (was 4).
+  - `grep -cE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts` → must print 0 (was 4).
   - Run the Validation Loop gates below.
 
 DO NOT (out of scope):
   * touch the per-token dedup line (S1), the FILE_INJECT_RE regex (M1.T2.S1), the F3/F5/F4 code or
     comments, the three remaining handler guards, any block helper, cleanToken/expandTildeAndResolve/
-    extOf/isBinary, sharp-at-file.test.mjs (M2.T1.S1), or README.md (M3).
+    extOf/isBinary, file-injector.test.mjs (M2.T1.S1), or README.md (M3).
   * reformat, reorder, or "tidy" adjacent lines — only the three exact edits above.
 ```
 
@@ -327,7 +327,7 @@ NO NEW INTEGRATION POINTS:
 ## Validation Loop
 
 > This repo has **no test framework / linter / type-checker** — it is a single-file Pi extension
-> validated by a **model-free Node ESM harness** (`sharp-at-file.test.mjs`, 28 cases, `node`). The
+> validated by a **model-free Node ESM harness** (`file-injector.test.mjs`, 28 cases, `node`). The
 > Python-oriented `pytest`/`mypy`/`ruff` gates from the base template DO NOT APPLY. The gates below
 > are project-specific and have been **verified by static analysis on this machine** (the harness F1
 > test asserts behavior, not the sentinel string; per-token dedup satisfies that behavior post-removal).
@@ -336,26 +336,26 @@ NO NEW INTEGRATION POINTS:
 
 ```bash
 # 1a. Zero sentinel references remain.
-grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts
+grep -cE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts
 # Expected: 0   (was 4). If >0 → a reference was missed; re-read the file and delete it.
 
 # 1b. No stray sentinel STRING left in the assembly or anywhere.
-grep -nF '<!--#@file-injected-->' sharp-at-file.ts
+grep -nF '<!--#@file-injected-->' file-injector.ts
 # Expected: no matches.
 
 # 1c. The assembly line is now exact PRD §6.2 (no INJECT_SENTINEL interpolation).
-grep -nF 'const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`' sharp-at-file.ts
+grep -nF 'const finalText = `${text}\n\n---\n\n${blocks.join("\n\n")}`' file-injector.ts
 # (grep -F treats backticks literally; the line must read exactly as shown — no ${INJECT_SENTINEL}.)
 # Expected: exactly one matching line.
 
 # 1d. The handler has exactly 3 guards (sentinel guard removed). Count the handler's "return { action:
 #     \"continue\" }" lines — there should be 4 total (3 guards + the !injected fallthrough).
-awk '/export default function/{f=1} f&&/return \{ action: "continue" \}/{c++} END{print c}' sharp-at-file.ts
+awk '/export default function/{f=1} f&&/return \{ action: "continue" \}/{c++} END{print c}' file-injector.ts
 # Expected: 4   (source guard + streaming guard + !includes("#@") guard + the `if (!injected)` line).
 #   (The sentinel guard was a 5th; removing it brings the count from 5 to 4.)
 
 # 1e. S1's per-token dedup is INTACT (this task must NOT touch it).
-grep -n "text.includes('<file name=\"' + abs + '\">')" sharp-at-file.ts
+grep -n "text.includes('<file name=\"' + abs + '\">')" file-injector.ts
 # Expected: exactly one matching line (inside the injectFiles for-loop).
 
 # Expected: 1a prints 0; 1b prints nothing; 1c/1e print one line each; 1d prints 4.
@@ -367,7 +367,7 @@ grep -n "text.includes('<file name=\"' + abs + '\">')" sharp-at-file.ts
 # The project's hermetic model-free gate. MUST remain 28 passed / 0 failed.
 # The F1 case still passes: it asserts out.action==='continue' + no notify + 1 block on the FIRST
 # pass — all satisfied by per-token dedup post-removal (see research_notes.md §4 for the trace).
-node ./sharp-at-file.test.mjs
+node ./file-injector.test.mjs
 # Expected: "Result: 28 passed, 0 failed." and exit code 0.
 # If the F1 case fails: the per-token dedup line was accidentally removed/altered — restore it
 # (S1's contract) and re-run. Do NOT edit the harness to make it pass.
@@ -398,7 +398,7 @@ const jiti = createJiti(import.meta.url, {
   },
 });
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const mod = await jiti.import(path.resolve(process.cwd(), "sharp-at-file.ts"));
+const mod = await jiti.import(path.resolve(process.cwd(), "file-injector.ts"));
 
 const TMP = fsSync.mkdtempSync(path.join(os.tmpdir(), "saf-rm-"));
 await fs.writeFile(path.join(TMP, "a.ts"), "canary\n");
@@ -449,7 +449,7 @@ fix is already proven by Level 3; this confirms end-to-end with a real model.
 ```bash
 mkdir -p /tmp/saf-e2e && printf 'The canary is MAROON-PELICAN-4297 once.\n' > /tmp/saf-e2e/secret.txt
 # Repo copy ONLY (avoid the stale global copy for a clean Issue-2 signal):
-pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
+pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./file-injector.ts -p \
   'Here is an HTML comment for context: <!--#@file-injected-->
    Also please review: #@/tmp/saf-e2e/secret.txt
    How many times does MAROON-PELICAN-4297 appear? Reply only: CANARY=<number>'
@@ -462,7 +462,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
 - [ ] Level 1: `grep -cE "INJECT_SENTINEL|SENTINEL_RE"` → 0; no `<!--#@file-injected-->` string;
       assembly line matches PRD §6.2; handler has 4 `continue` returns (3 guards + !injected);
       per-token dedup line still present.
-- [ ] Level 2: `node ./sharp-at-file.test.mjs` → **28 passed, 0 failed**, exit 0.
+- [ ] Level 2: `node ./file-injector.test.mjs` → **28 passed, 0 failed**, exit 0.
 - [ ] Level 3: `/tmp/verify_sentinel_removed.mjs` → all checks PASS, exit 0.
 - [ ] Level 4 (optional): live Issue-2 repro shows `CANARY=1` (was `0`).
 
@@ -480,7 +480,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
 - [ ] No code added; no adjacent lines reformatted/reordered.
 - [ ] Per-token dedup line, regex, F3/F5/F4 code+comments, block helpers, the three other guards — all
       untouched.
-- [ ] Test harness (`sharp-at-file.test.mjs`) and README — untouched.
+- [ ] Test harness (`file-injector.test.mjs`) and README — untouched.
 - [ ] `grep -cE "INJECT_SENTINEL|SENTINEL_RE"` = 0.
 
 ### Documentation & Deployment
@@ -499,7 +499,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
 - ❌ Don't remove any of the three OTHER handler guards (`extension`/`steer`/`!includes("#@")`) — only
   the sentinel guard goes. They have independent, load-bearing purposes (loop prevention / latency /
   cheap pre-check).
-- ❌ Don't edit `sharp-at-file.test.mjs` to "fix" the F1 test — it still passes (it asserts behavior,
+- ❌ Don't edit `file-injector.test.mjs` to "fix" the F1 test — it still passes (it asserts behavior,
   satisfied by per-token dedup). Renaming it and adding co-load/sentinel-in-prompt cases is M2.T1.S1.
 - ❌ Don't touch the per-token dedup line (S1), the `FILE_INJECT_RE` regex (M1.T2.S1), or the
   F3/F5/F4 code/comments (M3 documents them).

@@ -1,4 +1,4 @@
-// Deterministic 14-case acceptance gate for sharp-at-file.ts (Tier A, model-free).
+// Deterministic 14-case acceptance gate for file-injector.ts (Tier A, model-free).
 // Loads the extension via jiti (Pi's loader), captures the input handler, creates real
 // fixtures in a temp sandbox, runs synthetic InputEvents, asserts the transform output.
 import { createJiti } from "file:///home/dustin/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
@@ -12,7 +12,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const EXT = process.env.EXT || "/home/dustin/projects/pi-auto-reader/sharp-at-file.ts";
+const EXT = process.env.EXT || "/home/dustin/projects/pi-file-injector/file-injector.ts";
 const mod = await jiti.import(pathToFileURL(EXT).href);
 
 let pass = 0, fail = 0;

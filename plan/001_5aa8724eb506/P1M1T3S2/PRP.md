@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T3.S2 — Input event handler: replace factory stub (3 guards, injectFiles call, hasUI-guarded notify, transform/continue)"
 prd_ref: "PRD §3 (input event fires in prompt() for all contexts), §9 (handler algorithm), §12.1/§12.2/§12.4 (the 3 guards), §10 (edge cases), §11 (#5/#7/#8/#9/#12/#14 handler-owned acceptance), Appendix A (minimal skeleton)"
-target_file: "./sharp-at-file.ts"  # IN-PLACE EDIT; S1+S2+T2.S1+T3.S1 already present. This task replaces ONLY the factory stub body + adds a JSDoc.
+target_file: "./file-injector.ts"  # IN-PLACE EDIT; S1+S2+T2.S1+T3.S1 already present. This task replaces ONLY the factory stub body + adds a JSDoc.
 target_language: TypeScript (jiti transpile-on-load; no tsconfig/package.json/test framework)
 depends_on: "P1.M1.T1.S1 (factory stub + imports/constants), P1.M1.T1.S2 (parsing helpers), P1.M1.T2.S1 (format helpers), P1.M1.T3.S1 (injectFiles — consumed as the handler's single I/O call)"
 consumed_by: "P1.M2.T4.S1 (manual acceptance matrix — extension must be fully functional), P1.M2.T5.S1 (README documents this entry point)"
@@ -11,7 +11,7 @@ consumed_by: "P1.M2.T4.S1 (manual acceptance matrix — extension must be fully 
 
 ## Goal
 
-**Feature Goal**: Replace the `pi.on("input", ...)` **factory stub body** in `./sharp-at-file.ts` with the
+**Feature Goal**: Replace the `pi.on("input", ...)` **factory stub body** in `./file-injector.ts` with the
 **real input handler** — the final wiring that makes the extension fully functional. The handler: (1)
 short-circuits on three cheap guards (`source==="extension"` for loop prevention, `streamingBehavior==="steer"`
 for latency, no `#@` substring for a cheap pre-check), (2) delegates all file I/O + assembly to `injectFiles`
@@ -20,7 +20,7 @@ file count, and (4) returns `{action:"transform", text, images}` when files were
 `{action:"continue"}` otherwise. Also adds a **Mode-A JSDoc** above the factory documenting the extension
 purpose, the `#@<path>` syntax, all-context support, and the no-limits/no-config guarantee.
 
-**Deliverable**: One in-place edit to `./sharp-at-file.ts`:
+**Deliverable**: One in-place edit to `./file-injector.ts`:
 - **(a)** Replace the stub handler body (`return { action: "continue" };`) with the 7-line real handler.
 - **(b)** Insert a JSDoc `/** ... */` block immediately above `export default function (pi: ExtensionAPI) {`.
 
@@ -86,7 +86,7 @@ fast for the 99% of prompts that have no `#@`.
 
 ## What
 
-Edit `./sharp-at-file.ts` in place:
+Edit `./file-injector.ts` in place:
 
 **(a) Replace** the factory stub body. The **exact current stub** (verified in the file) is:
 ```ts
@@ -229,11 +229,11 @@ notify(message: string, type?: "info" | "warning" | "error"): void;
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .gitignore          # ignores node_modules/, dist/, .pi-subagents/ — NOT .ts
 ├── PRD.md              # READ-ONLY source of truth
-├── sharp-at-file.ts    # ← EXISTS; S1+S2+T2.S1+T3.S1 already present. T3.S2 EDITS THIS (factory + JSDoc).
+├── file-injector.ts    # ← EXISTS; S1+S2+T2.S1+T3.S1 already present. T3.S2 EDITS THIS (factory + JSDoc).
 └── plan/
     └── 001_5aa8724eb506/
         ├── architecture/{api_verification,system_context,external_deps,extension_patterns}.md
@@ -249,7 +249,7 @@ notify(message: string, type?: "info" | "warning" | "error"): void;
 # NOTE: NO src/, NO package.json, NO tsconfig, NO test framework. Single-file jiti extension.
 ```
 
-### Current factory stub (the EXACT text to replace — read from sharp-at-file.ts)
+### Current factory stub (the EXACT text to replace — read from file-injector.ts)
 
 ```ts
 export default function (pi: ExtensionAPI) {
@@ -263,7 +263,7 @@ This block is at the **end** of the file, below `injectFiles`. It is unique and 
 ### Desired result after the edit (factory + JSDoc only — nothing else changes)
 
 ```bash
-sharp-at-file.ts
+file-injector.ts
   # (unchanged regions — do NOT touch)
   #   imports (6, incl type ResizedImage)
   #   const FILE_INJECT_RE / MIME_BY_EXT / TRAILING_PUNCT
@@ -337,7 +337,7 @@ No new data models. The handler consumes `InputEvent` (from Pi) and `injectFiles
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: EDIT ./sharp-at-file.ts (in-place; file already exists, fully populated by prior subtasks)
+Task 1: EDIT ./file-injector.ts (in-place; file already exists, fully populated by prior subtasks)
   - OBJECTIVE: Replace the factory stub body with the real input handler + add a Mode-A JSDoc.
   - EDIT (a) — REPLACE the stub body. Find this EXACT block:
         export default function (pi: ExtensionAPI) {
@@ -450,7 +450,7 @@ export default function (pi: ExtensionAPI) {
 ### Integration Points
 
 ```yaml
-MODULE sharp-at-file.ts (in-place edit; no build step):
+MODULE file-injector.ts (in-place edit; no build step):
   - edit: "Replace the factory stub body + add JSDoc above `export default function`."
   - new_imports: NONE. ExtensionAPI + injectFiles + ImageContent are already in module scope.
   - concurrency: "The factory stub is the unique stable anchor. T3.S1 inserts injectFiles ABOVE the
@@ -478,37 +478,37 @@ DOWNSTREAM CONSUMERS (do NOT implement now — the handler just has to be correc
 ### Level 1: Syntax & Placement (Immediate Feedback)
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 
 # 1a. The 3 guards are present, in order.
-grep -nE 'event\.source === "extension"' sharp-at-file.ts | grep -q continue && echo "OK guard A" || echo "FAIL guard A"
-grep -nE 'event\.streamingBehavior === "steer"' sharp-at-file.ts | grep -q continue && echo "OK guard B" || echo "FAIL guard B"
-grep -nE '!event\.text\?\.includes\("#@"\)' sharp-at-file.ts | grep -q continue && echo "OK guard C" || echo "FAIL guard C"
+grep -nE 'event\.source === "extension"' file-injector.ts | grep -q continue && echo "OK guard A" || echo "FAIL guard A"
+grep -nE 'event\.streamingBehavior === "steer"' file-injector.ts | grep -q continue && echo "OK guard B" || echo "FAIL guard B"
+grep -nE '!event\.text\?\.includes\("#@"\)' file-injector.ts | grep -q continue && echo "OK guard C" || echo "FAIL guard C"
 
 # 1b. injectFiles call + injected check + notify + transform return all present.
-grep -qE 'await injectFiles\(event\.text, event\.images \?\? \[\], ctx\)' sharp-at-file.ts && echo "OK injectFiles call" || echo "FAIL injectFiles call"
-grep -qE 'if \(!injected\) return \{ action: "continue" \}' sharp-at-file.ts && echo "OK injected check" || echo "FAIL injected check"
-grep -qE 'if \(ctx\.hasUI\) ctx\.ui\.notify\(`#@ injected \$\{injected\} file\(s\)`, "info"\)' sharp-at-file.ts && echo "OK notify" || echo "FAIL notify"
-grep -qE 'return \{ action: "transform" as const, text, images \}' sharp-at-file.ts && echo "OK transform" || echo "FAIL transform"
+grep -qE 'await injectFiles\(event\.text, event\.images \?\? \[\], ctx\)' file-injector.ts && echo "OK injectFiles call" || echo "FAIL injectFiles call"
+grep -qE 'if \(!injected\) return \{ action: "continue" \}' file-injector.ts && echo "OK injected check" || echo "FAIL injected check"
+grep -qE 'if \(ctx\.hasUI\) ctx\.ui\.notify\(`#@ injected \$\{injected\} file\(s\)`, "info"\)' file-injector.ts && echo "OK notify" || echo "FAIL notify"
+grep -qE 'return \{ action: "transform" as const, text, images \}' file-injector.ts && echo "OK transform" || echo "FAIL transform"
 
 # 1c. The stub is GONE (no bare `return { action: "continue" };` immediately under pi.on).
 #     (The injected===0 `continue` has a leading `if (!injected)`, so the bare stub line must be absent.)
-grep -nE '^\s+return \{ action: "continue" \};\s*$' sharp-at-file.ts | wc -l | grep -q '^0$' \
+grep -nE '^\s+return \{ action: "continue" \};\s*$' file-injector.ts | wc -l | grep -q '^0$' \
   && echo "OK stub removed" || echo "WARN: check for leftover bare stub line"
 
 # 1d. JSDoc is present directly above the factory (Mode A).
-JSDOC=$(grep -nE '^\s*\* ' sharp-at-file.ts | tail -1 | cut -d: -f1)
-FACTORY=$(grep -nE '^export default function \(pi: ExtensionAPI\)' sharp-at-file.ts | cut -d: -f1)
+JSDOC=$(grep -nE '^\s*\* ' file-injector.ts | tail -1 | cut -d: -f1)
+FACTORY=$(grep -nE '^export default function \(pi: ExtensionAPI\)' file-injector.ts | cut -d: -f1)
 [ -n "$JSDOC" ] && [ -n "$FACTORY" ] && [ "$JSDOC" -lt "$FACTORY" ] \
   && echo "OK JSDoc above factory ($JSDOC < $FACTORY)" || echo "FAIL JSDoc placement"
 
 # 1e. No try/catch wrapper was added around the injectFiles call (out of scope; injectFiles never throws).
-awk '/await injectFiles\(/{f=1} f&&/^\s*\}\s*catch/{print "WRAP";f=0} f&&/return \{ action:/{f=0}' sharp-at-file.ts | grep -q WRAP \
+awk '/await injectFiles\(/{f=1} f&&/^\s*\}\s*catch/{print "WRAP";f=0} f&&/return \{ action:/{f=0}' file-injector.ts | grep -q WRAP \
   && echo "FAIL: unwanted try/catch wrapper" || echo "OK no wrapper"
 
 # 1f. Prior work intact (injectFiles + all helpers + constants + imports untouched).
-[ "$(grep -cE '^export async function injectFiles' sharp-at-file.ts)" = "1" ] && echo "OK injectFiles intact" || echo "FAIL injectFiles"
-[ "$(grep -cE '^import ' sharp-at-file.ts)" = "6" ] && echo "OK 6 imports" || echo "FAIL import count"
+[ "$(grep -cE '^export async function injectFiles' file-injector.ts)" = "1" ] && echo "OK injectFiles intact" || echo "FAIL injectFiles"
+[ "$(grep -cE '^import ' file-injector.ts)" = "6" ] && echo "OK 6 imports" || echo "FAIL import count"
 # Expected: guards OK, injectFiles/notify/transform OK, stub removed, JSDoc above factory, no wrapper,
 #           injectFiles intact, 6 imports.
 ```
@@ -521,7 +521,7 @@ synthetic events + a mock `ctx` (cwd, hasUI, ui.notify recorder). Creates ONE re
 path. Asserts all 11 guard/return/notify scenarios. No model, no API key, non-interactive.
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 cat > /tmp/gate_t3s2.mjs <<'GATE'
 import { createJiti } from "file:///home/dustin/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
 import { pathToFileURL } from "node:url";
@@ -534,7 +534,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 
 let pass = 0, fail = 0;
 const T = (name, cond) => { if (cond) { pass++; } else { fail++; console.error("FAIL:", name); } };
@@ -645,13 +645,13 @@ node /tmp/gate_t3s2.mjs
 ### Level 3: Authoritative Pi Loader (System Validation — optional confidence)
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 # Confirms Pi's REAL loader (with its real getAliases()) accepts the edited file and the factory is valid.
 # -e loads the extension; -ne disables discovery so ONLY our -e file loads; -p makes it non-interactive.
 # NOTE: with the REAL handler in place, a "#@<file>" prompt is now ACTUALLY injected (unlike T3.S1's stub).
 #       A provider is needed for the model turn AFTER load; a provider error after load does NOT indicate
 #       a handler failure. Use this only for final confidence if a provider is configured.
-pi -e ./sharp-at-file.ts -ne -p "load check #@note.txt" 2>&1 | tee /tmp/pi_t3s2.log
+pi -e ./file-injector.ts -ne -p "load check #@note.txt" 2>&1 | tee /tmp/pi_t3s2.log
 grep -qiE "does not export a valid factory|syntax error|is not defined|cannot find module" /tmp/pi_t3s2.log \
   && echo "FAIL: load error above" || echo "OK: no load error"
 # Expected: no "does not export a valid factory function" / syntax / import errors.
@@ -663,19 +663,19 @@ grep -qiE "does not export a valid factory|syntax error|is not defined|cannot fi
 After editing, the file must still contain ALL prior work — none clobbered — plus the new handler + JSDoc.
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 echo "--- S1 constants ---"
-grep -cE '^const (FILE_INJECT_RE|MIME_BY_EXT|TRAILING_PUNCT)' sharp-at-file.ts        # Expected: 3
+grep -cE '^const (FILE_INJECT_RE|MIME_BY_EXT|TRAILING_PUNCT)' file-injector.ts        # Expected: 3
 echo "--- S2 helpers ---"
-grep -cE '^export function (cleanToken|expandTildeAndResolve|extOf)' sharp-at-file.ts  # Expected: 3
+grep -cE '^export function (cleanToken|expandTildeAndResolve|extOf)' file-injector.ts  # Expected: 3
 echo "--- T2.S1 helpers ---"
-grep -cE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)' sharp-at-file.ts  # Expected: 4
+grep -cE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)' file-injector.ts  # Expected: 4
 echo "--- T3.S1 core ---"
-grep -cE '^export async function injectFiles' sharp-at-file.ts                         # Expected: 1
+grep -cE '^export async function injectFiles' file-injector.ts                         # Expected: 1
 echo "--- T3.S2 handler markers ---"
-grep -cE 'event\.source === "extension"|streamingBehavior === "steer"|ctx\.ui\.notify|action: "transform" as const' sharp-at-file.ts  # Expected: 4
+grep -cE 'event\.source === "extension"|streamingBehavior === "steer"|ctx\.ui\.notify|action: "transform" as const' file-injector.ts  # Expected: 4
 echo "--- factory present ---"
-grep -cE '^export default function \(pi: ExtensionAPI\)' sharp-at-file.ts              # Expected: 1
+grep -cE '^export default function \(pi: ExtensionAPI\)' file-injector.ts              # Expected: 1
 # Expected: 3, 3, 4, 1, 4, 1.
 ```
 

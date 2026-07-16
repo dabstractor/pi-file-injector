@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T1.S2 — Token parsing & path resolution helpers: cleanToken, expandTildeAndResolve, extOf"
 prd_ref: "PRD §4.3 (cleanToken), §4.4 (expandTildeAndResolve), §5.2 (extOf/MIME keys), §3.3 (internal utils), §10 (edge cases), §8 (file structure)"
-target_file: "./sharp-at-file.ts"  # EDIT IN PLACE — file created by T1.S1
+target_file: "./file-injector.ts"  # EDIT IN PLACE — file created by T1.S1
 target_language: TypeScript (jiti transpile-on-load; no tsconfig/package.json/test framework)
 depends_on: "P1.M1.T1.S1 (provides imports + FILE_INJECT_RE/MIME_BY_EXT/TRAILING_PUNCT + factory stub)"
 consumed_by: "P1.M1.T3.S1 (injectFiles), P1.M1.T2.S1 (no direct use)"
@@ -12,11 +12,11 @@ consumed_by: "P1.M1.T3.S1 (injectFiles), P1.M1.T2.S1 (no direct use)"
 ## Goal
 
 **Feature Goal**: Add three **pure, module-scope helper functions** — `cleanToken`,
-`expandTildeAndResolve`, `extOf` — to the existing `./sharp-at-file.ts` (created by T1.S1). Together
+`expandTildeAndResolve`, `extOf` — to the existing `./file-injector.ts` (created by T1.S1). Together
 they form the ordered, I/O-free transform pipeline that T3.S1's `injectFiles` will call once per
 `#@<path>` match: raw token → trimmed token → absolute path → lowercased extension.
 
-**Deliverable**: An in-place edit to `./sharp-at-file.ts` adding exactly three **named-exported**
+**Deliverable**: An in-place edit to `./file-injector.ts` adding exactly three **named-exported**
 functions positioned between the `TRAILING_PUNCT` constant (from S1) and the `export default function`
 factory (from S1). No new files. ~20–25 added lines.
 
@@ -62,11 +62,11 @@ with async file I/O in `injectFiles`.
   reimplement the thin tilde-expand step on exported primitives (`os.homedir()` + `path.resolve`)
   per PRD §3.3 — never import from `dist/` internals.
 - **Shared with T2/T3 in the same file.** Like the constants from S1, these helpers are consumed by
-  T3.S1 within `sharp-at-file.ts` itself, so they live at module scope.
+  T3.S1 within `file-injector.ts` itself, so they live at module scope.
 
 ## What
 
-Insert three `export function` declarations into `./sharp-at-file.ts`, between the existing
+Insert three `export function` declarations into `./file-injector.ts`, between the existing
 `const TRAILING_PUNCT = ...;` line and the existing `export default function (pi: ExtensionAPI) {…}`.
 They are synchronous, pure, and use only the already-imported `path`/`os` plus the `TRAILING_PUNCT`
 constant — **no new imports needed** (S1 already imported `node:path` and `node:os`).
@@ -98,7 +98,7 @@ dependency-free file.
 ```yaml
 # MUST READ — sibling PRP (the contract this task edits on top of)
 - docfile: plan/001_5aa8724eb506/P1M1T1S1/PRP.md
-  why: "Defines the exact file ./sharp-at-file.ts that S2 edits: the 6 imports, the 3 module-level
+  why: "Defines the exact file ./file-injector.ts that S2 edits: the 6 imports, the 3 module-level
         constants (FILE_INJECT_RE, MIME_BY_EXT, TRAILING_PUNCT), and the factory stub. S2 INSERTS its
         three functions between TRAILING_PUNCT and export default."
   critical: "TRAILING_PUNCT is the 12-char set '.,;:!?\")]}>\x27' (the inner \" is escaped). cleanToken
@@ -131,11 +131,11 @@ dependency-free file.
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .gitignore          # ignores node_modules/, dist/, .pi-subagents/ — NOT .ts
 ├── PRD.md              # READ-ONLY
-├── sharp-at-file.ts    # ← EXISTS after T1.S1 (imports + 3 consts + factory stub). S2 EDITS THIS.
+├── file-injector.ts    # ← EXISTS after T1.S1 (imports + 3 consts + factory stub). S2 EDITS THIS.
 └── plan/
     └── 001_5aa8724eb506/
         ├── architecture/{api_verification,system_context,external_deps,extension_patterns}.md
@@ -151,8 +151,8 @@ dependency-free file.
 ### Desired Codebase tree with files to be added
 
 ```bash
-# S2 adds NO new files. It edits sharp-at-file.ts in place:
-sharp-at-file.ts
+# S2 adds NO new files. It edits file-injector.ts in place:
+file-injector.ts
   # (S1 region — unchanged)
   #   imports (6)
   #   const FILE_INJECT_RE = ...
@@ -206,7 +206,7 @@ and return `string`. They use the already-imported `path`/`os` and the `TRAILING
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: EDIT ./sharp-at-file.ts  (single edit; the file already exists from T1.S1)
+Task 1: EDIT ./file-injector.ts  (single edit; the file already exists from T1.S1)
   - OBJECTIVE: Insert three pure, named-exported helper functions at module scope.
   - INSERT POINT: immediately after the line `const TRAILING_PUNCT = ".,;:!?\")]}>'";`
                   and immediately before the line `export default function (pi: ExtensionAPI) {`.
@@ -297,7 +297,7 @@ export function extOf(abs: string): string {
 ### Integration Points
 
 ```yaml
-MODULE sharp-at-file.ts (in-place edit; no build step):
+MODULE file-injector.ts (in-place edit; no build step):
   - insertion: "After `const TRAILING_PUNCT = ...;`, before `export default function ...`."
   - new_imports: NONE. `node:path` and `node:os` are already imported by S1.
 
@@ -320,20 +320,20 @@ DOWNSTREAM CONSUMERS (do not implement them now — just satisfy their contract)
 
 ```bash
 # 1a. The three functions exist as NAMED EXPORTS at module scope (not nested in the factory).
-grep -nE '^export function (cleanToken|expandTildeAndResolve|extOf)' ./sharp-at-file.ts
+grep -nE '^export function (cleanToken|expandTildeAndResolve|extOf)' ./file-injector.ts
 # Expected: exactly 3 lines, all anchored at column 1 (no leading whitespace) → module scope.
 
 # 1b. They sit BETWEEN the TRAILING_PUNCT const and the factory (insertion point respected).
 awk '/const TRAILING_PUNCT/{t=NR} /^export default function/{d=NR}
-     /^export function (cleanToken|expandTildeAndResolve|extOf)/{print NR": "$0}' ./sharp-at-file.ts
+     /^export function (cleanToken|expandTildeAndResolve|extOf)/{print NR": "$0}' ./file-injector.ts
 # Expected: the 3 helper line numbers are all > TRAILING_PUNCT line and < default-export line.
 
 # 1c. No stray new imports were added (S1 already imported path/os).
-grep -nE "^import " ./sharp-at-file.ts | wc -l
+grep -nE "^import " ./file-injector.ts | wc -l
 # Expected: 6 (unchanged from S1).
 
 # 1d. No out-of-scope helpers leaked in (isBinary/format*Block/injectFiles are T2/T3).
-grep -nE '\b(isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock|injectFiles)\b' ./sharp-at-file.ts
+grep -nE '\b(isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock|injectFiles)\b' ./file-injector.ts
 # Expected: no matches.
 ```
 
@@ -354,7 +354,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 
 // (a) factory still valid
 if (typeof mod.default !== "function") { console.error("FAIL: default export not a function"); process.exit(1); }
@@ -417,7 +417,7 @@ console.log("PASS: default export is function + 3 named exports + all assertions
 # ONLY our -e file loads; -p makes it non-interactive. NOTE: -p attempts ONE model turn after load
 # — it needs a configured provider. The extension LOADS before any model call; a provider error
 # AFTER load does NOT indicate an S2 failure. Level 2 already proves load + behavior.
-pi -e ./sharp-at-file.ts -ne -p "helper sanity: #@a.txt" 2>&1 | tee /tmp/pi_s2.log
+pi -e ./file-injector.ts -ne -p "helper sanity: #@a.txt" 2>&1 | tee /tmp/pi_s2.log
 grep -qiE "error|invalid factory|does not export" /tmp/pi_s2.log && echo "FAIL: load error above" || echo "OK: no load error"
 # Expected: no "Extension does not export a valid factory function" / syntax / import errors.
 # (The stub still passes #@ through unchanged; real injection is T3.S1/S2.)
@@ -437,7 +437,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 // Simulate T3.S1 calling the pipeline for a raw token "pic.PNG)" captured by FILE_INJECT_RE.
 const cwd = process.cwd();
 const cleaned = mod.cleanToken("pic.PNG)");                       // -> "pic.PNG"
@@ -483,7 +483,7 @@ console.log("PASS: pipeline composes; extOf lowercases for MIME_BY_EXT lookup");
 
 ## Anti-Patterns to Avoid
 
-- ❌ Don't create any new file — edit `./sharp-at-file.ts` in place (it already exists from S1).
+- ❌ Don't create any new file — edit `./file-injector.ts` in place (it already exists from S1).
 - ❌ Don't add new imports — `node:path` and `node:os` are already imported by S1.
 - ❌ Don't touch the imports, the three constants, or the factory/handler body — S1 owns those.
 - ❌ Don't implement `isBinary`/`format*Block` (T2.S1), `injectFiles` (T3.S1), or the real handler

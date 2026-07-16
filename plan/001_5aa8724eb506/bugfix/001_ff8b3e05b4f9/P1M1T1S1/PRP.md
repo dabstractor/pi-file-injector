@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T1.S1 — Add per-token dedup check in injectFiles"
 prd_ref: "Bug-fix PRD §Overview, §Issue 1 (Duplicate injection when a non-sentinel copy co-loads), §Testing Summary"
-target_file: "./sharp-at-file.ts"
+target_file: "./file-injector.ts"
 change_type: surgical-edit (one line + comment, no new files)
 pi_version: "@earendil-works/pi-coding-agent v0.80.7"
 ---
@@ -10,23 +10,23 @@ pi_version: "@earendil-works/pi-coding-agent v0.80.7"
 
 ## Goal
 
-**Feature Goal**: Add a single, cooperation-independent per-token de-duplication check inside the `injectFiles` core function so that a `#@<path>` token whose absolute path **already appears in a `<file name="<abs>">` block in the input `text`** is skipped (not re-injected). This fixes **Issue 1** — every `#@file` being injected twice when a non-sentinel copy of the extension co-loads (the default `pi -e ./sharp-at-file.ts` path in an environment where the extension is also installed globally).
+**Feature Goal**: Add a single, cooperation-independent per-token de-duplication check inside the `injectFiles` core function so that a `#@<path>` token whose absolute path **already appears in a `<file name="<abs>">` block in the input `text`** is skipped (not re-injected). This fixes **Issue 1** — every `#@file` being injected twice when a non-sentinel copy of the extension co-loads (the default `pi -e ./file-injector.ts` path in an environment where the extension is also installed globally).
 
-**Deliverable**: A one-line insertion (plus a descriptive comment) inside the existing `injectFiles` function in `./sharp-at-file.ts`, between the `abs` resolution (line 145) and the `let st;` declaration (line 147). No new files. No change to the function's signature, return type, or interface. No change to the test harness (that is a different subtask).
+**Deliverable**: A one-line insertion (plus a descriptive comment) inside the existing `injectFiles` function in `./file-injector.ts`, between the `abs` resolution (line 145) and the `let st;` declaration (line 147). No new files. No change to the function's signature, return type, or interface. No change to the test harness (that is a different subtask).
 
 **Success Definition**:
 - [ ] The line `if (text.includes('<file name="' + abs + '">')) continue;` exists inside the `for (const m of text.matchAll(FILE_INJECT_RE))` loop, **after** `const abs = expandTildeAndResolve(token, ctx.cwd);` and **before** `let st;`.
-- [ ] The existing model-free harness still reports **28 passed, 0 failed** (`node ./sharp-at-file.test.mjs`) — no regression.
+- [ ] The existing model-free harness still reports **28 passed, 0 failed** (`node ./file-injector.test.mjs`) — no regression.
 - [ ] A one-off verification script (provided verbatim below) shows: clean-text baseline → `injected === 1`; already-injected text (with AND without the sentinel) → `injected === 0`. The non-sentinel case is the direct proof that Issue 1 is fixed.
 - [ ] No other code is touched. The sentinel mechanism (`INJECT_SENTINEL`, `SENTINEL_RE`, handler guard, assembly insertion) is **left intact** — removing it is the next subtask (S2).
 
-> **Scope boundary (read carefully):** This subtask adds ONLY the dedup check. It does **NOT** (a) remove the sentinel constants / handler guard / assembly insertion — that is **S2** ("Remove sentinel mechanism entirely", fixes Issues 2 + 6); (b) change the `FILE_INJECT_RE` regex for Unicode — that is **M1.T2.S1** (Issue 5); (c) add or modify test cases in `sharp-at-file.test.mjs` — that is **M2.T1.S1**; (d) touch the README — that is **M3**. Issues 2 (sentinel-in-prompt false-negative) and 6 (assembly format deviation) will **remain after this task by design**; they are S2's scope.
+> **Scope boundary (read carefully):** This subtask adds ONLY the dedup check. It does **NOT** (a) remove the sentinel constants / handler guard / assembly insertion — that is **S2** ("Remove sentinel mechanism entirely", fixes Issues 2 + 6); (b) change the `FILE_INJECT_RE` regex for Unicode — that is **M1.T2.S1** (Issue 5); (c) add or modify test cases in `file-injector.test.mjs` — that is **M2.T1.S1**; (d) touch the README — that is **M3**. Issues 2 (sentinel-in-prompt false-negative) and 6 (assembly format deviation) will **remain after this task by design**; they are S2's scope.
 
 ## User Persona
 
-**Target User**: End users of the `#@file` extension — specifically anyone who has the extension installed in **more than one location** (e.g. globally via `~/.pi/agent/extensions/sharp-at-file.ts` AND project-locally or via `-e`), which the README itself recommends as an "always-on" setup.
+**Target User**: End users of the `#@file` extension — specifically anyone who has the extension installed in **more than one location** (e.g. globally via `~/.pi/agent/extensions/file-injector.ts` AND project-locally or via `-e`), which the README itself recommends as an "always-on" setup.
 
-**Use Case**: A user runs `pi -e ./sharp-at-file.ts -p "Review #@secret.txt"` to test or run the extension. In an environment with a second (e.g. global) copy co-loaded, every file referenced via `#@` is currently injected **twice**, doubling token cost and confusing the model with duplicate content. After this fix, each file is injected **exactly once**.
+**Use Case**: A user runs `pi -e ./file-injector.ts -p "Review #@secret.txt"` to test or run the extension. In an environment with a second (e.g. global) copy co-loaded, every file referenced via `#@` is currently injected **twice**, doubling token cost and confusing the model with duplicate content. After this fix, each file is injected **exactly once**.
 
 **Pain Points Addressed**: Silent token-cost doubling and model confusion from duplicated `<file>` blocks on the primary documented usage path (`pi -e …`).
 
@@ -75,7 +75,7 @@ The check is a plain `String.prototype.includes` substring test (not a regex), s
   section: "§Issue 1, §Testing Summary"
 
 # The file being EDITED (read the injectFiles function before editing)
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "The injectFiles function (line 131) and its for-loop (line 140). The insertion site is between
         line 145 (abs resolution) and line 147 (let st;)."
   pattern: "Match the existing inline-comment style (terse, cites PRD section). Insert the dedup line
@@ -84,22 +84,22 @@ The check is a plain `String.prototype.includes` substring test (not a regex), s
         already contain <file> blocks appended by a prior copy. It is NOT the local `blocks` array."
 
 # The test harness (run it for regression; DO NOT modify it in this task)
-- file: ./sharp-at-file.test.mjs
+- file: ./file-injector.test.mjs
   why: "The project's hermetic model-free gate (28 cases). Lines 1-70 show the jiti+alias import pattern
-        reused by the verification script below. Run `node ./sharp-at-file.test.mjs` → must stay 28/28."
-  pattern: "imports the REAL ./sharp-at-file.ts via jiti; named exports on `mod` (injectFiles, cleanToken, format*Block, hasValidImageMagic)"
+        reused by the verification script below. Run `node ./file-injector.test.mjs` → must stay 28/28."
+  pattern: "imports the REAL ./file-injector.ts via jiti; named exports on `mod` (injectFiles, cleanToken, format*Block, hasValidImageMagic)"
   gotcha: "Modifying this harness (adding co-load/sentinel tests) is M2.T1.S1's scope — NOT this task."
 ```
 
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── PRD.md                       # (original feature PRD — not the bug-fix PRD)
 ├── README.md                    # extension docs (M3 updates this, NOT this task)
-├── sharp-at-file.ts             # ← THE FILE BEING EDITED (249 lines). injectFiles at line 131.
-├── sharp-at-file.test.mjs       # model-free harness (28 cases) — run, do NOT edit
+├── file-injector.ts             # ← THE FILE BEING EDITED (249 lines). injectFiles at line 131.
+├── file-injector.test.mjs       # model-free harness (28 cases) — run, do NOT edit
 └── plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/
     ├── architecture/{system_context.md, code_changes_analysis.md}  # READ for root cause + exact edit
     ├── prd_snapshot.md / prd_index.txt / tasks.json / TEST_RESULTS.md
@@ -112,7 +112,7 @@ The check is a plain `String.prototype.includes` substring test (not a regex), s
 
 ```bash
 .
-└── sharp-at-file.ts             # MODIFIED — +1 line (+comment) inside injectFiles for-loop. Nothing else.
+└── file-injector.ts             # MODIFIED — +1 line (+comment) inside injectFiles for-loop. Nothing else.
 # No new files. No harness changes. No README changes.
 ```
 
@@ -155,7 +155,7 @@ None. No data model changes. `injectFiles`'s signature and return type are uncha
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: EDIT ./sharp-at-file.ts — insert per-token dedup inside the injectFiles for-loop
+Task 1: EDIT ./file-injector.ts — insert per-token dedup inside the injectFiles for-loop
   - OBJECTIVE: Skip a matched #@token if its resolved absolute path already appears in a <file> block in `text`.
   - FIND (exact, current text at lines 145-147):
         const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
@@ -178,7 +178,7 @@ Task 1: EDIT ./sharp-at-file.ts — insert per-token dedup inside the injectFile
       * remove or alter INJECT_SENTINEL / SENTINEL_RE / the handler sentinel guard / the assembly line
         (those are S2).
       * change FILE_INJECT_RE (that is M1.T2.S1).
-      * edit sharp-at-file.test.mjs or README.md (separate subtasks).
+      * edit file-injector.test.mjs or README.md (separate subtasks).
       * scan the local `blocks` array instead of `text` — the contract is explicit: check `text`.
   - DEPENDENCIES: none (injectFiles and its helpers already exist and are unchanged).
 ```
@@ -222,22 +222,22 @@ NO NEW INTEGRATION POINTS:
 
 ## Validation Loop
 
-> This repo has **no test framework / linter / type-checker** — it is a single-file Pi extension validated by a **model-free Node ESM harness** (`sharp-at-file.test.mjs`, 28 cases, run via `node`). The Python-oriented `pytest`/`mypy`/`ruff` gates from the base template DO NOT APPLY. The gates below are project-specific and have been **verified working on this machine in both directions** (they currently FAIL on the buggy code and will PASS after the fix).
+> This repo has **no test framework / linter / type-checker** — it is a single-file Pi extension validated by a **model-free Node ESM harness** (`file-injector.test.mjs`, 28 cases, run via `node`). The Python-oriented `pytest`/`mypy`/`ruff` gates from the base template DO NOT APPLY. The gates below are project-specific and have been **verified working on this machine in both directions** (they currently FAIL on the buggy code and will PASS after the fix).
 
 ### Level 1: Edit Verification (Immediate Feedback)
 
 ```bash
 # 1a. The new dedup line is present, inside injectFiles, before fs.stat(abs), and references `text` + `abs`.
-grep -n "text.includes('<file name=\"' + abs + '\">')" sharp-at-file.ts
+grep -n "text.includes('<file name=\"' + abs + '\">')" file-injector.ts
 # Expected: exactly ONE matching line, located between the `expandTildeAndResolve` line and `let st;`.
 
 # 1b. Placement check: the dedup line must come AFTER `const abs =` and BEFORE `await fs.stat(abs)`.
 awk '/const abs = expandTildeAndResolve/{a=NR} /text.includes..<file name/{d=NR} /await fs.stat.abs/{s=NR}
-     END{print "abs="a" dedup="d" stat="s; exit !(a && d && s && a < d && d < s)}' sharp-at-file.ts \
+     END{print "abs="a" dedup="d" stat="s; exit !(a && d && s && a < d && d < s)}' file-injector.ts \
   && echo "OK: order abs < dedup < stat" || echo "FAIL: dedup not between abs and stat"
 
 # 1c. Sentinel mechanism is INTACT (this task must NOT remove it — S2 does):
-grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts
+grep -cE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts
 # Expected: >= 4 (constant def ×2 + handler guard + assembly). If 0 → you accidentally removed the sentinel; revert that.
 
 # Expected: 1a prints one line; 1b prints OK; 1c prints >= 4.
@@ -247,7 +247,7 @@ grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts
 
 ```bash
 # The project's hermetic model-free gate. MUST remain 28 passed / 0 failed.
-node ./sharp-at-file.test.mjs
+node ./file-injector.test.mjs
 # Expected: "Result: 28 passed, 0 failed." and exit code 0.
 # If ANY case fails: the dedup insertion broke something. Re-read the failure, confirm you did not
 # alter the sentinel/regex/format functions, and fix before proceeding.
@@ -273,7 +273,7 @@ const jiti = createJiti(import.meta.url, {
     "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
   },
 });
-const mod = await jiti.import(path.resolve("sharp-at-file.ts"));
+const mod = await jiti.import(path.resolve("file-injector.ts"));
 
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), "dedup-"));
 await fs.writeFile(path.join(TMP, "a.ts"), "canary\n");
@@ -303,12 +303,12 @@ rm -f /tmp/verify_dedup.mjs
 
 ### Level 4: Live Pi Co-Load Reproduction (Integration — OPTIONAL, needs a model)
 
-Only if a provider/API key is configured AND a second (e.g. global `~/.pi/agent/extensions/sharp-at-file.ts`) copy is present. This is the exact repro from the Bug-fix PRD §Issue 1. The fix is already proven by Level 3; this just confirms end-to-end.
+Only if a provider/API key is configured AND a second (e.g. global `~/.pi/agent/extensions/file-injector.ts`) copy is present. This is the exact repro from the Bug-fix PRD §Issue 1. The fix is already proven by Level 3; this just confirms end-to-end.
 
 ```bash
 mkdir -p /tmp/saf-e2e && printf 'The canary is MAROON-PELICAN-4297 once.\n' > /tmp/saf-e2e/secret.txt
 # NOTE: this exercises the handler (sentinel guard STILL present until S2). With BOTH copies loaded:
-pi --model "deepseek/deepseek-chat" --no-tools -e ./sharp-at-file.ts -p \
+pi --model "deepseek/deepseek-chat" --no-tools -e ./file-injector.ts -p \
   'Review #@/tmp/saf-e2e/secret.txt — how many <file> blocks and how many MAROON-PELICAN-4297? Reply: BLOCKS=<n> CANARY=<n>'
 # Before fix: BLOCKS=2 CANARY=2. AFTER this fix: BLOCKS=1 CANARY=1 (dedup fires on the repo copy).
 # (Issue 2 — sentinel-in-prompt — is NOT fixed by this task; that's S2.)
@@ -318,7 +318,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -e ./sharp-at-file.ts -p \
 
 ### Technical Validation
 - [ ] Level 1: grep finds exactly one dedup line; `awk` confirms order `abs < dedup < stat`; sentinel refs still ≥ 4.
-- [ ] Level 2: `node ./sharp-at-file.test.mjs` → **28 passed, 0 failed**, exit 0.
+- [ ] Level 2: `node ./file-injector.test.mjs` → **28 passed, 0 failed**, exit 0.
 - [ ] Level 3: `/tmp/verify_dedup.mjs` → baseline `1`, both dedup cases `0`, "ALL PASS", exit 0.
 - [ ] Level 4 (optional): live co-load repro shows `BLOCKS=1 CANARY=1` (was `2`/`2`).
 
@@ -331,7 +331,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -e ./sharp-at-file.ts -p \
 ### Code Quality Validation
 - [ ] Only ONE line (+ comment) added; no other code changed.
 - [ ] Sentinel mechanism, regex, format helpers, handler guards — all untouched.
-- [ ] Test harness (`sharp-at-file.test.mjs`) and README — untouched.
+- [ ] Test harness (`file-injector.test.mjs`) and README — untouched.
 - [ ] Dedup checks the `text` parameter (not the local `blocks` array), using `String.includes` (not regex).
 
 ### Documentation & Deployment
@@ -346,7 +346,7 @@ pi --model "deepseek/deepseek-chat" --no-tools -e ./sharp-at-file.ts -p \
 - ❌ Don't use a `RegExp` for the check — `abs` may contain regex-special chars (`.` `[` `]` `(` `)` `*` `+`); use `String.includes`.
 - ❌ Don't place the check before `abs` is resolved, or after `fs.stat` — it must be after `expandTildeAndResolve` (so `abs` matches the path used in prior `<file>` blocks) and before any I/O.
 - ❌ Don't remove or alter the sentinel in this task (`INJECT_SENTINEL`, `SENTINEL_RE`, handler guard, assembly) — that's S2. Issues 2 and 6 remain open by design after this task.
-- ❌ Don't edit `sharp-at-file.test.mjs` (add co-load/sentinel tests) — that's M2.T1.S1. The Level-3 verify script is a throwaway, not a harness change.
+- ❌ Don't edit `file-injector.test.mjs` (add co-load/sentinel tests) — that's M2.T1.S1. The Level-3 verify script is a throwaway, not a harness change.
 - ❌ Don't change `FILE_INJECT_RE` for Unicode here — that's M1.T2.S1 (Issue 5).
 - ❌ Don't "improve" by also deduping within a single call (e.g. `#@./a.ts` + `#@a.ts`) — out of scope; the check intentionally only sees prior-transform text.
 

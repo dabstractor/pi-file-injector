@@ -1,9 +1,9 @@
 ---
 name: "P1.M2.T5.S1 — Create README.md: extension purpose, installation, usage, behavior, known limitations"
 prd_ref: "PRD §1 (Overview/Solution/Value/Tagline), §2 (Goals/Non-Goals), §4 (Syntax spec), §5 (Behavior by file type), §10 (Edge cases), §12 (Implementation notes), §13 (Design rationale & tradeoffs), Appendix A (tagline)"
-target_file: "./README.md"   # NEW — repo root, alongside sharp-at-file.ts + sharp-at-file.test.mjs
+target_file: "./README.md"   # NEW — repo root, alongside file-injector.ts + file-injector.test.mjs
 target_language: Markdown (GitHub-flavored; renders in pi's renderer, GitHub, VS Code, etc.)
-depends_on: "P1.M2.T4.S1 (the VALIDATED extension — all 14 §11 criteria passing; its validation_report.md is the source of truth for ACTUAL behavior). P1.M1.T1–T3 (the shipped sharp-at-file.ts)."
+depends_on: "P1.M2.T4.S1 (the VALIDATED extension — all 14 §11 criteria passing; its validation_report.md is the source of truth for ACTUAL behavior). P1.M1.T1–T3 (the shipped file-injector.ts)."
 consumed_by: "None — this is the terminal documentation task (Mode B changeset-level doc sweep). Closes milestone P1.M2 / the whole P1 MVP."
 ---
 
@@ -14,18 +14,18 @@ consumed_by: "None — this is the terminal documentation task (Mode B changeset
 **Feature Goal**: Write one comprehensive, accurate, user-facing **`./README.md`** (repo root) that is the
 single source of truth for the `#@file` extension: what it does, how to install it, how to use it, how
 it behaves for each file type, why its core design choices are what they are, and exactly what its known
-limitations are. Every documented behavior MUST match the **shipped** `sharp-at-file.ts` and the **T4.S1
+limitations are. Every documented behavior MUST match the **shipped** `file-injector.ts` and the **T4.S1
 validation report** — including the one place where actual behavior diverges from the PRD's pre-validation
 intent (the fenced-code-block case, Finding F1).
 
-**Deliverable**: A single new file **`./README.md`** (repo root, `/home/dustin/projects/pi-auto-reader/README.md`).
+**Deliverable**: A single new file **`./README.md`** (repo root, `/home/dustin/projects/pi-file-injector/README.md`).
 ~150–250 lines of GitHub-flavored Markdown. No other files are created or modified.
 
 **Success Definition**:
 - [ ] A user who has never seen this repo can, reading ONLY `README.md`: (a) install the extension in
       under a minute, (b) correctly predict whether a given prompt like `Review #@a.ts` or
       `the foo#@bar thing` will inject, and (c) name the four known limitations and the escape hatch.
-- [ ] Every behavioral claim in the README is **verified** against `sharp-at-file.ts` (the source) and
+- [ ] Every behavioral claim in the README is **verified** against `file-injector.ts` (the source) and
       `P1M2T4S1/validation_report.md` (the run evidence). Zero statements that contradict shipped
       behavior. The fenced-code limitation documents the **actual** behavior (no-match when followed by a
       backtick), NOT the PRD §10 row's pre-validation assumption ("still matched").
@@ -33,13 +33,13 @@ intent (the fenced-code-block case, Finding F1).
       byte-accurate (copy-pasteable strings taken from the source constants).
 - [ ] The "Relationship to `@`" section is unambiguous and states `@` is left untouched (test #14).
 - [ ] Installation section covers BOTH the auto-discovery placements (global `~/.pi/agent/extensions/`,
-      project-local `.pi/extensions/`), the quick-test `pi -e ./sharp-at-file.ts` flag, and `/reload`.
+      project-local `.pi/extensions/`), the quick-test `pi -e ./file-injector.ts` flag, and `/reload`.
 - [ ] The README renders cleanly (valid Markdown, no broken tables/fences), and the examples it contains
-      are the SAME examples the test harness `node ./sharp-at-file.test.mjs` actually exercises (so a
+      are the SAME examples the test harness `node ./file-injector.test.mjs` actually exercises (so a
       reader can run them and see green).
 
 > **Scope boundary (read carefully):** This is a DOCUMENTATION task. You write `./README.md` and NOTHING
-> else. You do NOT touch `sharp-at-file.ts`, `PRD.md`, `tasks.json`, `prd_snapshot.md`, or the
+> else. You do NOT touch `file-injector.ts`, `PRD.md`, `tasks.json`, `prd_snapshot.md`, or the
 > architecture docs. You do NOT add a `package.json`, `LICENSE`, `CONTRIBUTING.md`, or `CHANGELOG.md`
 > (out of scope — this is the one README task). You do NOT invent behavior: every claim is sourced from
 > the PRD, the shipped source, or the validation report (cite §/line when non-obvious). When the PRD and
@@ -54,7 +54,7 @@ particular `#@` token did or did not inject.
 **Use Case**: "I'm about to ask Pi to review `a.ts`. Instead of typing the file contents or waiting for a
 `read` tool round-trip, I write `Review #@a.ts` and the file is already in the prompt."
 
-**User Journey**: finds the repo → reads `README.md` → copies `sharp-at-file.ts` to
+**User Journey**: finds the repo → reads `README.md` → copies `file-injector.ts` to
 `~/.pi/agent/extensions/` → runs `pi` → types `Review #@a.ts` → sees the model respond about the file's
 contents with no `read` tool call. If a `#@` doesn't behave as expected, they scroll to "Known
 Limitations" / "Behavior by file type" and find the exact rule that explains it.
@@ -109,11 +109,11 @@ Create ONE new file: `./README.md` at the repo root. It must contain, top-to-bot
 - [ ] `./README.md` exists at repo root and renders as valid GFM (tables and fenced code blocks intact).
 - [ ] All 10 sections above are present and non-stub.
 - [ ] The behavior table's block strings are byte-identical to the `format*Block` outputs in
-      `sharp-at-file.ts` (cross-check against the source constants — see blueprint).
+      `file-injector.ts` (cross-check against the source constants — see blueprint).
 - [ ] The known-limitations section documents the **actual** fenced-code behavior (F1: no-match when
       followed by a backtick; workaround `# @`), not the PRD §10 assumption.
-- [ ] Installation section names the global path `~/.pi/agent/extensions/sharp-at-file.ts`, the
-      project-local path `.pi/extensions/sharp-at-file.ts`, and the `pi -e ./sharp-at-file.ts` flag, plus
+- [ ] Installation section names the global path `~/.pi/agent/extensions/file-injector.ts`, the
+      project-local path `.pi/extensions/file-injector.ts`, and the `pi -e ./file-injector.ts` flag, plus
       `/reload` for hot reload.
 - [ ] The "Relationship to `@`" section explicitly states bare `@` is unaffected (PRD §2, test #14).
 
@@ -123,9 +123,9 @@ Create ONE new file: `./README.md` at the repo root. It must contain, top-to-bot
 
 > _"If someone knew nothing about this codebase, would they have everything needed to implement this
 > successfully?"_ — **YES.** This PRP ships: the exact 10-section structure, the VERIFIED tagline string,
-the byte-accurate block formats (lifted from `sharp-at-file.ts` constants + `validation_report.md`), the
+the byte-accurate block formats (lifted from `file-injector.ts` constants + `validation_report.md`), the
 VERIFIED install paths (from pi's own `docs/extensions.md` + `architecture/extension_patterns.md` §5),
-the EXACT 4–6 usage examples (the same ones `sharp-at-file.test.mjs` runs), the VERIFIED F1 fenced-code
+the EXACT 4–6 usage examples (the same ones `file-injector.test.mjs` runs), the VERIFIED F1 fenced-code
 finding (with the precise explanation of WHY a backtick isn't trimmed), a README format reference
 (`examples/extensions/subagent/README.md`), and a single re-runnable verification command. The
 implementer needs no access to `dist/` and no external research — everything is in the repo + the PRD.
@@ -134,7 +134,7 @@ implementer needs no access to `dist/` and no external research — everything i
 
 ```yaml
 # MUST READ — the artifact being documented (READ-ONLY; this is the source of truth for ACTUAL behavior)
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "The COMPLETE shipped extension. The README's every behavioral claim is verified against this file.
         Read the 8 exports + the default factory, the FILE_INJECT_RE / MIME_BY_EXT / TRAILING_PUNCT
         constants, the 3 handler guards, the injectFiles assembly, and the format*Block helpers."
@@ -168,10 +168,10 @@ implementer needs no access to `dist/` and no external research — everything i
         actual behavior and note the PRD intent parenthetically — do NOT silently copy the PRD's claim."
 
 # MUST READ — the model-free acceptance harness (the README's examples + the verification command)
-- file: ./sharp-at-file.test.mjs
+- file: ./file-injector.test.mjs
   why: "The exact example prompts the README should mirror (Review #@a.ts, Summarize #@huge.log, Describe
         #@pic.png, Inspect #@data.bin, Diff #@a.ts vs #@b.ts, Read #@~/notes.md, See #@a.ts., Review @a.ts)
-        AND the one re-runnable verification command: `node ./sharp-at-file.test.mjs`. Reuse these
+        AND the one re-runnable verification command: `node ./file-injector.test.mjs`. Reuse these
         examples verbatim so a reader can run the harness and see them pass."
 
 # SHOULD READ — install conventions + README format references (verified against the installed package)
@@ -220,14 +220,14 @@ implementer needs no access to `dist/` and no external research — everything i
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .gitignore            # ignores node_modules/, dist/, .pi-subagents/ — NOT README.md ✓
 ├── PRD.md                # READ-ONLY source of truth (cite §s; do NOT edit)
-├── sharp-at-file.ts      # ← COMPLETE shipped extension (8 exports + default). READ-ONLY; the README
+├── file-injector.ts      # ← COMPLETE shipped extension (8 exports + default). READ-ONLY; the README
 │                         #   documents THIS file's actual behavior.
-├── sharp-at-file.test.mjs# ← model-free acceptance harness. README examples mirror its prompts; the
-│                         #   'Testing' section cites `node ./sharp-at-file.test.mjs`.
+├── file-injector.test.mjs# ← model-free acceptance harness. README examples mirror its prompts; the
+│                         #   'Testing' section cites `node ./file-injector.test.mjs`.
 └── plan/
     └── 001_5aa8724eb506/
         ├── architecture/{api_verification,system_context,external_deps,extension_patterns}.md
@@ -340,14 +340,14 @@ in "What" above). Use this skeleton:
 <#@ = whole file always; @ = unchanged; coexist>
 
 ## Testing
-<`node ./sharp-at-file.test.mjs`; what it asserts; cite the validation report>
+<`node ./file-injector.test.mjs`; what it asserts; cite the validation report>
 ```
 
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
 Task 1: CREATE ./README.md (repo root; NEW file — the ONLY deliverable)
-  - OBJECTIVE: comprehensive, accurate user-facing docs sourced from sharp-at-file.ts + PRD + T4.S1 report.
+  - OBJECTIVE: comprehensive, accurate user-facing docs sourced from file-injector.ts + PRD + T4.S1 report.
   - STRUCTURE (top-to-bottom — the 10 sections below; titles may be reworded, content is mandatory):
 
     (S1) TITLE + TAGLINE.
@@ -373,24 +373,24 @@ Task 1: CREATE ./README.md (repo root; NEW file — the ONLY deliverable)
          - GLOBAL (recommended for "always on"):
              ```bash
              mkdir -p ~/.pi/agent/extensions
-             cp sharp-at-file.ts ~/.pi/agent/extensions/sharp-at-file.ts
+             cp file-injector.ts ~/.pi/agent/extensions/file-injector.ts
              ```
            then start `pi` (or run `/reload` if already running).
          - PROJECT-LOCAL (per-repo; loads after the project is trusted):
              ```bash
              mkdir -p .pi/extensions
-             cp sharp-at-file.ts .pi/extensions/sharp-at-file.ts
+             cp file-injector.ts .pi/extensions/file-injector.ts
              ```
          - QUICK TEST (one-off, no install):
              ```bash
-             pi -e ./sharp-at-file.ts
+             pi -e ./file-injector.ts
              ```
-           (also show the `-p` form: `pi -e ./sharp-at-file.ts -p "Review #@a.ts"`.)
+           (also show the `-p` form: `pi -e ./file-injector.ts -p "Review #@a.ts"`.)
          - A short note: "No build step, no dependencies. Pi loads `.ts` extensions via jiti
-           (transpile-on-load), so the single `sharp-at-file.ts` file is all you need." (Cite pi docs.)
+           (transpile-on-load), so the single `file-injector.ts` file is all you need." (Cite pi docs.)
 
     (S4) QUICK START. One fenced block with 4–6 copy-pasteable prompts — use the SAME prompts the test
-         harness asserts (so a reader can `node ./sharp-at-file.test.mjs` and see them pass):
+         harness asserts (so a reader can `node ./file-injector.test.mjs` and see them pass):
              ```text
              Review #@a.ts
              Describe #@pic.png
@@ -403,7 +403,7 @@ Task 1: CREATE ./README.md (repo root; NEW file — the ONLY deliverable)
          your message; the original `#@path` marker stays as a readable reference.
 
     (S5) BEHAVIOR BY FILE TYPE — a pipe table. Each row's "Output" cell must be the byte-accurate block
-         from sharp-at-file.ts (verify against formatTextFileBlock/formatImageBlock/formatBinaryBlock):
+         from file-injector.ts (verify against formatTextFileBlock/formatImageBlock/formatBinaryBlock):
            | File type | What `#@path` does | Output appended to your prompt |
            |---|---|---|
            | Text (`.ts`, `.md`, `.json`, `.log`, …) | Entire file contents injected, no truncation | `<file name="/abs/path">\n<entire contents>\n</file>` |
@@ -416,7 +416,7 @@ Task 1: CREATE ./README.md (repo root; NEW file — the ONLY deliverable)
          is resized; on tiny/undecodable images `resizeImage` returns null and the hints are empty (the
          raw image bytes are still attached). Keep the row's "(plus the image is attached)" phrasing.
 
-    (S6) SYNTAX. Sourced from PRD §4. Verify against FILE_INJECT_RE in sharp-at-file.ts:
+    (S6) SYNTAX. Sourced from PRD §4. Verify against FILE_INJECT_RE in file-injector.ts:
          - Grammar: `` `#@<path>` `` — the two-char trigger `#@` immediately followed by a path token
            (a maximal run of non-whitespace characters).
          - Where it matches: at the start of the prompt, OR right after a non-word character (space,
@@ -468,21 +468,21 @@ Task 1: CREATE ./README.md (repo root; NEW file — the ONLY deliverable)
 
     (S10) TESTING. One fenced block + 2 sentences:
              ```bash
-             node ./sharp-at-file.test.mjs     # model-free; exits 0 iff all assertions pass
+             node ./file-injector.test.mjs     # model-free; exits 0 iff all assertions pass
              ```
-         Note: the harness imports the REAL `sharp-at-file.ts` (via jiti, like Pi's loader), runs all 14
+         Note: the harness imports the REAL `file-injector.ts` (via jiti, like Pi's loader), runs all 14
          PRD §11 acceptance cases + edge cases + handler guards, and prints a pass/fail matrix. See
          `plan/001_5aa8724eb506/P1M2T4S1/validation_report.md` for the full recorded results (23 passed,
          0 failed at last run). No network, no model API key, no Pi process required.
 
-  - NAMING/PLACEMENT: file `README.md` at the REPO ROOT (alongside `sharp-at-file.ts`). NOT under
+  - NAMING/PLACEMENT: file `README.md` at the REPO ROOT (alongside `file-injector.ts`). NOT under
         plan/, NOT in a subdirectory. (GitHub and most tools surface a root README.md automatically.)
   - FOLLOW pattern: the section discipline + fenced-```bash install idioms of
         examples/extensions/subagent/README.md and examples/extensions/README.md. GFM pipe tables.
   - DEPENDENCIES: none (Markdown only). Do NOT create package.json/LICENSE/etc.
 
 Task 2: SELF-VERIFY the README against the source (NO code changes — cross-check only)
-  - For EACH behavioral claim in the README, open sharp-at-file.ts and confirm the claim matches the
+  - For EACH behavioral claim in the README, open file-injector.ts and confirm the claim matches the
     constant/function. Specifically confirm:
       * the behavior table's block strings equal formatTextFileBlock/formatImageBlock/formatBinaryBlock
         outputs (S5);
@@ -494,7 +494,7 @@ Task 2: SELF-VERIFY the README against the source (NO code changes — cross-che
         try/catch in injectFiles;
       * the F1 limitation (S8 bullet 3) matches validation_report.md Finding F1 (injected===0 for the
         backtick case), NOT the PRD §10 row.
-  - If ANY claim is wrong: fix the README (it's YOUR file this task) — never edit sharp-at-file.ts.
+  - If ANY claim is wrong: fix the README (it's YOUR file this task) — never edit file-injector.ts.
 ```
 
 ### Implementation Patterns & Key Details
@@ -505,7 +505,7 @@ Task 2: SELF-VERIFY the README against the source (NO code changes — cross-che
 Note: the backticks wrap `#@file`; the dashes are regular ASCII hyphens (NOT em dashes). Copy it exactly. -->
 
 <!-- PATTERN: the behavior table is the single most-referenced part. Make the "Output" column copy-
-     pasteable and byte-accurate. The three non-trivial cells (lifted from sharp-at-file.ts):
+     pasteable and byte-accurate. The three non-trivial cells (lifted from file-injector.ts):
 
   TEXT   ->  <file name="/abs/path/to/file.ts">
              <entire file contents>
@@ -546,7 +546,7 @@ Note: the backticks wrap `#@file`; the dashes are regular ASCII hyphens (NOT em 
 NO production integration changes (documentation-only task).
 FILE LAYOUT:
   - creates: ./README.md (repo root; the sole new file)
-  - reads (READ-ONLY, for accuracy): ./sharp-at-file.ts, ./sharp-at-file.test.mjs, PRD.md,
+  - reads (READ-ONLY, for accuracy): ./file-injector.ts, ./file-injector.test.mjs, PRD.md,
         plan/001_5aa8724eb506/P1M2T4S1/validation_report.md, the architecture/*.md docs, and the
         installed pi package's docs/extensions.md + examples/extensions/**/README.md.
 GIT:
@@ -565,8 +565,8 @@ npx --yes markdownlint-cli2 ./README.md        # if npx is available; config-fre
 # OR a quick structural sanity check (headings + that the tagline + install fence are present):
 grep -n "^# #@file" ./README.md && \
 grep -n "inject the whole file, every time, everywhere" ./README.md && \
-grep -n "pi -e ./sharp-at-file.ts" ./README.md && \
-grep -n "node ./sharp-at-file.test.mjs" ./README.md && \
+grep -n "pi -e ./file-injector.ts" ./README.md && \
+grep -n "node ./file-injector.test.mjs" ./README.md && \
 echo "README structure OK"
 # Expected: all 5 grep lines print + "README structure OK". If any is missing, the section is absent —
 # add it. (No hard line-count requirement, but expect ~150–250 lines.)
@@ -577,11 +577,11 @@ echo "README structure OK"
 ```bash
 # 2a. The README's behavioral claims must match the SHIPPED source. Run the model-free harness — if it's
 #     green, every behavior the README documents (text/image/binary/missing/dir/mid-word/multi/tilde/
-#     trailing-punct/bare-@) is confirmed live against the real sharp-at-file.ts:
-node ./sharp-at-file.test.mjs
+#     trailing-punct/bare-@) is confirmed live against the real file-injector.ts:
+node ./file-injector.test.mjs
 # Expected: "X passed, 0 failed" and exit 0. If it fails, the README (or the extension) is describing
 # behavior that doesn't match — for THIS task, fix the README to match the harness's actual results
-# (do NOT touch sharp-at-file.ts; that belongs to the M1 subtasks).
+# (do NOT touch file-injector.ts; that belongs to the M1 subtasks).
 
 # 2b. The single most error-prone claim — the F1 fenced-code behavior. Confirm the README documents the
 #     ACTUAL behavior (no-match when followed by a backtick), not the PRD §10 assumption:
@@ -595,21 +595,21 @@ grep -n "backtick" ./README.md     # must mention the backtick mechanic
 ```bash
 # 3a. Install per the README's GLOBAL instructions and exercise a documented example:
 mkdir -p ~/.pi/agent/extensions
-cp ./sharp-at-file.ts ~/.pi/agent/extensions/sharp-at-file.ts
+cp ./file-injector.ts ~/.pi/agent/extensions/file-injector.ts
 # Then either start `pi` and type:  Review #@<some-local-file>
 # ...or use -p (the README documents this form too):
-pi -e ./sharp-at-file.ts -p "Review #@sharp-at-file.ts"
+pi -e ./file-injector.ts -p "Review #@file-injector.ts"
 # Expected: the model's prompt already contains the file in a <file name="…"> block; the model reviews
 # it WITHOUT calling the read tool (confirm in the transcript / user-message bubble). This is acceptance
 # case #12, already confirmed live in the validation report.
 
 # 3b. Confirm bare @ is untouched (the README's "Relationship to @" claim):
-pi -e ./sharp-at-file.ts -p "Review @sharp-at-file.ts"
-# Expected: the literal "@sharp-at-file.ts" reaches the model unchanged (no injection by this extension).
+pi -e ./file-injector.ts -p "Review @file-injector.ts"
+# Expected: the literal "@file-injector.ts" reaches the model unchanged (no injection by this extension).
 
 # 3c. Confirm format parity with the built-in @file (the README's selling point):
-pi @sharp-at-file.ts "ok"     # built-in CLI @file expansion
-# Expected: emits <file name="/abs/sharp-at-file.ts">\n<content>\n</file> — byte-identical CONTENT to
+pi @file-injector.ts "ok"     # built-in CLI @file expansion
+# Expected: emits <file name="/abs/file-injector.ts">\n<content>\n</file> — byte-identical CONTENT to
 # the #@ block (only the per-block trailing \n / assembly differ). This is acceptance case #13.
 ```
 
@@ -642,7 +642,7 @@ done
 - [ ] Renders as valid GFM: all pipe tables well-formed (header + separator row); all fenced code blocks
       closed; no stray HTML. (Level 1 + Level 4a.)
 - [ ] All 10 sections present and non-stub (Level 1 grep checks pass).
-- [ ] `node ./sharp-at-file.test.mjs` exits 0 (Level 2a) — confirms the documented behaviors match the
+- [ ] `node ./file-injector.test.mjs` exits 0 (Level 2a) — confirms the documented behaviors match the
       shipped source.
 - [ ] The F1 fenced-code limitation documents the ACTUAL behavior (backtick → no-match), with the `# @`
       escape hatch (Level 2b).
@@ -651,17 +651,17 @@ done
 ### Feature (Documentation) Validation
 
 - [ ] Tagline matches PRD §1.3 / Appendix A verbatim.
-- [ ] Behavior table's block strings are byte-accurate vs `format*Block` in `sharp-at-file.ts`.
+- [ ] Behavior table's block strings are byte-accurate vs `format*Block` in `file-injector.ts`.
 - [ ] Trimmed-punctuation char list matches the `TRAILING_PUNCT` constant (backtick ABSENT).
 - [ ] Installation covers global (`~/.pi/agent/extensions/`), project-local (`.pi/extensions/`), and
-      `pi -e ./sharp-at-file.ts`, plus `/reload` and the zero-build note.
+      `pi -e ./file-injector.ts`, plus `/reload` and the zero-build note.
 - [ ] Usage examples mirror the test harness prompts (a reader can run them and see green).
 - [ ] "Relationship to @" states bare `@` is untouched (test #14).
 - [ ] Known limitations cover all 5 (no size gate, spaces-in-paths, fenced-code/backtick, no dirs, no globs).
 
 ### Code Quality Validation
 
-- [ ] Every claim is sourced (PRD §, `sharp-at-file.ts` export/constant, or validation report) — no
+- [ ] Every claim is sourced (PRD §, `file-injector.ts` export/constant, or validation report) — no
       invented behavior.
 - [ ] Where the PRD and shipped behavior diverge (F1), the README leads with shipped behavior.
 - [ ] Professional tone; copy-pasteable fenced commands; no maintainer-internal `plan/` links in the
@@ -674,8 +674,8 @@ done
 
 - [ ] ONLY `./README.md` created. No `package.json`, `LICENSE`, `CHANGELOG`, `CONTRIBUTING`, `.gitignore`
       edits.
-- [ ] `sharp-at-file.ts` UNCHANGED. `PRD.md` UNCHANGED. `tasks.json` / `prd_snapshot.md` UNCHANGED.
-- [ ] `sharp-at-file.test.mjs` UNCHANGED (this task documents it, doesn't modify it).
+- [ ] `file-injector.ts` UNCHANGED. `PRD.md` UNCHANGED. `tasks.json` / `prd_snapshot.md` UNCHANGED.
+- [ ] `file-injector.test.mjs` UNCHANGED (this task documents it, doesn't modify it).
 
 ---
 
@@ -691,26 +691,26 @@ done
 - ❌ Don't paste the binary note with a hyphen instead of an em dash — the shipped string uses U+2014
   (the harness asserts it). Paste the real `—`.
 - ❌ Don't hardcode maintainer-specific absolute paths (`/home/dustin/...`) in install examples — use
-  `~/.pi/agent/extensions/` and `./sharp-at-file.ts` so the commands work for anyone.
+  `~/.pi/agent/extensions/` and `./file-injector.ts` so the commands work for anyone.
 - ❌ Don't link to internal `plan/.../PRP.md` files from the user-facing body (they're planning artifacts,
   not user docs). The "Testing" section may cite `plan/.../P1M2T4S1/validation_report.md` since that
   report ships in the repo and is the evidence for the test claims.
 - ❌ Don't create any file other than `./README.md`. (No LICENSE, no package.json, no CHANGELOG.)
-- ❌ Don't edit `sharp-at-file.ts`, `PRD.md`, `tasks.json`, `prd_snapshot.md`, or `.gitignore`.
+- ❌ Don't edit `file-injector.ts`, `PRD.md`, `tasks.json`, `prd_snapshot.md`, or `.gitignore`.
 
 ---
 
 ## Confidence Score
 
 **9/10.** Every load-bearing fact for a docs task is already in hand, first-hand:
-- ✅ The shipped extension's exact behavior, constants, and exports — read in full (`sharp-at-file.ts`).
+- ✅ The shipped extension's exact behavior, constants, and exports — read in full (`file-injector.ts`).
 - ✅ The post-validation evidence — read in full (`validation_report.md`), INCLUDING the F1 fenced-code
   divergence that corrects a PRD §10 assumption (the one place the README must not blindly copy the PRD).
 - ✅ The authoritative install conventions — read in full (pi's `docs/extensions.md` "Extension Locations"
   + "Quick Start" + the `/reload` placement note; `extension_patterns.md` §5 loading mechanics).
 - ✅ README format reference — read in full (`examples/extensions/subagent/README.md`,
   `examples/extensions/README.md`): section discipline, fenced-```bash install idioms, pipe tables.
-- ✅ The exact example prompts + the one re-runnable verification command — from `sharp-at-file.test.mjs`.
+- ✅ The exact example prompts + the one re-runnable verification command — from `file-injector.test.mjs`.
 - ✅ The PRD sections for design rationale — §1/§2/§4/§5/§10/§13/Appendix A.
 - The −1 is the inherent "a human's cold-read may find a phrasing ambiguous" residual (mitigated by the
   Level 4b cold-read test + the Level 2 accuracy cross-check against the harness).

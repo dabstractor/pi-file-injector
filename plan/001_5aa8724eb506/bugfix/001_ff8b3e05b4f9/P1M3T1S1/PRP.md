@@ -4,9 +4,9 @@ prd_ref: "Bug-fix PRD §Issue 3 (F3 magic-number sniff deviates from PRD §5.2) 
 target_file: "./README.md (§ 'Behavior by file type' ONLY — the table + the 'Notes on the table' bullets)"
 change_type: TWO additive edits to README.md — (1) modify the Image table row + insert a new 'Empty image' row; (2) append two explanatory bullets to 'Notes on the table'. No other file. No .ts. No .test.mjs.
 pi_version: "@earendil-works/pi-coding-agent v0.80.7"
-depends_on: "F3 (hasValidImageMagic) and F5 (formatEmptyImageBlock) code already LIVE in sharp-at-file.ts (lines 18-52, 78, and the injectFiles branches ~149-176). Harness cases F3a/F3b/F5 already codify the behavior. This task ONLY documents it. No code dependency to land."
+depends_on: "F3 (hasValidImageMagic) and F5 (formatEmptyImageBlock) code already LIVE in file-injector.ts (lines 18-52, 78, and the injectFiles branches ~149-176). Harness cases F3a/F3b/F5 already codify the behavior. This task ONLY documents it. No code dependency to land."
 fixes: "Closes Bug-fix PRD §Issue 3 + §Issue 4 'Suggested Fix: document the intentional divergence in the README' (both issues' recommended resolution is documentation)."
-scope_boundary: "Edits touch ONLY README.md § 'Behavior by file type' (the table rows + the 'Notes on the table' list). Does NOT touch README overview, Testing count, Syntax, Key design choices, or Known limitations — those belong to sibling P1.M3.T2.S1 ('Update README overview, test count, and known limitations', status Planned). Does NOT touch sharp-at-file.ts or sharp-at-file.test.mjs."
+scope_boundary: "Edits touch ONLY README.md § 'Behavior by file type' (the table rows + the 'Notes on the table' list). Does NOT touch README overview, Testing count, Syntax, Key design choices, or Known limitations — those belong to sibling P1.M3.T2.S1 ('Update README overview, test count, and known limitations', status Planned). Does NOT touch file-injector.ts or file-injector.test.mjs."
 ---
 
 # PRP — P1.M3.T1.S1 (Bugfix Docs): Document F3 & F5 in README
@@ -14,7 +14,7 @@ scope_boundary: "Edits touch ONLY README.md § 'Behavior by file type' (the tabl
 ## Goal
 
 **Feature Goal**: Update README.md § "Behavior by file type" so the F3 magic-number sniff and F5
-empty-image handling — both already LIVE in `sharp-at-file.ts` and codified by harness cases
+empty-image handling — both already LIVE in `file-injector.ts` and codified by harness cases
 `F3a`/`F3b`/`F5` — are documented as **deliberate, intentional enhancements**, not left as
 undocumented spec deviations. A reader of the README must understand: (1) an image is attached only
 after BOTH its extension *and* its actual bytes pass a magic-number sniff (a mislabeled `.png` falls
@@ -43,13 +43,13 @@ through to text/binary); (2) a 0-byte image attaches nothing and instead emits a
 - [ ] All new em dashes are **U+2014** (not hyphens) — consistent with the existing README voice
       (existing bullet 1 explicitly calls out "the `—` in the binary note is an em dash (U+2014)").
 - [ ] The table still renders correctly (every row has exactly 3 pipe-separated cells / 2 inner pipes).
-- [ ] `node ./sharp-at-file.test.mjs` still passes (defensive — this task must not touch code; if it
+- [ ] `node ./file-injector.test.mjs` still passes (defensive — this task must not touch code; if it
       fails, something went out of scope).
 
 > **Scope boundary (read carefully):** This task edits ONLY `README.md`, and ONLY within the
 > "Behavior by file type" section (the table + the "Notes on the table" list — README lines ~77-104).
-> It does **NOT**: (a) touch `sharp-at-file.ts` (F3/F5 code is already live and harness-verified);
-> (b) touch `sharp-at-file.test.mjs` (the parallel sibling P1.M2.T2.S1 owns the `U1` case there —
+> It does **NOT**: (a) touch `file-injector.ts` (F3/F5 code is already live and harness-verified);
+> (b) touch `file-injector.test.mjs` (the parallel sibling P1.M2.T2.S1 owns the `U1` case there —
 > disjoint file); (c) touch the README **overview**, **Testing** count, **Syntax**, **Key design
 > choices**, or **Known limitations** sections — those are P1.M3.T2.S1's scope (status Planned);
 > (d) change any existing prose outside the two named edit regions.
@@ -78,7 +78,7 @@ rather than bugs. This task closes that gap.
   the preferred fix, because the behaviors are *better* than the literal PRD (F3 avoids attaching
   decoded garbage; F5 avoids a provider-rejected empty image).
 - **The behavior is already shipped and tested.** `hasValidImageMagic` and `formatEmptyImageBlock`
-  are live in `sharp-at-file.ts`, and `F3a`/`F3b`/`F5` pin them in the harness. The only missing
+  are live in `file-injector.ts`, and `F3a`/`F3b`/`F5` pin them in the harness. The only missing
   piece is user-facing documentation. This is the lowest-risk, highest-clarity way to "reconcile
   spec vs. implementation."
 - **Prevents user confusion / mis-filed bugs.** Without this note, a user seeing `fake.png` injected
@@ -147,7 +147,7 @@ The exact `oldText` / `newText` for both edits are given verbatim in
   section: "Spec Deviations (Issues 3, 4 — Documentation Only)"
 
 # MUST READ — the code being documented (already LIVE, do NOT edit)
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "F3 = hasValidImageMagic (lines 18-52): routes by ext FIRST, then validates bytes. Sniffer
         covers PNG/JPEG/GIF/WEBP/BMP; <12 bytes fails. On fail → text/binary path, no image.
         F5 = formatEmptyImageBlock (line 78): '<file name=\"' + abs + '\"><empty image file \\u2014
@@ -159,7 +159,7 @@ The exact `oldText` / `newText` for both edits are given verbatim in
            documents them. Editing the .ts collides with the closed implementation and is out of scope."
 
 # MUST READ — the harness cases that codify the behavior (cite them in the README bullets)
-- file: ./sharp-at-file.test.mjs
+- file: ./file-injector.test.mjs
   why: "F3a (line ~552): fake.png (text body, .png ext) → injected===1, images.length===0, text
         <file> block. F3b (line ~563): hasValidImageMagic unit-level (real PNG passes, text fails,
         <12 fails, real JPEG passes). F5 (line ~571): empty.png (0 bytes) → injected===1,
@@ -184,12 +184,12 @@ The exact `oldText` / `newText` for both edits are given verbatim in
 
 ### Current Codebase tree (run `ls` in the repo root)
 ```bash
-# /home/dustin/projects/pi-auto-reader
+# /home/dustin/projects/pi-file-injector
 .
 ├── PRD.md                       # original feature PRD (read-only; not this task's PRD)
 ├── README.md                    # ← EDIT (§ 'Behavior by file type' ONLY)
-├── sharp-at-file.ts             # F3/F5 code already LIVE (lines 18-52, 78, 149-176). DO NOT EDIT.
-├── sharp-at-file.test.mjs       # F3a/F3b/F5 cases codify the behavior. DO NOT EDIT (sibling P1.M2.T2.S1).
+├── file-injector.ts             # F3/F5 code already LIVE (lines 18-52, 78, 149-176). DO NOT EDIT.
+├── file-injector.test.mjs       # F3a/F3b/F5 cases codify the behavior. DO NOT EDIT (sibling P1.M2.T2.S1).
 └── plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/
     ├── architecture/system_context.md   # §'Spec Deviations (Issues 3, 4)'
     ├── prd_snapshot.md / prd_index.txt / tasks.json
@@ -212,8 +212,8 @@ The exact `oldText` / `newText` for both edits are given verbatim in
 <!-- CRITICAL — the empty-image note block string MUST byte-match the code. The exact string is: -->
 <!--   <empty image file — 0 bytes; nothing to attach> -->
 <!-- where — is U+2014 (em dash), NOT a hyphen '-' and NOT an en dash '–'. -->
-<!-- Source: sharp-at-file.ts line 78 (formatEmptyImageBlock uses \u2014) and the harness F5 -->
-<!-- assertion (sharp-at-file.test.mjs ~line 577, also \u2014). Pasting a hyphen here is the #1 failure mode. -->
+<!-- Source: file-injector.ts line 78 (formatEmptyImageBlock uses \u2014) and the harness F5 -->
+<!-- assertion (file-injector.test.mjs ~line 577, also \u2014). Pasting a hyphen here is the #1 failure mode. -->
 
 <!-- CRITICAL — the magic-number sniff routes by EXTENSION FIRST, then validates bytes. -->
 <!-- Do NOT describe it as "byte-only routing." The accurate description: a file is attached as an -->
@@ -284,11 +284,11 @@ Task 2: EDIT ./README.md — append 2 bullets to 'Notes on the table' (contract 
 POST-FLIGHT:
   - Run the Level-1 validation greps (string presence, em-dash correctness, bullet count, table integrity).
   - git diff README.md — confirm changes are ONLY in § 'Behavior by file type'.
-  - Run Level-2: node ./sharp-at-file.test.mjs (defensive — must still pass; this task touches no code).
+  - Run Level-2: node ./file-injector.test.mjs (defensive — must still pass; this task touches no code).
 
 DO NOT (out of scope — owned by siblings / closed tasks):
-  * Edit sharp-at-file.ts (F3/F5 already live; closed implementation).
-  * Edit sharp-at-file.test.mjs (sibling P1.M2.T2.S1 owns the U1 case; disjoint region).
+  * Edit file-injector.ts (F3/F5 already live; closed implementation).
+  * Edit file-injector.test.mjs (sibling P1.M2.T2.S1 owns the U1 case; disjoint region).
   * Touch README overview / Testing count / Syntax / Key design choices / Known limitations
     (sibling P1.M3.T2.S1's scope, status Planned).
   * Edit PRD.md / tasks.json / prd_snapshot.md (read-only, owned by orchestrator).
@@ -384,8 +384,8 @@ are **U+2014 em dash**):
 ```yaml
 NO NEW INTEGRATION POINTS:
   - "Pure markdown documentation edit. No code, config, env vars, routes, or build step."
-  - "Consumes the ALREADY-LIVE F3/F5 code (sharp-at-file.ts lines 18-52, 78, 149-176) as its subject."
-  - "Cites the ALREADY-LIVE harness cases (F3a/F3b/F5 in sharp-at-file.test.mjs) for traceability."
+  - "Consumes the ALREADY-LIVE F3/F5 code (file-injector.ts lines 18-52, 78, 149-176) as its subject."
+  - "Cites the ALREADY-LIVE harness cases (F3a/F3b/F5 in file-injector.test.mjs) for traceability."
   - "If a future change alters F3/F5 behavior, the README bullets (and their harness-case citations)
      must be updated to match — the bullets are the user-facing contract for these behaviors."
 ```
@@ -400,7 +400,7 @@ NO NEW INTEGRATION POINTS:
 
 ### Level 1: Edit Verification (Immediate Feedback)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 
 # 1a. The empty-image note block string is present, with a U+2014 em dash (NOT a hyphen).
 grep -qF '<empty image file — 0 bytes; nothing to attach>' README.md \
@@ -432,7 +432,7 @@ awk '/^Notes on the table:/{f=1;next} /^## /{f=0} f && /^- /{c++} END{print "bul
 # 1g. SCOPE CHECK — only README.md changed, and the diff is confined to 'Behavior by file type'.
 git diff --name-only | grep -vxE 'README.md' && echo "FAIL: unexpected file changed" || echo "OK: only README.md"
 # Confirm no edits leaked into overview / Testing / Known limitations:
-git diff README.md | grep -nE '^\+.*(Known limitations|Quick test|Result: .* passed|node ./sharp-at-file)' \
+git diff README.md | grep -nE '^\+.*(Known limitations|Quick test|Result: .* passed|node ./file-injector)' \
   && echo "WARN: diff may touch out-of-scope sections — inspect" || echo "OK: no out-of-scope edits"
 
 # Expected: empty-image note present (U+2014, no hyphen variant); F3 documented; Empty image row
@@ -442,8 +442,8 @@ git diff README.md | grep -nE '^\+.*(Known limitations|Quick test|Result: .* pas
 
 ### Level 2: Defensive Harness Run (must still pass — this task touches no code)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
-node ./sharp-at-file.test.mjs
+cd /home/dustin/projects/pi-file-injector
+node ./file-injector.test.mjs
 # Expected: all cases pass (currently 30; P1.M2.T2.S1 may raise it to 31 in parallel — either way,
 # 0 failures), exit 0.
 # Rationale: this task edits ONLY README.md, so the harness CANNOT be affected. If it fails, the
@@ -453,7 +453,7 @@ node ./sharp-at-file.test.mjs
 
 ### Level 3: Render Sanity (optional — eyeball the table + bullets)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 # Print the 'Behavior by file type' section to eyeball table + bullet rendering.
 sed -n '/^## Behavior by file type/,/^## Syntax/p' README.md
 # Verify by eye:
@@ -473,7 +473,7 @@ sufficient.
 - [ ] Level 1: empty-image note present with U+2014 (no hyphen variant); F3 documented; Empty image
       row present after Image row; Image row fall-through note present; `F3a`/`F3b`/`F5` cited;
       4 bullets in "Notes on the table"; only README.md changed; no out-of-scope edits.
-- [ ] Level 2: `node ./sharp-at-file.test.mjs` still passes 0 failures (defensive).
+- [ ] Level 2: `node ./file-injector.test.mjs` still passes 0 failures (defensive).
 
 ### Feature Validation
 - [ ] A reader of the Image row now knows images require BOTH extension AND valid bytes (magic-number
@@ -500,10 +500,10 @@ sufficient.
 ---
 
 ## Anti-Patterns to Avoid
-- ❌ Don't edit `sharp-at-file.ts` — F3 (`hasValidImageMagic`) and F5 (`formatEmptyImageBlock`) are
+- ❌ Don't edit `file-injector.ts` — F3 (`hasValidImageMagic`) and F5 (`formatEmptyImageBlock`) are
   already live and harness-verified. This task only DOCUMENTS them. Editing the `.ts` collides with
   the closed implementation.
-- ❌ Don't edit `sharp-at-file.test.mjs` — the parallel sibling P1.M2.T2.S1 owns the `U1` case there
+- ❌ Don't edit `file-injector.test.mjs` — the parallel sibling P1.M2.T2.S1 owns the `U1` case there
   (disjoint region). Reading it is fine (to confirm the exact strings); editing it is out of scope.
 - ❌ Don't touch README sections outside "Behavior by file type" — the overview, Testing count, Syntax,
   Key design choices, and Known limitations belong to sibling P1.M3.T2.S1 (status Planned). Scope
@@ -535,7 +535,7 @@ Rationale: This is two additive prose edits to a single markdown file, each with
 `oldText` anchor (read directly from the current README) and a ready-to-paste `newText`. Every string
 the implementer must reproduce — most critically the empty-image note block
 `<empty image file — 0 bytes; nothing to attach>` with its U+2014 em dash — has been byte-verified
-against the live `sharp-at-file.ts` (line 78) and the harness F5 assertion (`sharp-at-file.test.mjs`
+against the live `file-injector.ts` (line 78) and the harness F5 assertion (`file-injector.test.mjs`
 ~line 577). The behavior descriptions (F3: ext-first-then-bytes with fall-through to text/binary; F5:
 0-byte-image-only, 0-byte-text unaffected) are confirmed against the actual `injectFiles` branches
 (lines 149-176) and the harness cases F3a/F3b/F5. The scope is crisply disjoint from all siblings:

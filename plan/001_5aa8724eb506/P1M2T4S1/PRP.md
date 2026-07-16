@@ -1,9 +1,9 @@
 ---
 name: "P1.M2.T4.S1 — Manual test matrix: all 14 PRD §11 acceptance cases incl. format parity & @ non-interference"
 prd_ref: "PRD §11 (Acceptance Criteria & Test Plan — Manual test matrix + Automated sanity check), §10 (Edge Cases), §13.2 (documented size tradeoff), Appendix A (Done-definition)"
-target_file: "./sharp-at-file.test.mjs"  # NEW model-free harness (tests the REAL committed sharp-at-file.ts); plus a validation report.
+target_file: "./file-injector.test.mjs"  # NEW model-free harness (tests the REAL committed file-injector.ts); plus a validation report.
 target_language: JavaScript (Node .mjs; runs the shipped .ts via jiti — NO tsconfig/package.json/test framework exists in this repo)
-depends_on: "P1.M1.T1.S1–T3.S2 (the COMPLETE extension — all 8 named exports + default factory must already exist in ./sharp-at-file.ts)"
+depends_on: "P1.M1.T1.S1–T3.S2 (the COMPLETE extension — all 8 named exports + default factory must already exist in ./file-injector.ts)"
 consumed_by: "P1.M2.T5.S1 (README known-limitations section is informed by this task's validation report/findings)"
 ---
 
@@ -12,7 +12,7 @@ consumed_by: "P1.M2.T5.S1 (README known-limitations section is informed by this 
 ## Goal
 
 **Feature Goal**: Build a **reusable, model-free, non-interactive acceptance test harness**
-(`./sharp-at-file.test.mjs`) that imports the **REAL committed `sharp-at-file.ts`** and asserts **all
+(`./file-injector.test.mjs`) that imports the **REAL committed `file-injector.ts`** and asserts **all
 14 PRD §11 acceptance cases** plus the §10 edge cases and the 3 handler guards — then RUN it and produce
 a **pass/fail validation report** confirming the extension meets Definition of Done. 12 of the 14 cases
 are fully automated (no model, no API key, no Pi process); cases #12 (initial `-p`) and #13-end-to-end
@@ -20,8 +20,8 @@ are fully automated (no model, no API key, no Pi process); cases #12 (initial `-
 integration commands.
 
 **Deliverable** (two artifacts):
-1. **`./sharp-at-file.test.mjs`** — a single self-contained Node ESM script at the repo root (committed,
-   re-runnable) that: resolves the global pi package via `npm root -g`; imports `./sharp-at-file.ts`
+1. **`./file-injector.test.mjs`** — a single self-contained Node ESM script at the repo root (committed,
+   re-runnable) that: resolves the global pi package via `npm root -g`; imports `./file-injector.ts`
    through `jiti` with the verified `alias` config; spins up temp fixtures; runs ~25 named assertions
    covering the 14 cases + edge cases + guards + notify + format parity; prints a per-case `✓/✗` report;
    **exits 0 iff all model-free assertions pass**.
@@ -29,18 +29,18 @@ integration commands.
    from a real run (fulfills the tasks.json OUTPUT: "A pass/fail validation report for all 14 test cases").
 
 **Success Definition**:
-- [ ] `node ./sharp-at-file.test.mjs` exits **0** with all ~25 model-free assertions green, printing a
+- [ ] `node ./file-injector.test.mjs` exits **0** with all ~25 model-free assertions green, printing a
       14-row matrix (cases 1–14) where 12 show `✓ AUTO PASS`, and #12/#13 show `ℹ INTEGRATION` with the
       exact live-Pi command to run manually.
 - [ ] Every assertion maps 1:1 to a PRD §11 expected behavior (see "Case → assertion mapping").
-- [ ] The harness imports the REAL `sharp-at-file.ts` (not a reference copy) — verified by mutating a
+- [ ] The harness imports the REAL `file-injector.ts` (not a reference copy) — verified by mutating a
       fixture and seeing the assertion react (or by asserting `mod.injectFiles`/`mod.default` are the
       shipped functions).
-- [ ] The harness is **cwd-independent**: it resolves `./sharp-at-file.ts` and the pi package by absolute
+- [ ] The harness is **cwd-independent**: it resolves `./file-injector.ts` and the pi package by absolute
       path (`path.resolve` from the test file's dir + `npm root -g`), NOT a hardcoded `/home/dustin/...`.
 - [ ] The validation report records the actual counts (e.g. "25 passed, 0 failed") + any deviations, and
       lists the 2 integration commands with their expected observations.
-- [ ] **No modification to `sharp-at-file.ts`, PRD.md, tasks.json, or prd_snapshot.md.** If a test
+- [ ] **No modification to `file-injector.ts`, PRD.md, tasks.json, or prd_snapshot.md.** If a test
       fails, it is REPORTED here, not silently fixed — the fix belongs to the owning M1 subtask
       (tasks.json: "Any bugs found feed back into the implementing subtasks (T1-T3) for fixes").
 
@@ -56,11 +56,11 @@ integration commands.
 **Target User**: The maintainer/validator who must confirm the shipped extension meets PRD §11 before
 declaring Definition of Done and writing the README (P1.M2.T5.S1).
 
-**Use Case**: Run one command — `node ./sharp-at-file.test.mjs` — and get an unambiguous pass/fail
+**Use Case**: Run one command — `node ./file-injector.test.mjs` — and get an unambiguous pass/fail
 verdict across all 14 acceptance cases without launching Pi, typing into a TUI, or spending model tokens.
-Re-run it after any future change to `sharp-at-file.ts` to catch regressions.
+Re-run it after any future change to `file-injector.ts` to catch regressions.
 
-**User Journey**: clone repo → `node ./sharp-at-file.test.mjs` → harness auto-detects global pi,
+**User Journey**: clone repo → `node ./file-injector.test.mjs` → harness auto-detects global pi,
 imports the real `.ts`, builds temp fixtures, prints `✓ case 1 … ✓ case 14`, exits 0 → validator records
 counts in `validation_report.md` → README (T5.S1) can cite "all 14 §11 cases pass".
 
@@ -77,7 +77,7 @@ parity) are still documented as exact commands so a human runs only those.
   unchanged; `#@` works in both interactive and initial `-p` messages." This task produces the evidence.
 - **The extension already exports everything needed for model-free testing.** `injectFiles`,
   `cleanToken`, `expandTildeAndResolve`, `extOf`, `isBinary`, `formatTextFileBlock`, `formatImageBlock`,
-  `formatBinaryBlock`, and the `default` factory are all named/default exports of `sharp-at-file.ts`
+  `formatBinaryBlock`, and the `default` factory are all named/default exports of `file-injector.ts`
   (deliberately, per P1M1T3S1 research §6: "Enables the model-free Level-2 gate"). A test can import and
   drive them directly — no Pi runtime required.
 - **Format parity (#13) is structural, not behavioral.** Both `#@` and the built-in `@file` emit the
@@ -88,12 +88,12 @@ parity) are still documented as exact commands so a human runs only those.
 
 ## What
 
-Create ONE new file `./sharp-at-file.test.mjs` (repo root) and ONE report
+Create ONE new file `./file-injector.test.mjs` (repo root) and ONE report
 `./plan/001_5aa8724eb506/P1M2T4S1/validation_report.md`. The harness:
 
 1. **Resolves the global pi package root** via `npm root -g` (verified: →
    `/home/dustin/.local/lib/node_modules`; package at `…/@earendil-works/pi-coding-agent`).
-2. **Imports the real `./sharp-at-file.ts`** via `createJiti(...).import(absPath)` with the verified
+2. **Imports the real `./file-injector.ts`** via `createJiti(...).import(absPath)` with the verified
    `alias` map (see "Verified import mechanism").
 3. **Captures the default handler** via a mock `pi = { on: (_ev, cb) => { rec.cb = cb } }` + mock `ctx`
    with a `notify` recorder, then drives `rec.cb(event, ctx)` to test guards/notify/transform/continue.
@@ -110,7 +110,7 @@ Create ONE new file `./sharp-at-file.test.mjs` (repo root) and ONE report
 
 ### Success Criteria
 
-- [ ] `node ./sharp-at-file.test.mjs` prints a 14-row matrix; exits 0 with 0 model-free failures.
+- [ ] `node ./file-injector.test.mjs` prints a 14-row matrix; exits 0 with 0 model-free failures.
 - [ ] Cases #1–#11 and #14 are `✓ AUTO PASS` (12 automated cases).
 - [ ] #13 *format parity* is `✓ AUTO PASS` (model-free); #13 *e2e* and #12 are `ℹ INTEGRATION`.
 - [ ] Edge cases (empty file, mid-word, markdown/issue, read-error-on-chmod-000-when-not-root, missing,
@@ -133,7 +133,7 @@ Create ONE new file `./sharp-at-file.test.mjs` (repo root) and ONE report
 
 ```yaml
 # MUST READ — the artifact under test (READ-ONLY this task)
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "The COMPLETE shipped extension. Exports: cleanToken, expandTildeAndResolve, extOf, isBinary,
         formatTextFileBlock, formatImageBlock, formatBinaryBlock, injectFiles, and default (the
         (pi)=>void factory). The harness imports THIS file — not a reference copy."
@@ -194,11 +194,11 @@ Create ONE new file `./sharp-at-file.test.mjs` (repo root) and ONE report
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .gitignore            # ignores node_modules/, dist/, .pi-subagents/ — NOT .ts/.mjs ✓
 ├── PRD.md                # READ-ONLY source of truth
-├── sharp-at-file.ts      # ← COMPLETE extension under test (8 exports + default). DO NOT EDIT.
+├── file-injector.ts      # ← COMPLETE extension under test (8 exports + default). DO NOT EDIT.
 └── plan/
     └── 001_5aa8724eb506/
         ├── architecture/{api_verification,system_context,external_deps,extension_patterns}.md
@@ -216,8 +216,8 @@ Create ONE new file `./sharp-at-file.test.mjs` (repo root) and ONE report
 ### Desired Codebase tree with files to be added
 
 ```bash
-sharp-at-file.test.mjs   # NEW — repo root. ~180–240 lines. Model-free acceptance harness.
-                         #   Responsibility: import real sharp-at-file.ts via jiti+alias; run the 14
+file-injector.test.mjs   # NEW — repo root. ~180–240 lines. Model-free acceptance harness.
+                         #   Responsibility: import real file-injector.ts via jiti+alias; run the 14
                          #   PRD §11 cases + edges + guards as assertions; exit 0 iff all pass.
 plan/001_5aa8724eb506/P1M2T4S1/validation_report.md   # NEW — captured pass/fail counts + 2 integration cmds.
 ```
@@ -230,7 +230,7 @@ plan/001_5aa8724eb506/P1M2T4S1/validation_report.md   # NEW — captured pass/fa
 //   dynamic absolute import: `const { createJiti } = await import(PIPKG + "/node_modules/jiti/lib/jiti.mjs")`.
 //   PIPKG = (await npm root -g) + "/@earendil-works/pi-coding-agent".
 
-// CRITICAL — the alias map is MANDATORY. sharp-at-file.ts imports "@earendil-works/pi-coding-agent" and
+// CRITICAL — the alias map is MANDATORY. file-injector.ts imports "@earendil-works/pi-coding-agent" and
 //   "@earendil-works/pi-ai", which are NOT resolvable from the project cwd (verified MODULE_NOT_FOUND).
 //   Pi's own loader passes these aliases (loader.js:84-88). Replicate verbatim:
 //     alias = {
@@ -240,7 +240,7 @@ plan/001_5aa8724eb506/P1M2T4S1/validation_report.md   # NEW — captured pass/fa
 //   Wrong values → "Cannot find module '@earendil-works/pi-coding-agent'" from inside the .ts (verified).
 
 // CRITICAL — import the REAL file by ABSOLUTE path resolved from THIS script's dir, not a hardcoded path:
-//     const TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "sharp-at-file.ts");
+//     const TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "file-injector.ts");
 //   So the harness is cwd-independent and works for any maintainer, not just /home/dustin.
 
 // CRITICAL — the mock ctx must be a STRUCTURAL match to what the handler reads: { cwd: string, hasUI: boolean,
@@ -297,7 +297,7 @@ function caseRow(n: number, name: string, status: "PASS"|"FAIL"|"INTEGRATION", d
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: CREATE ./sharp-at-file.test.mjs (repo root; NEW file)
+Task 1: CREATE ./file-injector.test.mjs (repo root; NEW file)
   - OBJECTIVE: a self-contained model-free harness asserting all 14 PRD §11 cases + edges + guards.
   - STRUCTURE (top-to-bottom):
       (a) Imports: node:fs (promises + sync), node:path, node:os, node:child_process (execSync),
@@ -306,7 +306,7 @@ Task 1: CREATE ./sharp-at-file.test.mjs (repo root; NEW file)
           + "/@earendil-works/pi-coding-agent". (Add a friendly error if `dist/index.js` is missing.)
       (c) jiti + alias import (VERIFIED snippet — copy from "Verified import mechanism" verbatim).
       (d) Load the real extension: const TS = path.resolve(dirname(fileURLToPath(import.meta.url)),
-          "sharp-at-file.ts"); const mod = await jiti.import(TS);
+          "file-injector.ts"); const mod = await jiti.import(TS);
       (e) Sanity: assert typeof mod.default==="function" && typeof mod.injectFiles==="function" (proves
           we loaded the REAL file, not a stub).
       (f) Mock pi/ctx factory + a tiny assert() helper + pass/fail counters + a results[] array.
@@ -321,23 +321,23 @@ Task 1: CREATE ./sharp-at-file.test.mjs (repo root; NEW file)
           command (do not throw / do not count against exit code).
       (k) Print the 14-row matrix + summary "X passed, Y failed". Cleanup temp dir + home notes file in
           a finally. process.exit(failed ? 1 : 0).
-  - NAMING: file `sharp-at-file.test.mjs`; helper functions assert/caseRow/runCase (snake/camel per JS
+  - NAMING: file `file-injector.test.mjs`; helper functions assert/caseRow/runCase (snake/camel per JS
         norm). NO new exports — the script is a runnable program, not a library.
   - FOLLOW pattern: the verified probe snippets (research §2/§3) + the project's standalone-.mjs-gate
         convention (P1M1 research). Do NOT introduce vitest/mocha/node:test (none configured; the bare
         assert() helper matches the project's zero-deps ethos).
-  - PLACEMENT: repo root (alongside sharp-at-file.ts) so `node ./sharp-at-file.test.mjs` is the command.
+  - PLACEMENT: repo root (alongside file-injector.ts) so `node ./file-injector.test.mjs` is the command.
   - DEPENDENCIES: node builtins only + the global pi package's nested jiti (via dynamic import). ZERO
         npm installs. ZERO new package.json.
 
 Task 2: RUN the harness and CREATE ./plan/001_5aa8724eb506/P1M2T4S1/validation_report.md
-  - COMMAND: `node ./sharp-at-file.test.mjs` (capture full stdout).
+  - COMMAND: `node ./file-injector.test.mjs` (capture full stdout).
   - WRITE validation_report.md with: date, node version, `pi --version`, the 14-row matrix as recorded,
         the summary counts, and a "Findings" section (any ✗ rows → the owning M1 subtask that must fix;
         if all pass, state "All 14 §11 acceptance criteria met; Definition of Done (Appendix A) satisfied
         for the model-free subset; #12/#13-integration pending a live pi run"). Include the 2 integration
         commands and their expected observations verbatim.
-  - IF any model-free assertion FAILS: do NOT edit sharp-at-file.ts in this task. Record the failure,
+  - IF any model-free assertion FAILS: do NOT edit file-injector.ts in this task. Record the failure,
         name the owning subtask (T1.S2/T2.S1/T3.S1/T3.S2), and mark the report "BLOCKED — fix in <subtask>".
         (tasks.json: "Any bugs found feed back into the implementing subtasks (T1-T3) for fixes".)
 ```
@@ -359,7 +359,7 @@ Use `path.resolve` on the temp dir for all `abs` expectations. `inj` = result of
 | **9** | `"Diff #@a.ts vs #@b.ts"` | `inj.injected===2`; `inj.text` contains BOTH blocks; block order is a.ts THEN b.ts (indexof a_ts < indexof b_ts). HANDLER: notify `m==="#@ injected 2 file(s)"`, `t==="info"`. |
 | **10** | `"Read #@~/<homefile>"` | `inj.injected===1`; block path === `path.join(os.homedir(), "<homefile>")` (tilde expanded). Cleanup the home file in finally. |
 | **11** | `"See #@a.ts."` | `inj.injected===1` (trailing `.` trimmed by cleanToken); block path === A_TS (resolved to a.ts, not a.ts.). |
-| **12** | (handler, `source:"interactive"`) | Assert the input event fires for an interactive message: handler(mockPi) → `out=await cb({text:"Review #@a.ts", source:"interactive", images:[]}, ctxHasUI)` → `out.action==="transform"` (proves the hook path). **PLUS** print `ℹ INTEGRATION: pi -e ./sharp-at-file.ts -p "Review #@a.ts"` with expected: the transformed prompt reaches the model with a.ts content; no `read` tool call. |
+| **12** | (handler, `source:"interactive"`) | Assert the input event fires for an interactive message: handler(mockPi) → `out=await cb({text:"Review #@a.ts", source:"interactive", images:[]}, ctxHasUI)` → `out.action==="transform"` (proves the hook path). **PLUS** print `ℹ INTEGRATION: pi -e ./file-injector.ts -p "Review #@a.ts"` with expected: the transformed prompt reaches the model with a.ts content; no `read` tool call. |
 | **13** | `"Review #@a.ts"` (FORMAT parity) | Construct expected from the SAME a.ts content using the `processFileArguments` template: `'<file name="'+A_TS+'">\n'+A_TS_CONTENT+'\n</file>'`. Assert our block === expected (byte-identical — proves `#@` block format == `@file` block format). **PLUS** print `ℹ INTEGRATION: pi @a.ts "x"` to compare e2e. |
 | **14** | `"Review @a.ts"` (bare @) | `inj.injected===0` (no `#@` substring); `inj.text==="Review @a.ts"` (byte-for-byte unchanged — @ non-interference). Also assert the handler returns `{action:"continue"}` (the `!text.includes("#@")` guard). |
 
@@ -392,7 +392,7 @@ const jiti = createJiti(import.meta.url, {
 });
 
 // 3. Import the REAL committed extension (resolve relative to THIS script so it's cwd-independent).
-const TS  = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "sharp-at-file.ts");
+const TS  = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "file-injector.ts");
 const mod = await jiti.import(TS);
 // mod.default          -> (pi)=>void factory
 // mod.injectFiles      -> async (text, imagesIn, {cwd}) => {text, images, injected}
@@ -435,7 +435,7 @@ const PNG_BYTES = Buffer.from(
 NO production integration changes (validation-only task).
 HARNESS-LOCAL:
   - resolves: "<npmRoot>/@earendil-works/pi-coding-agent" (global; read-only)
-  - imports:  "./sharp-at-file.ts" (the shipped extension; read-only this task)
+  - imports:  "./file-injector.ts" (the shipped extension; read-only this task)
   - creates:  temp dir via mkdtempSync(os.tmpdir()) + one file in os.homedir() (both cleaned in finally)
 EXIT CONTRACT:
   - process.exit(0)  iff all model-free assertions pass
@@ -449,7 +449,7 @@ EXIT CONTRACT:
 
 ```bash
 # The harness is plain .mjs — no transpile, no linter configured. Validate it parses + runs:
-node --check ./sharp-at-file.test.mjs        # syntax check (exit 0 = parses)
+node --check ./file-injector.test.mjs        # syntax check (exit 0 = parses)
 # Expected: no output, exit 0. If errors, READ them — it is almost always a missing await or a typo.
 ```
 
@@ -457,7 +457,7 @@ node --check ./sharp-at-file.test.mjs        # syntax check (exit 0 = parses)
 
 ```bash
 # Run the acceptance matrix. THIS IS THE PRIMARY GATE.
-node ./sharp-at-file.test.mjs
+node ./file-injector.test.mjs
 # Expected output: a 14-row matrix (12 ✓ AUTO PASS, #12 ℹ INTEGRATION, #13 ✓ AUTO PASS for format +
 #   ℹ INTEGRATION for e2e) + N edge/guard rows all ✓ + a summary "X passed, 0 failed". Exit 0.
 # If exit 1: read the ✗ row, identify the owning subtask (T1.S2 parsing / T2.S1 formats / T3.S1
@@ -469,7 +469,7 @@ node ./sharp-at-file.test.mjs
 ```bash
 # Case #12 — initial -p message (extension loaded, no model needed if a print/echo mode exists; else a
 #   short model run). The input event fires inside prompt() for the -p message too.
-pi -e ./sharp-at-file.ts -p "Review #@a.ts"
+pi -e ./file-injector.ts -p "Review #@a.ts"
 # Expected: the prompt the model receives ALREADY contains a.ts in a <file name="…"> block (the model
 #   does NOT call the read tool). Confirm by observing the user message bubble / transcript.
 
@@ -487,11 +487,11 @@ pi @a.ts "x"          # built-in @file argv expansion (runs pre-prompt())
 #   not a stale copy). TEMPORARY edit — revert after.
 #   e.g. append a line to a.ts, re-run, confirm case #1's exact-block assertion fails (content changed),
 #   then `git checkout -- a.ts`-equivalent (the fixture is temp, so just re-run clean).
-node ./sharp-at-file.test.mjs        # after a deliberate fixture change → case #1 should ✗, proving liveness
+node ./file-injector.test.mjs        # after a deliberate fixture change → case #1 should ✗, proving liveness
 
 # Determinism: run the harness 3× back-to-back — identical pass counts every time (no flakiness from
 #   resizeImage, temp dirs, or home-dir races). The fixed tiny PNG is what makes #3 deterministic.
-for i in 1 2 3; do node ./sharp-at-file.test.mjs >/dev/null || echo "run $i FAILED"; done
+for i in 1 2 3; do node ./file-injector.test.mjs >/dev/null || echo "run $i FAILED"; done
 # Expected: no "FAILED" lines (exit 0 all 3 runs).
 ```
 
@@ -499,11 +499,11 @@ for i in 1 2 3; do node ./sharp-at-file.test.mjs >/dev/null || echo "run $i FAIL
 
 ### Technical Validation
 
-- [ ] `node --check ./sharp-at-file.test.mjs` exits 0 (parses).
-- [ ] `node ./sharp-at-file.test.mjs` exits **0** with all model-free assertions green.
-- [ ] Harness is cwd-independent (resolves `./sharp-at-file.ts` + PIPKG by absolute path; no hardcoded
+- [ ] `node --check ./file-injector.test.mjs` exits 0 (parses).
+- [ ] `node ./file-injector.test.mjs` exits **0** with all model-free assertions green.
+- [ ] Harness is cwd-independent (resolves `./file-injector.ts` + PIPKG by absolute path; no hardcoded
       `/home/dustin/...`).
-- [ ] Harness imports the REAL `sharp-at-file.ts` (sanity-asserts `typeof mod.default==="function"` and
+- [ ] Harness imports the REAL `file-injector.ts` (sanity-asserts `typeof mod.default==="function"` and
       reacts to a fixture mutation — Level 4).
 - [ ] No `npm install` needed (node builtins + nested jiti only); no new package.json/tsconfig.
 
@@ -527,14 +527,14 @@ for i in 1 2 3; do node ./sharp-at-file.test.mjs >/dev/null || echo "run $i FAIL
 ### Code Quality Validation
 
 - [ ] Follows the project's standalone-`.mjs`-gate convention (P1M1 research); no new test framework.
-- [ ] File placement: `sharp-at-file.test.mjs` at repo root; report under `P1M2T4S1/`.
+- [ ] File placement: `file-injector.test.mjs` at repo root; report under `P1M2T4S1/`.
 - [ ] Cleanup: temp dir + home-dir notes file removed in `finally` (no litter).
 - [ ] Anti-patterns avoided: no hardcoded absolute maintainer paths; no random image fixtures; no
-      counting integration rows against the exit code; no edits to `sharp-at-file.ts`/PRD/tasks.json.
+      counting integration rows against the exit code; no edits to `file-injector.ts`/PRD/tasks.json.
 
 ### Scope Discipline
 
-- [ ] `sharp-at-file.ts` UNCHANGED. `PRD.md` UNCHANGED. `tasks.json`/`prd_snapshot.md` UNCHANGED.
+- [ ] `file-injector.ts` UNCHANGED. `PRD.md` UNCHANGED. `tasks.json`/`prd_snapshot.md` UNCHANGED.
 - [ ] No README.md created (that is P1.M2.T5.S1 — this task only feeds it findings).
 - [ ] No size gate / config / truncation added anywhere (PRD §2 Non-Goals, §12.11, §13 — out of scope).
 
@@ -543,14 +543,14 @@ for i in 1 2 3; do node ./sharp-at-file.test.mjs >/dev/null || echo "run $i FAIL
 ## Anti-Patterns to Avoid
 
 - ❌ Don't inline a *reference copy* of the functions (the M1 gates did that from `/tmp`). Acceptance must
-  import the REAL `sharp-at-file.ts` via jiti — a reference copy can drift from the shipped artifact.
+  import the REAL `file-injector.ts` via jiti — a reference copy can drift from the shipped artifact.
 - ❌ Don't use a random/large image for case #3 — `resizeImage` is non-deterministic on real images. Use
   the fixed 67-byte 1×1 PNG so the fallback path (data === raw base64) is deterministic.
 - ❌ Don't hardcode `/home/dustin/.local/lib/...`. Resolve via `npm root -g` + `path.resolve(import.meta.url)`.
 - ❌ Don't count the #12/#13-integration rows against the exit code — that makes the gate non-hermetic
   (it would fail on machines without a model API key). Print them as `ℹ INTEGRATION`.
-- ❌ Don't "fix" a failing assertion by editing `sharp-at-file.ts`. REPORT it; the fix belongs to M1.
-- ❌ Don't edit `sharp-at-file.ts`, `PRD.md`, `tasks.json`, or `prd_snapshot.md`.
+- ❌ Don't "fix" a failing assertion by editing `file-injector.ts`. REPORT it; the fix belongs to M1.
+- ❌ Don't edit `file-injector.ts`, `PRD.md`, `tasks.json`, or `prd_snapshot.md`.
 - ❌ Don't add a 50 MB fixture to assert "no truncation". The contract is "entire file" — a 2 MB fixture
   with exact byte-equality proves it without bloating the repo or slowing the run.
 - ❌ Don't introduce vitest/mocha/node:test. The repo has no test runner configured; the bare `assert()`

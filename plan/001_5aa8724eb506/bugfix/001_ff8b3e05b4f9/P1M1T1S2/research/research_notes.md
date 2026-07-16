@@ -1,7 +1,7 @@
 # Research Notes — P1.M1.T1.S2 (Remove sentinel mechanism entirely)
 
 Scope: a **deletion task** — remove all 4 references to the F1 sentinel mechanism from the existing
-`./sharp-at-file.ts`, restoring exact PRD §6.2 assembly format. Fixes **Issue 2** (sentinel-in-prompt
+`./file-injector.ts`, restoring exact PRD §6.2 assembly format. Fixes **Issue 2** (sentinel-in-prompt
 false negative) and **Issue 6** (assembly format deviation). Depends on **P1.M1.T1.S1** (per-token
 dedup) being in place.
 
@@ -28,7 +28,7 @@ string and independent of whether a co-loaded copy stamps one.
 
 ## 2. The 4 sentinel references — EXACT locations (current line numbers, post-S1)
 
-`grep -nE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts` → exactly 4 hits:
+`grep -nE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts` → exactly 4 hits:
 
 | # | Line | What | Edit |
 |---|------|------|------|
@@ -63,11 +63,11 @@ Delete the 4-line F1 comment + the `if (SENTINEL_RE.test(event.text)) return {�
 REMAINING handler guards (`source==='extension'`, `streamingBehavior==='steer'`, `!includes("#@")`)
 are **untouched**.
 
-After all three edits: `grep -cE "INJECT_SENTINEL|SENTINEL_RE" sharp-at-file.ts` → **0**.
+After all three edits: `grep -cE "INJECT_SENTINEL|SENTINEL_RE" file-injector.ts` → **0**.
 
 ## 4. CRITICAL — the existing 28-case harness STAYS GREEN (verified by static analysis)
 
-The harness's **F1 test** (sharp-at-file.test.mjs, case "F1") is the only test touching sentinel
+The harness's **F1 test** (file-injector.test.mjs, case "F1") is the only test touching sentinel
 behavior. It asserts **behavior, not the sentinel string**:
 
 ```js
@@ -132,7 +132,7 @@ Uses the SAME jiti+alias import pattern the harness uses (verified in S1's PRP).
 
 - ❌ Do NOT add or change the per-token dedup line (S1 owns it; it's already correct).
 - ❌ Do NOT change `FILE_INJECT_RE` for Unicode (that's M1.T2.S1, Issue 5).
-- ❌ Do NOT edit `sharp-at-file.test.mjs` — not even the F1 test's name/comment (that's M2.T1.S1).
+- ❌ Do NOT edit `file-injector.test.mjs` — not even the F1 test's name/comment (that's M2.T1.S1).
 - ❌ Do NOT touch the F3/F5/F4 code or comments (F3/F5 are documentation-only per the bugfix PRD; M3
   documents them). Only F1 (sentinel) is removed.
 - ❌ Do NOT edit README.md (M3.T1/T2).

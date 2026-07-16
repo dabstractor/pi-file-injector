@@ -11,7 +11,7 @@ Inside `injectFiles`'s `for (const m of text.matchAll(FILE_INJECT_RE))` loop, AF
 OUT OF SCOPE (other subtasks): removing the sentinel constants/guard/assembly (S2), the Unicode
 regex fix (M1.T2.S1), harness test additions (M2.T1.S1 / M2.T2.S1), README changes (M3).
 
-## Exact insertion site (verified line numbers in sharp-at-file.ts, 249 lines)
+## Exact insertion site (verified line numbers in file-injector.ts, 249 lines)
 ```
 145:    const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
 146:  (blank)
@@ -68,14 +68,14 @@ through jiti (same import pattern as the harness):
 - dedup (prior w/ sentinel)    → injected=1 NOW (BUG) → 0 after fix
 - dedup (prior NON-sentinel)   → injected=1 NOW (BUG) → 0 after fix  ← THE ISSUE 1 FIX
 Ran against CURRENT un-fixed code: both dedup cases return 1 (proving the test catches the bug).
-After the one-line fix they return 0. Existing harness `node ./sharp-at-file.test.mjs` → 28/28 now
+After the one-line fix they return 0. Existing harness `node ./file-injector.test.mjs` → 28/28 now
 and must remain 28/28 after (the F1 test still passes: it feeds already-sentinel'd text through the
 HANDLER, whose sentinel guard still fires; the dedup in injectFiles is not re-invoked on it).
 
 ## Existing test harness — how it works (for the implementer)
-- `sharp-at-file.test.mjs` (577 lines, 28 cases). Run: `node ./sharp-at-file.test.mjs` (exits 0 on
+- `file-injector.test.mjs` (577 lines, 28 cases). Run: `node ./file-injector.test.mjs` (exits 0 on
   all-pass, 1 on any fail). Model-free / hermetic (no API key, no Pi process).
-- Imports the REAL `./sharp-at-file.ts` via jiti with Pi's alias map (lines 1-70): resolves global
+- Imports the REAL `./file-injector.ts` via jiti with Pi's alias map (lines 1-70): resolves global
   pi root via `npm root -g`, loads `createJiti` from `<PIPKG>/node_modules/jiti/lib/jiti.mjs`, sets
   alias `@earendil-works/pi-coding-agent` → `<PIPKG>/dist/index.js`, `@earendil-works/pi-ai` →
   `<PIPKG>/node_modules/@earendil-works/pi-ai/dist/compat.js`, then `jiti.import(TS_PATH)`.

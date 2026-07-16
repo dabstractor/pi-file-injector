@@ -1,7 +1,7 @@
 # Research Notes — P1.M1.T2.S1
 
 **Work item:** Binary detection + text/image/binary format block helpers
-**Target file:** `./sharp-at-file.ts` (in-place edit; S1 scaffold + S2 parsing helpers already present)
+**Target file:** `./file-injector.ts` (in-place edit; S1 scaffold + S2 parsing helpers already present)
 **Deliverables:** 4 exported pure functions — `isBinary`, `formatTextFileBlock`, `formatImageBlock`,
 `formatBinaryBlock` — inserted at module scope before the factory.
 
@@ -54,7 +54,7 @@ export interface ResizedImage {
 export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/image-resize.ts";
 ```
 => It is safe and idiomatic to add `type ResizedImage` to the existing value-import line in
-`sharp-at-file.ts`. (Verified: jiti transpiles the inline `type` modifier with no error; it is erased
+`file-injector.ts`. (Verified: jiti transpiles the inline `type` modifier with no error; it is erased
 at runtime — no behavior change, no new runtime dependency.)
 
 ### 1c. `processFileArguments` — the format `#@` must match for parity
@@ -177,7 +177,7 @@ can't accidentally substitute a hyphen.)
 
 ## 5. File-state at implementation time (parallel with T1.S2)
 
-`sharp-at-file.ts` **already contains** S1 (imports, 3 constants, factory stub) AND S2 (cleanToken,
+`file-injector.ts` **already contains** S1 (imports, 3 constants, factory stub) AND S2 (cleanToken,
 expandTildeAndResolve, extOf) — verified by reading the live file. So when T2.S1 runs, the file has:
 
 ```
@@ -202,7 +202,7 @@ parallel S2 edit: both insert above the same unchanged factory line.
 
 ## 6. Concurrency safety note (for the implementer)
 
-T1.S2 and T2.S1 run in parallel and both edit `sharp-at-file.ts`. The hazard is clobbering. The
+T1.S2 and T2.S1 run in parallel and both edit `file-injector.ts`. The hazard is clobbering. The
 mitigation encoded in this PRP: T2.S1's ONLY anchors are (a) the import line (untouched by S2) and
 (b) the factory line (untouched by S2). T2.S1 does NOT reference any S2-added symbol as an anchor.
 Whoever lands second will still find both anchors intact. (If the orchestrator serializes, even better;

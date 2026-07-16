@@ -1,7 +1,7 @@
 ---
 name: "P1.M1.T2.S1 — Binary detection + text/image/binary format block helpers"
 prd_ref: "PRD §5.1 (text/binary NUL check), §5.2 (image), §5.3 (binary note), §6.1 (<file> tag format), §6.2 (assembly/join), §7 (imports), §10 (edge cases)"
-target_file: "./sharp-at-file.ts" (IN-PLACE EDIT; S1 scaffold + S2 parsing helpers already present)
+target_file: "./file-injector.ts" (IN-PLACE EDIT; S1 scaffold + S2 parsing helpers already present)
 target_language: TypeScript (jiti transpile-on-load, no tsconfig/package.json)
 ---
 
@@ -9,9 +9,9 @@ target_language: TypeScript (jiti transpile-on-load, no tsconfig/package.json)
 
 ## Goal
 
-**Feature Goal**: Add **four exported pure helper functions** to `./sharp-at-file.ts` — `isBinary`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock` — that produce Pi-native `<file>`-tag strings byte-identical to the built-in `processFileArguments` text/image output, plus a deliberate binary guard (`isBinary`) that the built-in CLI lacks. These are the format primitives consumed by `injectFiles` (T3.S1); they do NOT touch `fs`, do NOT call `resizeImage`, and do NOT decide routing — they receive already-fetched inputs and return strings.
+**Feature Goal**: Add **four exported pure helper functions** to `./file-injector.ts` — `isBinary`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock` — that produce Pi-native `<file>`-tag strings byte-identical to the built-in `processFileArguments` text/image output, plus a deliberate binary guard (`isBinary`) that the built-in CLI lacks. These are the format primitives consumed by `injectFiles` (T3.S1); they do NOT touch `fs`, do NOT call `resizeImage`, and do NOT decide routing — they receive already-fetched inputs and return strings.
 
-**Deliverable**: Two edits to the existing `./sharp-at-file.ts`:
+**Deliverable**: Two edits to the existing `./file-injector.ts`:
 1. **Import-line edit** (line 3): add `type ResizedImage` to the existing value-import from `@earendil-works/pi-coding-agent`.
 2. **Insert 4 `export function` declarations** at module scope, immediately before the `export default function (pi: ExtensionAPI)` factory line (currently line 50).
 
@@ -45,7 +45,7 @@ Each format function returns a single `<file>…</file>` string **without a trai
 
 ## What
 
-Edit the existing `./sharp-at-file.ts` (currently: 6 imports + 3 module constants + 3 S2 helper functions + factory stub, ≈ 55 lines). Exactly two regions change:
+Edit the existing `./file-injector.ts` (currently: 6 imports + 3 module constants + 3 S2 helper functions + factory stub, ≈ 55 lines). Exactly two regions change:
 
 1. **Line 3** — the value-import gains `type ResizedImage`:
    ```ts
@@ -133,13 +133,13 @@ export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/ima
 ### Current Codebase tree
 
 ```bash
-# Run from project root: /home/dustin/projects/pi-auto-reader
+# Run from project root: /home/dustin/projects/pi-file-injector
 .
 ├── .git/
 ├── .gitignore          # ignores node_modules/, dist/, .pi-subagents/
 ├── .pi-subagents/      # (subagent debug artifacts, ignored)
 ├── PRD.md              # READ-ONLY source of truth
-├── sharp-at-file.ts    # <-- EDIT IN PLACE. Currently holds S1 (imports+consts+factory stub) + S2 (3 helpers).
+├── file-injector.ts    # <-- EDIT IN PLACE. Currently holds S1 (imports+consts+factory stub) + S2 (3 helpers).
 └── plan/
     └── 001_5aa8724eb506/
         ├── architecture/        # api_verification.md, extension_patterns.md, external_deps.md, system_context.md
@@ -174,7 +174,7 @@ The factory line (50) is the **stable anchor**: S2 did not touch it, so insertin
 ### Desired Codebase tree with files to be added
 
 ```bash
-sharp-at-file.ts   # MODIFIED (no new files). Adds:
+file-injector.ts   # MODIFIED (no new files). Adds:
                    #   - `type ResizedImage` to the import line
                    #   - 4 exported pure functions before the factory:
                    #       isBinary(buf: Buffer): boolean
@@ -238,7 +238,7 @@ interface ResizedImage {
 ### Implementation Tasks (ordered by dependencies)
 
 ```yaml
-Task 1: EDIT the import line (line 3 of sharp-at-file.ts)
+Task 1: EDIT the import line (line 3 of file-injector.ts)
   - OBJECTIVE: Add the type-only ResizedImage import so formatImageBlock's param is typed.
   - CHANGE: `import { resizeImage, formatDimensionNote } from "@earendil-works/pi-coding-agent";`
          → `import { resizeImage, formatDimensionNote, type ResizedImage } from "@earendil-works/pi-coding-agent";`
@@ -339,7 +339,7 @@ export function formatBinaryBlock(abs: string): string {
 
 ```yaml
 IMPORTS (edit one line):
-  - file: sharp-at-file.ts line 3
+  - file: file-injector.ts line 3
   - change: add `, type ResizedImage` to the existing value-import from @earendil-works/pi-coding-agent
   - rationale: "dist/index.d.ts:32 re-exports type ResizedImage from this module. Type-only; erased at transpile."
 
@@ -366,23 +366,23 @@ NO DATABASE / NO CONFIG / NO ROUTES / NO ENV VARS:
 ### Level 1: Syntax & Placement (Immediate Feedback)
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 
 # 1a. Import line updated (type ResizedImage present, still a value-import line).
-grep -nE '^import \{ resizeImage, formatDimensionNote, type ResizedImage \} from "@earendil-works/pi-coding-agent";' sharp-at-file.ts \
+grep -nE '^import \{ resizeImage, formatDimensionNote, type ResizedImage \} from "@earendil-works/pi-coding-agent";' file-injector.ts \
   && echo "OK: import line correct" || echo "FAIL: import line missing type ResizedImage"
 
 # 1b. All four helpers present, exported, at module scope (column 1, before the factory).
-grep -nE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)\b' sharp-at-file.ts
+grep -nE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)\b' file-injector.ts
 # Expected: exactly 4 lines, all anchored at column 1.
 
 # 1c. Factory still present and AFTER the helpers (helpers inserted above it, not below).
-FACTORY=$(grep -nE '^export default function \(pi: ExtensionAPI\)' sharp-at-file.ts | cut -d: -f1)
-LAST_HELPER=$(grep -nE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)\b' sharp-at-file.ts | tail -1 | cut -d: -f1)
+FACTORY=$(grep -nE '^export default function \(pi: ExtensionAPI\)' file-injector.ts | cut -d: -f1)
+LAST_HELPER=$(grep -nE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)\b' file-injector.ts | tail -1 | cut -d: -f1)
 [ "$LAST_HELPER" -lt "$FACTORY" ] && echo "OK: helpers before factory (helper=$LAST_HELPER factory=$FACTORY)" || echo "FAIL: helpers not before factory"
 
 # 1d. No out-of-scope T3 symbols leaked (injectFiles / fs.readFile / real-handler logic).
-grep -nE 'injectFiles|fs\.(readFile|stat)|event\.source|streamingBehavior' sharp-at-file.ts && echo "FAIL: T3 symbols present (out of scope)" || echo "OK: no T3 symbols leaked"
+grep -nE 'injectFiles|fs\.(readFile|stat)|event\.source|streamingBehavior' file-injector.ts && echo "FAIL: T3 symbols present (out of scope)" || echo "OK: no T3 symbols leaked"
 
 # Expected: 1a/1c/1d print OK; 1b prints exactly the 4 function lines.
 ```
@@ -392,7 +392,7 @@ grep -nE 'injectFiles|fs\.(readFile|stat)|event\.source|streamingBehavior' sharp
 This replicates Pi's loader (`jiti.import` with package aliases) and exercises every helper across all input shapes. **No model, no API key, non-interactive.**
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 node --input-type=module -e '
 import { createJiti } from "file:///home/dustin/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
 import { pathToFileURL } from "node:url";
@@ -401,7 +401,7 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 
 let pass = 0, fail = 0;
 const T = (name, cond) => { if (cond) { pass++; } else { fail++; console.error("FAIL:", name); } };
@@ -456,12 +456,12 @@ if (fail > 0) process.exit(1);
 ### Level 3: Authoritative Pi Loader (System Validation — optional confidence)
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 # Confirms Pi's REAL loader (with its real getAliases()) accepts the edited file.
 # -e loads the extension; -ne disables discovery; -p makes it non-interactive.
 # NOTE: -p attempts ONE model turn after loading — requires a configured provider. The extension
 # still LOADS before the model call; a provider error AFTER load does NOT indicate a helper failure.
-pi -e ./sharp-at-file.ts -ne -p "helper load check" 2>&1 | tee /tmp/pi_t2s1.log
+pi -e ./file-injector.ts -ne -p "helper load check" 2>&1 | tee /tmp/pi_t2s1.log
 grep -qiE "error|invalid factory|does not export|is not defined" /tmp/pi_t2s1.log && echo "FAIL: load error above" || echo "OK: no load error"
 # Expected: no "does not export a valid factory function" / syntax / import errors.
 # (Level 2 already proves load + behavior; use this only for final confidence if a provider is set.)
@@ -472,15 +472,15 @@ grep -qiE "error|invalid factory|does not export|is not defined" /tmp/pi_t2s1.lo
 After editing, the file must still contain ALL prior work (S1 imports/constants/factory stub + S2 helpers) — none clobbered.
 
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 echo "--- S1 constants still present ---"
-grep -cE '^const (FILE_INJECT_RE|MIME_BY_EXT|TRAILING_PUNCT)' sharp-at-file.ts   # Expected: 3
+grep -cE '^const (FILE_INJECT_RE|MIME_BY_EXT|TRAILING_PUNCT)' file-injector.ts   # Expected: 3
 echo "--- S2 helpers still present ---"
-grep -cE '^export function (cleanToken|expandTildeAndResolve|extOf)' sharp-at-file.ts   # Expected: 3
+grep -cE '^export function (cleanToken|expandTildeAndResolve|extOf)' file-injector.ts   # Expected: 3
 echo "--- T2.S1 helpers present ---"
-grep -cE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)' sharp-at-file.ts   # Expected: 4
+grep -cE '^export function (isBinary|formatTextFileBlock|formatImageBlock|formatBinaryBlock)' file-injector.ts   # Expected: 4
 echo "--- factory still present + still a stub (returns continue) ---"
-grep -A2 'pi.on("input"' sharp-at-file.ts | grep -q 'action: "continue"' && echo "OK: factory stub intact" || echo "FAIL: factory stub altered (out of scope)"
+grep -A2 'pi.on("input"' file-injector.ts | grep -q 'action: "continue"' && echo "OK: factory stub intact" || echo "FAIL: factory stub altered (out of scope)"
 # Expected: 3, 3, 4, and "OK: factory stub intact".
 ```
 

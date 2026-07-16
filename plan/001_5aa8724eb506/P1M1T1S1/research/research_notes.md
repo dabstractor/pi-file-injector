@@ -1,7 +1,7 @@
 # Research Notes — P1.M1.T1.S1 (Extension scaffold)
 
 ## Task scope
-Create `./sharp-at-file.ts` (project root = `/home/dustin/projects/pi-auto-reader`) with:
+Create `./file-injector.ts` (project root = `/home/dustin/projects/pi-file-injector`) with:
 1. Full import surface per PRD §7.
 2. Three module-level constants: `FILE_INJECT_RE` (§4.2), `MIME_BY_EXT` (§5.2), `TRAILING_PUNCT` (§4.3/§9).
 3. Factory stub (Appendix A) registering an `input` handler that returns `{ action: "continue" }` (pass-through). T3.S2 replaces the body.
@@ -37,7 +37,7 @@ OUT OF SCOPE (later subtasks, same file): parsing helpers (S2), format blocks/bi
 ### Pi version & paths
 - `@earendil-works/pi-coding-agent` v0.80.7 at `/home/dustin/.local/lib/node_modules/@earendil-works/pi-coding-agent`.
 - `pi` binary at `/home/dustin/.local/bin/pi` (v0.80.7).
-- Target file `./sharp-at-file.ts` does NOT exist yet (greenfield).
+- Target file `./file-injector.ts` does NOT exist yet (greenfield).
 - `.gitignore` does NOT ignore `.ts` files or the project root — fine.
 
 ### Import virtualization (architecture/external_deps.md, VERIFIED)
@@ -64,13 +64,13 @@ const jiti = createJiti(import.meta.url, { alias: {
   "@earendil-works/pi-coding-agent": PI + "/dist/index.js",
   "@earendil-works/pi-ai": PI + "/node_modules/@earendil-works/pi-ai/dist/index.js",
 }});
-const mod = await jiti.import(pathToFileURL("./sharp-at-file.ts").href);
+const mod = await jiti.import(pathToFileURL("./file-injector.ts").href);
 if (typeof mod.default !== "function") { console.error("FAIL"); process.exit(1); }
 console.log("PASS: default export is", typeof mod.default);
 '
 ```
 Tested against a temp scaffold in /tmp → `PASS: default export is function`. ✓
-Authoritative alternative: `pi -e ./sharp-at-file.ts` (launches TUI; confirms real loader accepts it).
+Authoritative alternative: `pi -e ./file-injector.ts` (launches TUI; confirms real loader accepts it).
 
 ## Contract compliance (exact import list — do not deviate)
 ```ts

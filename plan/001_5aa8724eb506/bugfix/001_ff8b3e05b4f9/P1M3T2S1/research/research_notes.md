@@ -9,7 +9,7 @@ collision.
 ## 1. The actual test count (authoritative — run the harness)
 
 ```
-$ node ./sharp-at-file.test.mjs
+$ node ./file-injector.test.mjs
 ...
 Result: 31 passed, 0 failed.
 ```
@@ -50,8 +50,8 @@ only a grep-based verification.** The sentinel mechanism was removed in P1.M1.T1
 never described it in user-facing prose, so there is nothing to delete.
 
 For completeness: the only remaining `sentinel` string anywhere in the repo lives in **comments** —
-`sharp-at-file.ts:140` ("Cooperation-independent: works even when the prior copy was a non-sentinel
-[copy]") and several `sharp-at-file.test.mjs` comments. Those are CODE COMMENTS, not user-facing
+`file-injector.ts:140` ("Cooperation-independent: works even when the prior copy was a non-sentinel
+[copy]") and several `file-injector.test.mjs` comments. Those are CODE COMMENTS, not user-facing
 docs, and are explicitly OUT OF SCOPE (do not edit `.ts` / `.test.mjs`).
 
 ## 3. Assembly format — already clean, matches PRD §6.2 (verification no-op)
@@ -95,7 +95,7 @@ the assembly format.** Contract point (b) removal sub-item is satisfied — veri
 The sweep reduces to **ONE content edit** (the Testing section) plus a set of deterministic grep
 verifications that the other contract points are already satisfied:
 
-- **EDIT (content):** Testing section — count `23` → `31` (or the live `node ./sharp-at-file.test.mjs`
+- **EDIT (content):** Testing section — count `23` → `31` (or the live `node ./file-injector.test.mjs`
   result), AND extend the coverage sentence to name **co-load dedup**, the **sentinel-in-prompt**
   regression, and **Unicode word-boundary** tests.
 - **VERIFY (grep, no-op edits):** (a) zero sentinel/marker references in README; (b) Unicode boundary
@@ -113,7 +113,7 @@ verifications that the other contract points are already satisfied:
 
 ## 8. Style / voice conventions (so the Testing edit reads native)
 
-- Em dash is **U+2014** (`—`) for clauses; backticks around code (`node ./sharp-at-file.test.mjs`,
+- Em dash is **U+2014** (`—`) for clauses; backticks around code (`node ./file-injector.test.mjs`,
   `#@`, `<file …>`). Bold (`**…**`) for emphasis on key terms (matches the existing README voice —
   e.g. "**unconditional**", "**appends**", "**Unicode-aware**").
 - The existing Testing sentence is a single flowing run-on listing coverage groups, ending with the

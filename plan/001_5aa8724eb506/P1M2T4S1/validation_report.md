@@ -1,8 +1,8 @@
 # Validation Report — P1.M2.T4.S1: 14-Case Acceptance Test Matrix
 
-**Artifact under test:** `./sharp-at-file.ts` (the COMPLETE shipped extension — 8 named exports + default factory).
-**Harness:** `./sharp-at-file.test.mjs` (model-free, zero-dependency; imports the REAL `.ts` via jiti + the
-alias map Pi's own loader uses; `node ./sharp-at-file.test.mjs` is the re-runnable gate).
+**Artifact under test:** `./file-injector.ts` (the COMPLETE shipped extension — 8 named exports + default factory).
+**Harness:** `./file-injector.test.mjs` (model-free, zero-dependency; imports the REAL `.ts` via jiti + the
+alias map Pi's own loader uses; `node ./file-injector.test.mjs` is the re-runnable gate).
 
 | Field | Value |
 |---|---|
@@ -58,11 +58,11 @@ alias map Pi's own loader uses; `node ./sharp-at-file.test.mjs` is the re-runnab
 
 ## Integration results (the 2 live-pi cases — run for this report)
 
-### Case #12 — `pi -e ./sharp-at-file.ts -p "Review #@a.ts"`
+### Case #12 — `pi -e ./file-injector.ts -p "Review #@a.ts"`
 
 **Command run** (from `/tmp/pi-e2e`, which contained `a.ts`):
 ```bash
-pi -e /home/dustin/projects/pi-auto-reader/sharp-at-file.ts -p "Review #@a.ts"
+pi -e /home/dustin/projects/pi-file-injector/file-injector.ts -p "Review #@a.ts"
 ```
 **Expected:** the prompt the model receives already contains `a.ts` in a `<file name="…">` block — the model
 does NOT call the `read` tool.
@@ -111,7 +111,7 @@ documented limitation"). The **actual shipped behavior** is `injected===0`:
   `injectFiles` leaves it verbatim → `injected===0`.
 
 **This is safer than the PRP assumed** (no risk of injecting a garbage path), and it is the honest,
-observable behavior of the shipped `sharp-at-file.ts`. The harness asserts the ACTUAL behavior
+observable behavior of the shipped `file-injector.ts`. The harness asserts the ACTUAL behavior
 (`injected===0`, text unchanged) and the README (P1.M2.T5.S1) should document the workaround: to
 suppress `#@` inside prose/code, write `# @` (space) — and note that a `#@` immediately followed by a
 backtick will not inject. **No extension change recommended** (adding `` ` `` to `TRAILING_PUNCT` would
@@ -152,9 +152,9 @@ confirmed by a real `pi` run in this report.
 
 ```bash
 # From the repo root. Exits 0 iff all model-free assertions pass. Hermetic: no network/model/API key.
-node ./sharp-at-file.test.mjs
+node ./file-injector.test.mjs
 ```
 
-The harness is cwd-independent (resolves `./sharp-at-file.ts` and the global pi package by absolute path
+The harness is cwd-independent (resolves `./file-injector.ts` and the global pi package by absolute path
 via `path.resolve(import.meta.url)` + `npm root -g` — no hardcoded maintainer paths) and cleans up its
 temp dir + the `~/.sharp-at-test-notes.md` fixture on every run (verified: no litter left behind).

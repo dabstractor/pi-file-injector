@@ -6,7 +6,7 @@ change_type: ONE content edit to README.md § 'Testing' (bump pass count 23→31
 pi_version: "@earendil-works/pi-coding-agent v0.80.7"
 depends_on: "ALL implementing subtasks complete: P1.M1.T1.S1/S2 (sentinel removed, per-token dedup added), P1.M1.T2.S1 (Unicode regex + Syntax Mode A doc), P1.M2.T1.S1 (F1/F1b/F2 harness cases), P1.M2.T2.S1 (U1 harness case), P1.M3.T1.S1 (F3/F5 behavior-table docs — runs in parallel; textually disjoint, no collision). The harness now reports `Result: 31 passed, 0 failed.` This task reads that count and reflects it in the README."
 fixes: "Closes the Mode B changeset-level documentation sweep (SOW §5) for bugfix 001. Specifically satisfies contract (a) test-count + coverage update, and contract (b)(c)(d) which are VERIFICATIONS (all already satisfied — see research)."
-scope_boundary: "Edits ONLY README.md § 'Testing' (the prose paragraph that contains 'At last run: … passed, 0 failed'). Does NOT edit any other README section text. Does NOT touch sharp-at-file.ts (sentinel already removed in P1.M1.T1.S2), sharp-at-file.test.mjs (harness cases owned by P1.M2.*), README § 'Behavior by file type' (owned by the parallel sibling P1.M3.T1.S1), README § 'Syntax' (Unicode boundary already landed by P1.M1.T2.S1), or PRD.md/tasks.json. The other contract points are satisfied by read-only greps, not edits."
+scope_boundary: "Edits ONLY README.md § 'Testing' (the prose paragraph that contains 'At last run: … passed, 0 failed'). Does NOT edit any other README section text. Does NOT touch file-injector.ts (sentinel already removed in P1.M1.T1.S2), file-injector.test.mjs (harness cases owned by P1.M2.*), README § 'Behavior by file type' (owned by the parallel sibling P1.M3.T1.S1), README § 'Syntax' (Unicode boundary already landed by P1.M1.T2.S1), or PRD.md/tasks.json. The other contract points are satisfied by read-only greps, not edits."
 ---
 
 # PRP — P1.M3.T2.S1 (Mode B Docs Sweep): README Testing count + changeset consistency
@@ -31,7 +31,7 @@ greps to confirm and reports the result.
 
 **Success Definition**:
 - [ ] `git diff --name-only` shows ONLY `README.md`.
-- [ ] The Testing section's pass count matches the LIVE `node ./sharp-at-file.test.mjs` output
+- [ ] The Testing section's pass count matches the LIVE `node ./file-injector.test.mjs` output
       (currently **31 passed, 0 failed**) — implementer MUST run the harness and use the number it
       prints, not a hardcoded value.
 - [ ] The Testing coverage sentence now mentions **co-load dedup**, **sentinel-in-prompt**, and
@@ -43,11 +43,11 @@ greps to confirm and reports the result.
 - [ ] (Verification) The assembly format described in Overview + Quick start contains no sentinel
       insertion and matches PRD §6.2 (`text\n\n---\n\nblocks`) — read-only eyeball.
 - [ ] (Verification) § "Known limitations" contains no sentinel/format reference (grep-clean).
-- [ ] `node ./sharp-at-file.test.mjs` still passes 0 failures (defensive — this task touches no code).
+- [ ] `node ./file-injector.test.mjs` still passes 0 failures (defensive — this task touches no code).
 
 > **Scope boundary (read carefully):** This task edits ONLY README.md § "Testing". It does **NOT**:
-> (a) edit `sharp-at-file.ts` (sentinel already removed in P1.M1.T1.S2; code is closed);
-> (b) edit `sharp-at-file.test.mjs` (harness owned by P1.M2.* — this task only RUNS it to read the
+> (a) edit `file-injector.ts` (sentinel already removed in P1.M1.T1.S2; code is closed);
+> (b) edit `file-injector.test.mjs` (harness owned by P1.M2.* — this task only RUNS it to read the
 > count); (c) edit README § "Behavior by file type" (owned by the **parallel sibling P1.M3.T1.S1** —
 > its Image/Empty-image rows and F3/F5 bullets are in a textually DISJOINT section; let it land);
 > (d) edit README § "Syntax" (the Unicode-boundary doc already landed there in P1.M1.T2.S1 — this
@@ -60,7 +60,7 @@ potential adopter checking "how well-tested is this?", a maintainer reviewing th
 contributor about to extend the harness. They must see an accurate pass count and an honest
 description of what the harness covers, not a stale "23 passed" number that predates the bugfix.
 
-**Use Case**: A reviewer runs `node ./sharp-at-file.test.mjs`, sees `31 passed, 0 failed`, then opens
+**Use Case**: A reviewer runs `node ./file-injector.test.mjs`, sees `31 passed, 0 failed`, then opens
 the README to understand what those 31 cases cover. The README's Testing section must (a) report the
 same number, and (b) name the three new coverage areas (co-load dedup, sentinel-in-prompt, Unicode
 boundary) so the reviewer understands the bugfix added real regression coverage, not just a code fix.
@@ -99,7 +99,7 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
 4. **Verification (no edits) — assembly format clean**: confirm Overview + Quick start describe the
    `\n\n---\n\n<blocks>` format with no sentinel insertion (matches PRD §6.2).
 5. **Verification (no edits) — Known limitations clean**: confirm no stale sentinel/format reference.
-6. **Defensive harness run**: `node ./sharp-at-file.test.mjs` must still pass 0 failures (this task
+6. **Defensive harness run**: `node ./file-injector.test.mjs` must still pass 0 failures (this task
    touches no code; a failure means an out-of-scope file was accidentally edited).
 
 ### Success Criteria
@@ -118,7 +118,7 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
 > paragraph (read directly from README lines 190-193) and a ready-to-paste `newText` with the count
 > bumped to 31 and the three coverage phrases added; (2) the exact, copy-pasteable grep commands for
 > every verification point, each with the expected output; (3) the authoritative source of the count
-> (`node ./sharp-at-file.test.mjs` → `Result: 31 passed, 0 failed.`), so the implementer does not
+> (`node ./file-injector.test.mjs` → `Result: 31 passed, 0 failed.`), so the implementer does not
 > have to guess; (4) the PRD §6.2 assembly format verbatim, to eyeball-verify the README's Overview
 > and Quick start descriptions against it; and (5) explicit scope boundaries so the implementer does
 > not collide with the parallel sibling P1.M3.T1.S1 (different README section). No model, no API key,
@@ -135,7 +135,7 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
         §7 the sibling-coordination boundaries (P1.M3.T1.S1 owns Behavior-by-file-type — disjoint).
         §8 the style/voice conventions (em dash U+2014, bold key terms, extend the existing run-on
         sentence — do NOT restructure into bullets)."
-  critical: "The pass count MUST be read from a FRESH `node ./sharp-at-file.test.mjs` run, not
+  critical: "The pass count MUST be read from a FRESH `node ./file-injector.test.mjs` run, not
         hardcoded — it is currently 31; if a future test lands between PRP-write and implementation,
         use the number the harness actually prints. The coverage sentence must name all THREE areas
         (co-load dedup, sentinel-in-prompt, Unicode word-boundary) — omitting any one fails the
@@ -170,8 +170,8 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
   gotcha: "Do NOT edit PRD.md. It is read-only. This task only reads §6.2 to verify the README."
 
 # The source of truth for the count (RUN it — do not edit it)
-- file: ./sharp-at-file.test.mjs
-  why: "RUN `node ./sharp-at-file.test.mjs`; the final line `Result: 31 passed, 0 failed.` is the
+- file: ./file-injector.test.mjs
+  why: "RUN `node ./file-injector.test.mjs`; the final line `Result: 31 passed, 0 failed.` is the
         number the README must reflect. Also documents what the new cases cover (F1b=co-load,
         F2=sentinel-in-prompt, U1=Unicode) via inline comments — useful for wording the coverage
         sentence."
@@ -182,7 +182,7 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
            Editing it is out of scope and would collide with the closed implementation."
 
 # The code whose behavior the README describes (already shipped — do NOT edit)
-- file: ./sharp-at-file.ts
+- file: ./file-injector.ts
   why: "Confirms the sentinel mechanism is GONE (no INJECT_SENTINEL / SENTINEL_RE constant; the only
         remaining 'sentinel' string is a CODE COMMENT at line 140 explaining the per-token dedup is
         cooperation-independent). This is why the README has no sentinel references to remove."
@@ -209,12 +209,12 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
 
 ### Current Codebase tree (run `ls` in the repo root)
 ```bash
-# /home/dustin/projects/pi-auto-reader
+# /home/dustin/projects/pi-file-injector
 .
 ├── PRD.md                       # original feature PRD (read-only; §6.2 is the assembly-format source of truth)
 ├── README.md                    # ← EDIT (§ 'Testing' ONLY); + read-only verify of Overview/Quick start/Syntax/Known limitations
-├── sharp-at-file.ts             # sentinel ALREADY REMOVED (P1.M1.T1.S2); per-token dedup live. DO NOT EDIT.
-├── sharp-at-file.test.mjs       # harness now reports `31 passed, 0 failed`. RUN it for the count. DO NOT EDIT.
+├── file-injector.ts             # sentinel ALREADY REMOVED (P1.M1.T1.S2); per-token dedup live. DO NOT EDIT.
+├── file-injector.test.mjs       # harness now reports `31 passed, 0 failed`. RUN it for the count. DO NOT EDIT.
 └── plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/
     ├── architecture/system_context.md   # §'Test Harness Gaps' / §'Files Modified'
     ├── prd_snapshot.md / prd_index.txt / tasks.json
@@ -235,7 +235,7 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
 ### Known Gotchas of our codebase & Library Quirks
 ```markdown
 <!-- CRITICAL — the pass count must be the LIVE harness output, not a hardcoded number. RUN -->
-<!-- `node ./sharp-at-file.test.mjs` and read its final line. It currently prints -->
+<!-- `node ./file-injector.test.mjs` and read its final line. It currently prints -->
 <!-- `Result: 31 passed, 0 failed.` Use that exact number in the README. If a future test lands -->
 <!-- and the count changes, use the new number. Hardcoding "23" (the stale README value) is a bug. -->
 
@@ -261,7 +261,7 @@ ONE content edit to `./README.md` § "Testing", plus read-only verifications:
 <!-- correct; editing them would be scope creep and could collide with closed/parallel siblings.) -->
 
 <!-- GOTCHA — the only remaining 'sentinel' string in the whole repo is in CODE COMMENTS: -->
-<!--   sharp-at-file.ts:140  and  several sharp-at-file.test.mjs comments. -->
+<!--   file-injector.ts:140  and  several file-injector.test.mjs comments. -->
 <!-- Those are NOT user-facing docs and are explicitly OUT OF SCOPE (do not edit .ts/.test.mjs). The -->
 <!-- verification grep targets README.md ONLY. -->
 
@@ -280,7 +280,7 @@ None. Pure markdown prose. No code, types, signatures, or data structures.
 ```yaml
 PRE-FLIGHT:
   - RUN THE HARNESS FIRST (the count is data, not a guess):
-      cd /home/dustin/projects/pi-auto-reader && node ./sharp-at-file.test.mjs
+      cd /home/dustin/projects/pi-file-injector && node ./file-injector.test.mjs
     Read the final line `Result: <N> passed, 0 failed.` — that <N> (currently 31) is the number the
     README must show. If it is NOT 0 failures, STOP and investigate (the code changes must be landed
     first; this task assumes all implementing subtasks are complete).
@@ -331,11 +331,11 @@ POST-FLIGHT — VERIFICATIONS (contract b/c/d — read-only greps; no edits expe
     (The second line should print nothing meaningful — all changed lines belong to the Testing edit.
      If it prints a line from another section, an out-of-scope edit leaked — revert it.)
   - DEFENSIVE HARNESS RUN: must still pass 0 failures (this task touches no code).
-      node ./sharp-at-file.test.mjs   # expect: Result: 31 passed, 0 failed. exit 0.
+      node ./file-injector.test.mjs   # expect: Result: 31 passed, 0 failed. exit 0.
 
 DO NOT (out of scope — owned by siblings / closed tasks / orchestrator):
-  * Edit sharp-at-file.ts (sentinel removed in P1.M1.T1.S2; closed).
-  * Edit sharp-at-file.test.mjs (harness owned by P1.M2.*; closed).
+  * Edit file-injector.ts (sentinel removed in P1.M1.T1.S2; closed).
+  * Edit file-injector.test.mjs (harness owned by P1.M2.*; closed).
   * Edit README § 'Behavior by file type' (parallel sibling P1.M3.T1.S1).
   * Edit README § 'Syntax' (Unicode boundary landed by P1.M1.T2.S1; verify only).
   * Edit README § 'Overview' / 'Quick start' / 'Known limitations' (verify only — research found them
@@ -352,7 +352,7 @@ DO NOT (out of scope — owned by siblings / closed tasks / orchestrator):
 **`oldText`** (byte-verbatim from README lines 190-193 — the single prose paragraph under the bash
 code block):
 ```markdown
-The harness imports the **real** `sharp-at-file.ts` (via jiti, exactly like Pi's loader), runs all
+The harness imports the **real** `file-injector.ts` (via jiti, exactly like Pi's loader), runs all
 14 PRD §11 acceptance cases plus edge cases, the three handler guards, and the headless/notify path,
 and prints a pass/fail matrix. At last run: **23 passed, 0 failed.** No network, no model API key,
 and no Pi process are required.
@@ -361,7 +361,7 @@ and no Pi process are required.
 **`newText`** (same paragraph; count bumped to **31**; three new coverage areas inserted as
 bold-led phrases; trailing clauses unchanged — all em dashes are **U+2014** where used):
 ```markdown
-The harness imports the **real** `sharp-at-file.ts` (via jiti, exactly like Pi's loader), runs all
+The harness imports the **real** `file-injector.ts` (via jiti, exactly like Pi's loader), runs all
 14 PRD §11 acceptance cases plus edge cases, the three handler guards, the headless/notify path,
 **co-load dedup** (a non-sentinel co-loaded copy must not double-inject a file), the
 **sentinel-in-prompt** regression (a prompt containing the literal marker still injects its files),
@@ -378,7 +378,7 @@ process are required.
 > no bullet restructuring) and names exactly the three areas the contract requires.
 
 > **Count substitution:** the `**31 passed, 0 failed.**` value is the LIVE harness result as of
-> PRP-write. If `node ./sharp-at-file.test.mjs` prints a different number when you run it in
+> PRP-write. If `node ./file-injector.test.mjs` prints a different number when you run it in
 > PRE-FLIGHT, substitute that number (keep the `**<N> passed, 0 failed.**` shape).
 
 ---
@@ -416,7 +416,7 @@ process are required.
 ```yaml
 NO NEW INTEGRATION POINTS:
   - "Pure markdown documentation edit. No code, config, env vars, routes, or build step."
-  - "Consumes the LIVE harness result (node ./sharp-at-file.test.mjs → 31 passed) as its data source."
+  - "Consumes the LIVE harness result (node ./file-injector.test.mjs → 31 passed) as its data source."
   - "Consumes the already-shipped bugfix (sentinel removed, per-token dedup, Unicode regex) as its
      subject — the README prose must stay consistent with that code."
   - "If a future change alters the harness case count, the README Testing count must be re-run and
@@ -433,10 +433,10 @@ NO NEW INTEGRATION POINTS:
 
 ### Level 1: Edit Verification (Immediate Feedback)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 
 # 1a. The pass count reflects the LIVE harness result (run it first, then check the README matches).
-node ./sharp-at-file.test.mjs | tail -1     # prints: Result: <N> passed, 0 failed.
+node ./file-injector.test.mjs | tail -1     # prints: Result: <N> passed, 0 failed.
 grep -qF "**31 passed, 0 failed.**" README.md && echo "OK: count present" || echo "FAIL: count missing/wrong"
 # (Substitute the actual <N> above into the grep if it is not 31.)
 
@@ -460,7 +460,7 @@ grep -qE 'below a `---` (rule|separator)' README.md && echo "OK: assembly format
 # 1g. SCOPE CHECK — only README.md changed.
 git diff --name-only | grep -vxE 'README.md' && echo "FAIL: unexpected file changed" || echo "OK: only README.md"
 # Confirm the diff touches only the Testing paragraph (no out-of-scope section edits):
-git diff README.md | grep -nE '^\+' | grep -viE 'co-load dedup|sentinel-in-prompt|Unicode word-boundary|31 passed|must not double|literal marker|does not fire mid-word|non-sentinel co-loaded|headless/notify|acceptance cases|handler guards|edge cases|pass/fail matrix|harness imports|real.*sharp-at-file|jiti|prints a' \
+git diff README.md | grep -nE '^\+' | grep -viE 'co-load dedup|sentinel-in-prompt|Unicode word-boundary|31 passed|must not double|literal marker|does not fire mid-word|non-sentinel co-loaded|headless/notify|acceptance cases|handler guards|edge cases|pass/fail matrix|harness imports|real.*file-injector|jiti|prints a' \
   && echo "WARN: added line outside expected set — inspect" || echo "OK: all additions belong to the Testing edit"
 
 # Expected: count present (matching live N, not 23); all three coverage phrases present; stale 23
@@ -470,8 +470,8 @@ git diff README.md | grep -nE '^\+' | grep -viE 'co-load dedup|sentinel-in-promp
 
 ### Level 2: Defensive Harness Run (must still pass — this task touches no code)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
-node ./sharp-at-file.test.mjs
+cd /home/dustin/projects/pi-file-injector
+node ./file-injector.test.mjs
 # Expected: `Result: 31 passed, 0 failed.` (or the current live count), exit 0.
 # Rationale: this task edits ONLY README.md prose, so the harness CANNOT be affected. If it fails or
 # the count dropped, the implementer accidentally touched a .ts/.test.mjs file — re-run
@@ -480,7 +480,7 @@ node ./sharp-at-file.test.mjs
 
 ### Level 3: Render Sanity (optional — eyeball the Testing section)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 # Print the 'Testing' section to eyeball paragraph rendering.
 sed -n '/^## Testing/,/^## /p' README.md
 # Verify by eye:
@@ -505,7 +505,7 @@ sufficient.
       coverage phrases (co-load dedup / sentinel-in-prompt / Unicode word-boundary) all present; stale
       `23` gone; zero sentinel/marker refs in README; Unicode boundary documented; assembly format
       described; only README.md changed; all additions belong to the Testing paragraph.
-- [ ] Level 2: `node ./sharp-at-file.test.mjs` still passes 0 failures (defensive).
+- [ ] Level 2: `node ./file-injector.test.mjs` still passes 0 failures (defensive).
 
 ### Feature Validation
 - [ ] A reader who runs the harness (sees `31 passed, 0 failed`) and opens the README sees the SAME
@@ -534,12 +534,12 @@ sufficient.
 ---
 
 ## Anti-Patterns to Avoid
-- ❌ Don't hardcode the pass count from the PRP — RUN `node ./sharp-at-file.test.mjs` and use its
+- ❌ Don't hardcode the pass count from the PRP — RUN `node ./file-injector.test.mjs` and use its
   number. The PRP's `31` is the value at PRP-write time; if the harness changed, use the new number.
   Restoring the stale "23" is the #1 failure mode.
 - ❌ Don't omit any of the three required coverage phrases (co-load dedup, sentinel-in-prompt, Unicode
   word-boundary). The contract explicitly names all three; the newText includes all three.
-- ❌ Don't edit `sharp-at-file.ts` or `sharp-at-file.test.mjs` — the bugfix code and harness are closed
+- ❌ Don't edit `file-injector.ts` or `file-injector.test.mjs` — the bugfix code and harness are closed
   (P1.M1.* / P1.M2.*). This task only RUNS the harness to read the count. Editing collides with the
   closed implementation.
 - ❌ Don't edit README § 'Behavior by file type' — the parallel sibling P1.M3.T1.S1 owns it (Image row
@@ -568,7 +568,7 @@ sufficient.
 Rationale: This is a single prose-paragraph edit to one markdown file, with a byte-verbatim
 `oldText` anchor (read directly from the current README lines 190-193) and a ready-to-paste
 `newText`. Every value the implementer must reproduce is verified against a live source: the pass
-count (`31`) comes from actually running `node ./sharp-at-file.test.mjs` (final line
+count (`31`) comes from actually running `node ./file-injector.test.mjs` (final line
 `Result: 31 passed, 0 failed.`); the three coverage areas come from the harness's own case comments
 (F1b = co-load, F2 = sentinel-in-prompt, U1 = Unicode); the PRD §6.2 assembly format is read
 verbatim (lines 242-268) to eyeball-verify the README's Overview/Quick start descriptions against it.

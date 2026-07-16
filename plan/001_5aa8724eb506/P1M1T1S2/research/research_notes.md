@@ -1,6 +1,6 @@
 # Research Notes — P1.M1.T1.S2 (cleanToken, expandTildeAndResolve, extOf)
 
-Scope: three **pure, module-scope helper functions** added to the *existing* `./sharp-at-file.ts`
+Scope: three **pure, module-scope helper functions** added to the *existing* `./file-injector.ts`
 (created by T1.S1). No new files. No runtime state. These feed the downstream pipeline
 (T3.S1 `injectFiles`).
 
@@ -8,7 +8,7 @@ Scope: three **pure, module-scope helper functions** added to the *existing* `./
 
 ## 1. What T1.S1 produces (CONTRACT — assume it exists verbatim)
 
-`./sharp-at-file.ts` (project root) ends, after S1, with this exact tail:
+`./file-injector.ts` (project root) ends, after S1, with this exact tail:
 
 ```ts
 const TRAILING_PUNCT = ".,;:!?\")]}>'";

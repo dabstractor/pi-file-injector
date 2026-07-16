@@ -1,10 +1,10 @@
 {
-  "name": "pi-auto-reader",
+  "name": "pi-file-injector",
   "version": "0.1.0",
   "private": true,
   "description": "#@file — inject the whole file, every time, everywhere. A Pi extension.",
   "type": "module",
   "pi": {
-    "extensions": ["sharp-at-file.ts"]
+    "extensions": ["file-injector.ts"]
   }
 }

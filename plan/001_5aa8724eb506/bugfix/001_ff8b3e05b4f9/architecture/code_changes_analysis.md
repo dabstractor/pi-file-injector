@@ -1,6 +1,6 @@
 # Code Changes Analysis — Exact Modification Points
 
-All line numbers refer to `/home/dustin/projects/pi-auto-reader/sharp-at-file.ts` (249 lines).
+All line numbers refer to `/home/dustin/projects/pi-file-injector/file-injector.ts` (249 lines).
 
 ---
 
@@ -108,7 +108,7 @@ providers). The fix is documenting it in README.
 
 ---
 
-## Test Harness Changes (`sharp-at-file.test.mjs`)
+## Test Harness Changes (`file-injector.test.mjs`)
 
 ### Tests to UPDATE (currently codify old sentinel behavior):
 

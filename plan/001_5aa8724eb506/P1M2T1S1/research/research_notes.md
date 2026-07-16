@@ -1,24 +1,24 @@
 # Research Notes — P1.M2.T4.S1 (Manual test matrix: 14 acceptance cases)
 
 > This is a **VALIDATION** task, not an implementation task. INPUT = the complete extension
-> (sharp-at-file.ts, T3.S2 done). OUTPUT = a pass/fail report for all 14 PRD §11 cases. No source
-> changes to sharp-at-file.ts. Findings feed back to T1–T3 implementers + README (T5.S1).
+> (file-injector.ts, T3.S2 done). OUTPUT = a pass/fail report for all 14 PRD §11 cases. No source
+> changes to file-injector.ts. Findings feed back to T1–T3 implementers + README (T5.S1).
 
 ## 0. Verification status of the extension (as of this research)
 
-The current `sharp-at-file.ts` (T3.S2 present) was run against the full gate below and **PASSES all
+The current `file-injector.ts` (T3.S2 present) was run against the full gate below and **PASSES all
 14 cases** (Tier A: 50/50 assertions; Tier B end-to-end: T1/T12/T13/T14 green). So the expectation
 for the implementing agent is that the matrix passes; any FAIL is a real regression to report.
 
 ## 1. The core problem: HOW to observe behavior (no test framework, model involved)
 
-`sharp-at-file.ts` is a jiti extension. There is no `package.json`, no test runner, no linter. The
+`file-injector.ts` is a jiti extension. There is no `package.json`, no test runner, no linter. The
 extension transforms the prompt on the `input` event; "success" is partly deterministic (format,
 regex, file dispatch) and partly behavioral (model receives content, no `read` tool call). Three
 **verified observation mechanisms** cover all 14 cases:
 
 ### Tier A — Deterministic gate (model-free) — covers Tests 1–11, 13, 14
-jiti-imports `sharp-at-file.ts` (Pi's loader), captures the handler via a mock `pi.on("input", cb)`,
+jiti-imports `file-injector.ts` (Pi's loader), captures the handler via a mock `pi.on("input", cb)`,
 creates REAL fixtures in a temp sandbox, fires synthetic `InputEvent`s, and asserts the exact
 `InputEventResult` (transform text / images / action / notify). This is the same pattern the prior
 PRPs (T3.S1/T3.S2) used for their gates. **VERIFIED: 50/50 pass.** Script: `research/gate_matrix.mjs`.
@@ -27,7 +27,7 @@ PRPs (T3.S1/T3.S2) used for their gates. **VERIFIED: 50/50 pass.** Script: `rese
 A tiny extension registers a provider whose `streamSimple(model, context)` writes `context.messages`
 (the **model-facing** prompt, AFTER the `input` event fired) to a JSON file and returns a canned
 assistant message. Because `streamSimple` short-circuits HTTP, **no API key and no network are
-needed**. `pi -e sharp-at-file.ts -e capture-provider.ts --provider capture --model test -p "..."`
+needed**. `pi -e file-injector.ts -e capture-provider.ts --provider capture --model test -p "..."`
 then captures exactly what the model would receive. **VERIFIED working** (see §4 logs).
 - `Context.messages` exists and carries the transformed user message: `pi-ai/dist/types.d.ts:332-335`
   `interface Context { systemPrompt?: string; messages: Message[]; tools?: Tool[] }`.

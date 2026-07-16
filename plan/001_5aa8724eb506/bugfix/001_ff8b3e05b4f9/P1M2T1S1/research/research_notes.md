@@ -1,22 +1,22 @@
 # Research Notes — P1.M2.T1.S1 (Bugfix): Rewrite F1 test + add co-load (F1b) & sentinel-in-prompt (F2) tests
 
-> **Task type**: TEST-HARNESS edit only. The source fix (`sharp-at-file.ts`: per-token dedup +
+> **Task type**: TEST-HARNESS edit only. The source fix (`file-injector.ts`: per-token dedup +
 > sentinel removal) is **already landed** (P1.M1.T1 — Complete). The parallel item P1.M1.T2.S1
 > (Unicode regex) is also landed in the file. This task updates the model-free harness
-> `sharp-at-file.test.mjs` so the F1 case reflects the NEW dedup mechanism and adds two regression
+> `file-injector.test.mjs` so the F1 case reflects the NEW dedup mechanism and adds two regression
 > cases for the two sentinel-rooted bugs (Issue 1 co-load double-injection; Issue 2 sentinel-in-prompt
 > false-negative). **No `.ts` edits. No Unicode tests (those are P1.M2.T2.S1's separate scope).**
 
 ## 0. Verified current state of the repo (as of this research)
 
-- `sharp-at-file.ts` (239 lines): per-token dedup present (line ~143
+- `file-injector.ts` (239 lines): per-token dedup present (line ~143
   `if (text.includes('<file name="' + abs + '">')) continue;`); sentinel mechanism GONE (no
   `SENTINEL_RE`/`INJECT_SENTINEL` constant, no handler guard, no sentinel in assembly); Unicode regex
   present (line 17 `/(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu`). The ONLY remaining "sentinel" string is a
   **comment** at line 140 ("works even when the prior copy was a non-sentinel version") — explanatory,
   not a mechanism; NOT in scope to touch.
-- `sharp-at-file.test.mjs` (36 KB): **28 cases, passes 28/0** (confirmed by running
-  `node ./sharp-at-file.test.mjs`). The current `F1` case (lines 491-516) still references the
+- `file-injector.test.mjs` (36 KB): **28 cases, passes 28/0** (confirmed by running
+  `node ./file-injector.test.mjs`). The current `F1` case (lines 491-516) still references the
   "sentinel" in its name/comment and asserts `action==='continue'` — it passes **by accident** because
   the per-token dedup makes `injectFiles` return `injected===0` on already-injected text (the handler
   then returns `continue`). The item wants this case REWRITTEN to assert the dedup path explicitly.
@@ -95,7 +95,7 @@ would have `SENTINEL_RE.test(prompt)` → `continue` before ever calling `inject
 
 ## 4. The exact edit (anchor + replacement)
 
-**File**: `sharp-at-file.test.mjs`. **Anchor**: the current `F1` block (lines 491-516), unique in the
+**File**: `file-injector.test.mjs`. **Anchor**: the current `F1` block (lines 491-516), unique in the
 file (only one `await runCase("F1",` — confirmed by grep). **No existing `F1b` or `F2` label** (confirmed
 — no collision).
 
@@ -108,7 +108,7 @@ The exact `oldText` (the current F1 block) and `newText` (F1 + F1b + F2) are in 
 
 ## 5. Scope boundaries (what NOT to do)
 
-- Do NOT edit `sharp-at-file.ts` (source fix is done; the line-140 "sentinel" comment is explanatory,
+- Do NOT edit `file-injector.ts` (source fix is done; the line-140 "sentinel" comment is explanatory,
   owned by P1.M1.T1 — leave it).
 - Do NOT add Unicode-boundary tests (`café#@x`, CJK) — that is **P1.M2.T2.S1** (separate planned task).
   The parallel PRP P1.M1.T2.S1 explicitly states harness additions for café/CJK belong to M2.T2.S1.
@@ -123,5 +123,5 @@ The exact `oldText` (the current F1 block) and `newText` (F1 + F1b + F2) are in 
 
 - PRP: `plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/P1M2T1S1/PRP.md`
 - This research: `.../P1M2T1S1/research/research_notes.md`
-- The ONLY file the implementing agent edits: `sharp-at-file.test.mjs` (one `edit`: replace F1 block
+- The ONLY file the implementing agent edits: `file-injector.test.mjs` (one `edit`: replace F1 block
   with F1 + F1b + F2).

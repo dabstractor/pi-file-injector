@@ -1,10 +1,10 @@
 ---
 name: "P1.M2.T1.S1 (Bugfix) — Rewrite F1 test + add co-load (F1b) & sentinel-in-prompt (F2) harness cases"
 prd_ref: "Bug-fix PRD §Issue 1 (duplicate injection / co-load), §Issue 2 (sentinel-in-prompt false-negative), §Issue 6 (assembly format), §Testing Summary ('Test Harness Gaps')"
-target_file: "./sharp-at-file.test.mjs (the F1 block, lines ~491-516)"
+target_file: "./file-injector.test.mjs (the F1 block, lines ~491-516)"
 change_type: ONE in-place edit — replace the current `F1` case with the rewritten `F1` + new `F1b` + new `F2`. Case count 28 → 30.
 pi_version: "@earendil-works/pi-coding-agent v0.80.7"
-depends_on: "P1.M1.T1.S1 (per-token dedup — Complete) + P1.M1.T1.S2 (sentinel removal — Complete): both ALREADY LANDED in sharp-at-file.ts. P1.M1.T2.S1 (Unicode regex) also landed in file. This task consumes that fixed source."
+depends_on: "P1.M1.T1.S1 (per-token dedup — Complete) + P1.M1.T1.S2 (sentinel removal — Complete): both ALREADY LANDED in file-injector.ts. P1.M1.T2.S1 (Unicode regex) also landed in file. This task consumes that fixed source."
 fixes: "Closes the harness blind spots that let Issues 1 & 2 slip through (Bug-fix PRD §Testing Summary → 'Test Harness Gaps' #1 co-load, #2 sentinel-in-prompt)."
 ---
 
@@ -12,23 +12,23 @@ fixes: "Closes the harness blind spots that let Issues 1 & 2 slip through (Bug-f
 
 ## Goal
 
-**Feature Goal**: Update the model-free harness `sharp-at-file.test.mjs` so its `F1` case reflects the
+**Feature Goal**: Update the model-free harness `file-injector.test.mjs` so its `F1` case reflects the
 **new per-token dedup** mechanism (the sentinel is gone) and add two regression cases for the two
 sentinel-rooted bugs the old harness missed: **F1b** (Issue 1 — co-load double-injection) and **F2**
 (Issue 2 — sentinel string in the user prompt silently disabling all `#@` injection). The current `F1`
 case still references the "sentinel" in its name/comment and passes only by accident (the dedup path);
 it must be rewritten to assert the dedup path explicitly.
 
-**Deliverable**: ONE in-place edit to `./sharp-at-file.test.mjs` — replace the entire current `F1`
+**Deliverable**: ONE in-place edit to `./file-injector.test.mjs` — replace the entire current `F1`
 block (lines ~491-516, unique anchor) with the rewritten `F1` + the new `F1b` + the new `F2`. **No
 other file changes. No `.ts` edits. No Unicode tests (those are P1.M2.T2.S1).** The `runCase` count
 goes **28 → 30**.
 
 **Success Definition**:
-- [ ] `grep -cE 'await runCase\(' sharp-at-file.test.mjs` prints **30** (was 28): F1 rewritten in
+- [ ] `grep -cE 'await runCase\(' file-injector.test.mjs` prints **30** (was 28): F1 rewritten in
       place; F1b, F2 appended.
-- [ ] `node ./sharp-at-file.test.mjs` prints **`Result: 30 passed, 0 failed.`** and exits 0 — against
-      the ALREADY-FIXED `sharp-at-file.ts` (per-token dedup present, sentinel gone, Unicode regex).
+- [ ] `node ./file-injector.test.mjs` prints **`Result: 30 passed, 0 failed.`** and exits 0 — against
+      the ALREADY-FIXED `file-injector.ts` (per-token dedup present, sentinel gone, Unicode regex).
 - [ ] The F1 case name is `"F1 — per-token dedup prevents re-injection"` (no longer mentions "sentinel");
       F1b = `"F1b — co-load: two non-sentinel copies do not double-inject (Issue 1)"`;
       F2 = `"F2 — sentinel string in prompt no longer gates injection (Issue 2)"`.
@@ -43,8 +43,8 @@ goes **28 → 30**.
 - [ ] All 25 unchanged existing cases (1-14, E1-E4, G1-G3, H1, M1, F3a, F3b, F5, F4) still PASS — no
       collateral damage from the edit.
 
-> **Scope boundary (read carefully):** This task edits ONLY `sharp-at-file.test.mjs`, and ONLY the F1
-> block (replaced by F1+F1b+F2). It does **NOT**: (a) touch `sharp-at-file.ts` — the source fix is
+> **Scope boundary (read carefully):** This task edits ONLY `file-injector.test.mjs`, and ONLY the F1
+> block (replaced by F1+F1b+F2). It does **NOT**: (a) touch `file-injector.ts` — the source fix is
 > done (the one remaining "sentinel" string is an explanatory COMMENT at line 140, owned by
 > P1.M1.T1 — leave it); (b) add Unicode-boundary cases (`café#@x`, CJK) — that is **P1.M2.T2.S1**'s
 > dedicated scope (the parallel regex PRP P1.M1.T2.S1 explicitly defers harness café/CJK additions to
@@ -58,7 +58,7 @@ goes **28 → 30**.
 the two Major bugs (Issues 1 & 2) that the original 28-case harness let slip. Also the next implementer
 who, reading the F1 case, must understand the CURRENT dedup mechanism (not the deleted sentinel).
 
-**Use Case**: Run `node ./sharp-at-file.test.mjs` as the gate after any change to `sharp-at-file.ts`.
+**Use Case**: Run `node ./file-injector.test.mjs` as the gate after any change to `file-injector.ts`.
 The F1/F1b/F2 cases must fail loudly if someone (a) reintroduces a sentinel guard that false-negatives
 on a prompt containing the sentinel string (F2), or (b) removes/breaks the per-token dedup so a
 co-loaded second copy re-injects (F1/F1b).
@@ -86,13 +86,13 @@ sentinel-in-prompt test). This task closes both gaps with deterministic, model-f
 
 ## What
 
-One `edit` to `./sharp-at-file.test.mjs`: replace the current `F1` block with the rewritten `F1` +
+One `edit` to `./file-injector.test.mjs`: replace the current `F1` block with the rewritten `F1` +
 `F1b` + `F2` (exact source in `Implementation Blueprint → Exact source to write`). The new cases sit in
 the existing "F1/F3/F5" section, immediately before `F3a`. Net `runCase` delta: **+2** (F1 in place;
 F1b, F2 added).
 
 ### Success Criteria
-- [ ] 30 cases total; `node ./sharp-at-file.test.mjs` → `30 passed, 0 failed`, exit 0.
+- [ ] 30 cases total; `node ./file-injector.test.mjs` → `30 passed, 0 failed`, exit 0.
 - [ ] F1/F1b/F2 assert exactly the behaviors listed under Goal.
 - [ ] No sentinel references remain in the F1 case name/comment (it describes per-token dedup).
 - [ ] All 25 pre-existing cases still pass unchanged.
@@ -131,14 +131,14 @@ F1b, F2 added).
 
 # MUST READ — the parallel sibling contract (so we do NOT collide)
 - docfile: plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/P1M1T2S1/PRP.md
-  why: "The Unicode-regex PRP. It edits sharp-at-file.ts (line 8) + README, and EXPLICITLY defers
+  why: "The Unicode-regex PRP. It edits file-injector.ts (line 8) + README, and EXPLICITLY defers
         café/CJK HARNESS additions to 'P1.M2.T2.S1' (a different task). It does NOT touch the harness.
         So: this task (M2.T1.S1) and M2.T2.S1 own DISJOINT harness regions (F1/F1b/F2 vs café/CJK)."
   critical: "Do NOT add café/CJK/Unicode cases here — that collides with P1.M2.T2.S1. This task is ONLY
         F1 (rewrite) + F1b + F2 (dedup & sentinel-removal regressions)."
 
 # The file being EDITED
-- file: ./sharp-at-file.test.mjs
+- file: ./file-injector.test.mjs
   why: "The 28-case model-free harness. The F1 block (lines 491-516) is the UNIQUE edit anchor."
   pattern: "runCase(label, name, async () => { ... assert(cond, msg) ... }). Reuses module-scope
             mod, TMPDIR, A_TS, B_TS, FIX, A_TS_CONTENT; helpers makeMockCtx/captureHandler/assert."
@@ -149,12 +149,12 @@ F1b, F2 added).
 
 ### Current Codebase tree (run `ls` in the repo root)
 ```bash
-# /home/dustin/projects/pi-auto-reader
+# /home/dustin/projects/pi-file-injector
 .
 ├── PRD.md                       # original feature PRD (read-only; not this task's PRD)
 ├── README.md                    # extension docs — NOT edited here (P1.M3 owns it)
-├── sharp-at-file.ts             # ALREADY FIXED (dedup line ~143, sentinel gone, Unicode regex line 17). DO NOT EDIT.
-├── sharp-at-file.test.mjs       # ← EDIT: replace the F1 block (lines ~491-516) with F1 + F1b + F2.
+├── file-injector.ts             # ALREADY FIXED (dedup line ~143, sentinel gone, Unicode regex line 17). DO NOT EDIT.
+├── file-injector.test.mjs       # ← EDIT: replace the F1 block (lines ~491-516) with F1 + F1b + F2.
 └── plan/001_5aa8724eb506/bugfix/001_ff8b3e05b4f9/
     ├── architecture/{system_context.md, code_changes_analysis.md}
     ├── prd_snapshot.md / prd_index.txt / tasks.json / TEST_RESULTS.md
@@ -169,7 +169,7 @@ F1b, F2 added).
 ### Desired Codebase tree with files to be changed
 ```bash
 .
-└── sharp-at-file.test.mjs       # MODIFIED — F1 block replaced by rewritten F1 + new F1b + new F2 (+2 cases → 30 total).
+└── file-injector.test.mjs       # MODIFIED — F1 block replaced by rewritten F1 + new F1b + new F2 (+2 cases → 30 total).
 # No new files. No .ts / README / PRD / tasks.json changes.
 ```
 
@@ -221,21 +221,21 @@ the existing `a.ts` fixture (`A_TS`, `A_TS_CONTENT`, `FIX = { cwd: TMPDIR }`).
 ```yaml
 PRE-FLIGHT:
   - IDEMPOTENCY GUARD (run FIRST — a parallel pass may have already landed these cases):
-      if grep -qE 'await runCase\("F1b"|await runCase\("F2"' sharp-at-file.test.mjs; then
+      if grep -qE 'await runCase\("F1b"|await runCase\("F2"' file-injector.test.mjs; then
         echo "F1b/F2 already present → task already complete; verifying and STOPPING."
-        node ./sharp-at-file.test.mjs && exit 0   # must report 30/30; if so, NOTHING more to do.
+        node ./file-injector.test.mjs && exit 0   # must report 30/30; if so, NOTHING more to do.
       fi
     (If this guard fires, the oldText anchor below will NOT be found — that is expected; the target
      state already exists. Do NOT force the edit.)
   - CONFIRM the F1 anchor is present & unique (baseline 28-case state):
-      grep -cE 'await runCase\("F1",' sharp-at-file.test.mjs        # → 1
+      grep -cE 'await runCase\("F1",' file-injector.test.mjs        # → 1
     CONFIRM no F1b/F2 collision (baseline):
-      grep -nE 'await runCase\("F1b"|await runCase\("F2"' sharp-at-file.test.mjs   # → (none)
+      grep -nE 'await runCase\("F1b"|await runCase\("F2"' file-injector.test.mjs   # → (none)
     CONFIRM the source fix is in place (these cases REQUIRE it to pass):
-      grep -qE "text.includes\('<file name=\"' \+ abs \+ \"'>" sharp-at-file.ts && echo "dedup present" || echo "MISSING dedup"
-      grep -qE 'SENTINEL_RE|INJECT_SENTINEL' sharp-at-file.ts && echo "WARN sentinel still present" || echo "sentinel gone"
+      grep -qE "text.includes\('<file name=\"' \+ abs \+ \"'>" file-injector.ts && echo "dedup present" || echo "MISSING dedup"
+      grep -qE 'SENTINEL_RE|INJECT_SENTINEL' file-injector.ts && echo "WARN sentinel still present" || echo "sentinel gone"
 
-Task 1: EDIT ./sharp-at-file.test.mjs — replace the F1 block with F1 + F1b + F2
+Task 1: EDIT ./file-injector.test.mjs — replace the F1 block with F1 + F1b + F2
   - OBJECTIVE: Rewrite F1 to assert per-token dedup; add F1b (co-load Issue 1) + F2 (sentinel-in-prompt Issue 2).
   - FIND (exact oldText — the ENTIRE current F1 block, lines ~491-516, UNIQUE in the file):
         <see "Exact source to write" → oldText below>
@@ -245,12 +245,12 @@ Task 1: EDIT ./sharp-at-file.test.mjs — replace the F1 block with F1 + F1b + F
   - DO NOT add imports, fixtures, or a block-count helper (use the inline pattern).
 
 POST-FLIGHT:
-  - grep -cE 'await runCase\(' sharp-at-file.test.mjs   # → 30 (was 28)
-  - grep -nE 'await runCase\("F1"|await runCase\("F1b"|await runCase\("F2"' sharp-at-file.test.mjs   # → 3 distinct lines
+  - grep -cE 'await runCase\(' file-injector.test.mjs   # → 30 (was 28)
+  - grep -nE 'await runCase\("F1"|await runCase\("F1b"|await runCase\("F2"' file-injector.test.mjs   # → 3 distinct lines
   - Run the Validation Loop gates (Level 1 + Level 2).
 
 DO NOT (out of scope — owned by sibling tasks):
-  * Edit sharp-at-file.ts (source fix done; line-140 comment is P1.M1.T1's).
+  * Edit file-injector.ts (source fix done; line-140 comment is P1.M1.T1's).
   * Add café/CJK/Unicode cases (P1.M2.T2.S1).
   * Edit README (P1.M3.T1/T2).
   * Touch any existing case other than F1, or the fixture/helper/summary sections.
@@ -372,7 +372,7 @@ await runCase("F2", "F2 — sentinel string in prompt no longer gates injection 
 ```yaml
 NO NEW INTEGRATION POINTS:
   - "Pure test-harness edit. No new imports, fixtures, helpers, config, or env vars."
-  - "Consumes the ALREADY-FIXED sharp-at-file.ts (per-token dedup + sentinel removal + Unicode regex)."
+  - "Consumes the ALREADY-FIXED file-injector.ts (per-token dedup + sentinel removal + Unicode regex)."
   - "If the .ts is later reverted (sentinel reintroduced, or dedup removed), F2 / F1+F1b fail loudly —
      that is the intended regression signal."
 ```
@@ -380,31 +380,31 @@ NO NEW INTEGRATION POINTS:
 ## Validation Loop
 
 > This repo has **no test framework / linter / type-checker**. The gate is the model-free Node ESM
-> harness itself (`sharp-at-file.test.mjs`). The Python `pytest`/`mypy`/`ruff` gates from the base
+> harness itself (`file-injector.test.mjs`). The Python `pytest`/`mypy`/`ruff` gates from the base
 > template DO NOT APPLY. The gates below are project-specific and **verified on this machine**.
 
 ### Level 1: Edit Verification (Immediate Feedback)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 
 # 1a. Case count is now 30 (was 28): F1 rewritten in place; F1b, F2 added.
-[ "$(grep -cE 'await runCase\(' sharp-at-file.test.mjs)" = "30" ] && echo "OK: 30 cases" || echo "FAIL: case count != 30"
+[ "$(grep -cE 'await runCase\(' file-injector.test.mjs)" = "30" ] && echo "OK: 30 cases" || echo "FAIL: case count != 30"
 
 # 1b. The three target labels are present and distinct.
-grep -qE 'await runCase\("F1", "F1 — per-token dedup prevents re-injection"' sharp-at-file.test.mjs && echo "OK F1" || echo "FAIL F1"
-grep -qE 'await runCase\("F1b", "F1b — co-load' sharp-at-file.test.mjs && echo "OK F1b" || echo "FAIL F1b"
-grep -qE 'await runCase\("F2", "F2 — sentinel string in prompt' sharp-at-file.test.mjs && echo "OK F2" || echo "FAIL F2"
+grep -qE 'await runCase\("F1", "F1 — per-token dedup prevents re-injection"' file-injector.test.mjs && echo "OK F1" || echo "FAIL F1"
+grep -qE 'await runCase\("F1b", "F1b — co-load' file-injector.test.mjs && echo "OK F1b" || echo "FAIL F1b"
+grep -qE 'await runCase\("F2", "F2 — sentinel string in prompt' file-injector.test.mjs && echo "OK F2" || echo "FAIL F2"
 
 # 1c. The OLD sentinel-named F1 is GONE (no leftover "sentinel is already present" case name).
-grep -qE 'no re-injection when a sentinel is already present' sharp-at-file.test.mjs \
+grep -qE 'no re-injection when a sentinel is already present' file-injector.test.mjs \
   && echo "FAIL: old F1 name still present" || echo "OK: old F1 name removed"
 
 # 1d. No café/CJK/Unicode cases were added (that's P1.M2.T2.S1's scope — must stay absent here).
-grep -qE 'café|日本語|\\p\{L\}' sharp-at-file.test.mjs \
+grep -qE 'café|日本語|\\p\{L\}' file-injector.test.mjs \
   && echo "WARN: Unicode case present (out of scope for THIS task)" || echo "OK: no Unicode cases (correct)"
 
 # 1e. No shared block-count helper was introduced (reuse the inline pattern).
-grep -qE 'function (countBlocks|countFileBlocks|blockCount)\b' sharp-at-file.test.mjs \
+grep -qE 'function (countBlocks|countFileBlocks|blockCount)\b' file-injector.test.mjs \
   && echo "WARN: helper introduced (diverges from harness style)" || echo "OK: no helper (inline pattern reused)"
 
 # Expected: 30 cases; F1/F1b/F2 present; old F1 name gone; no Unicode cases; no helper.
@@ -412,12 +412,12 @@ grep -qE 'function (countBlocks|countFileBlocks|blockCount)\b' sharp-at-file.tes
 
 ### Level 2: Full Harness (Component Validation — PRIMARY GATE)
 ```bash
-cd /home/dustin/projects/pi-auto-reader
-node ./sharp-at-file.test.mjs
+cd /home/dustin/projects/pi-file-injector
+node ./file-injector.test.mjs
 # Expected: "Result: 30 passed, 0 failed." exit 0.
 # The new F1/F1b/F2 lines print: "  ✓ case F1: …", "  ✓ case F1b: …", "  ✓ case F2: …".
-# If F1/F1b FAIL: the .ts dedup is broken/removed (re-check `grep "text.includes('<file name=" sharp-at-file.ts`).
-# If F2 FAILS: a sentinel guard was reintroduced in the handler (re-check `grep SENTINEL sharp-at-file.ts` → should be only the line-140 comment).
+# If F1/F1b FAIL: the .ts dedup is broken/removed (re-check `grep "text.includes('<file name=" file-injector.ts`).
+# If F2 FAILS: a sentinel guard was reintroduced in the handler (re-check `grep SENTINEL file-injector.ts` → should be only the line-140 comment).
 # If a PRE-EXISTING case FAILS: the edit accidentally damaged an adjacent region — re-read the diff.
 ```
 
@@ -425,7 +425,7 @@ node ./sharp-at-file.test.mjs
 The exact F1/F1b/F2 assertions were pre-verified green (16/16) via a throwaway script that mirrors the
 harness's jiti+alias import. To re-confirm in isolation (does NOT touch the harness):
 ```bash
-cd /home/dustin/projects/pi-auto-reader
+cd /home/dustin/projects/pi-file-injector
 # (See research/research_notes.md §3 for the verified 16-assertion script; or simply trust Level 2,
 #  which runs the identical assertions inside the real harness.) Level 2 is authoritative.
 ```
@@ -443,7 +443,7 @@ run, but documents the intent:
 ### Technical Validation
 - [ ] Level 1: 30 cases; F1/F1b/F2 present & distinct; old sentinel-named F1 gone; no Unicode cases;
       no helper introduced.
-- [ ] Level 2: `node ./sharp-at-file.test.mjs` → **30 passed, 0 failed**, exit 0.
+- [ ] Level 2: `node ./file-injector.test.mjs` → **30 passed, 0 failed**, exit 0.
 
 ### Feature Validation
 - [ ] F1: `first.injected===1`; `dedup.injected===0`; `dedup.text===first.text`; handler
@@ -470,7 +470,7 @@ run, but documents the intent:
 ## Anti-Patterns to Avoid
 - ❌ Don't add café/CJK/Unicode cases — that is **P1.M2.T2.S1**'s scope (the parallel regex PRP defers
   them there). Adding them here collides with that sibling task.
-- ❌ Don't edit `sharp-at-file.ts` — the source fix is done; the line-140 "sentinel" comment is
+- ❌ Don't edit `file-injector.ts` — the source fix is done; the line-140 "sentinel" comment is
   explanatory prose owned by P1.M1.T1 (leave it).
 - ❌ Don't assert the notify MESSAGE in F1/F1b/F2 — they hit the continue path (`notify===undefined`) or
   check action only. The notify format (F4 `file`/`files`) is asserted by existing cases 9/12/F4.

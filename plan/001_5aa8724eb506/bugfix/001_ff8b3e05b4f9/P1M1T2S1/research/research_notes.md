@@ -2,7 +2,7 @@
 
 **Work item:** Update `FILE_INJECT_RE` with Unicode property escapes (Bug-fix PRD §Issue 5)
 **Plan:** `001_ff8b3e05b4f9` (Sentinel Dedup Bug Fix & Spec Reconciliation)
-**Target file:** `./sharp-at-file.ts` (line 8) + `./README.md` §Syntax (Mode A doc ride-along)
+**Target file:** `./file-injector.ts` (line 8) + `./README.md` §Syntax (Mode A doc ride-along)
 **Change:** One-line regex swap + one README sentence. No new files, no new symbols.
 
 All facts below are **empirically verified** on this machine (Node ESM + the real 28-case harness
@@ -12,7 +12,7 @@ run against a regex-only temp copy). The full assertion suite in the PRP Level-3
 
 ## 1. The exact change (two edits total)
 
-### Edit 1 — `sharp-at-file.ts` line 8 (the regex constant)
+### Edit 1 — `file-injector.ts` line 8 (the regex constant)
 
 ```diff
 - const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
@@ -21,7 +21,7 @@ run against a regex-only temp copy). The full assertion suite in the PRP Level-3
 
 **Verified the anchor is unique** in the file: `grep -c "const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;"` → exactly 1.
 Surrounding context (lines 7–9): blank line above, `const MIME_BY_EXT: Record<string, string> = {` below.
-The single regex line is the ONLY change to `sharp-at-file.ts`.
+The single regex line is the ONLY change to `file-injector.ts`.
 
 ### Edit 2 — `README.md` §Syntax, "Where it matches" (Mode A — rides with the work)
 
@@ -62,7 +62,7 @@ mentions) — so only the "Where it matches" prose needs touching. Do NOT touch 
 
 ### Capture-group / matchAll parity (verified — the load-bearing claim)
 
-The downstream code (`sharp-at-file.ts:140-141`) is:
+The downstream code (`file-injector.ts:140-141`) is:
 ```ts
 for (const m of text.matchAll(FILE_INJECT_RE)) {
   const raw = m[2]; // capture group 2 = path token after #@
@@ -104,7 +104,7 @@ non-word boundaries still match → no harness regression), (c) preserves captur
 
 ### 3b. Full 28-case harness regression (gold standard)
 
-Method: copied `sharp-at-file.ts` + `sharp-at-file.test.mjs` to `/tmp/saf-regex/`, applied ONLY the
+Method: copied `file-injector.ts` + `file-injector.test.mjs` to `/tmp/saf-regex/`, applied ONLY the
 regex change to the temp `.ts`, ran the copied harness (which resolves the `.ts` relative to its own
 dir). **Result: `28 passed, 0 failed`, exit 0.** This empirically proves the regex change breaks zero
 existing cases — including E2 `(#@a.txt)` (paren boundary), case 7 `the foo#@bar thing` (mid-word),
@@ -117,12 +117,12 @@ and all normal `#@file` injection cases.
 This bugfix plan has **concurrent sibling work**. To stay collision-free:
 
 - **P1.M1.T1.S1** (per-token dedup, lines 147-152): DONE / in file. Not touched.
-- **P1.M1.T1.S2** (sentinel removal): running in parallel on `sharp-at-file.ts`. It deletes sentinel
+- **P1.M1.T1.S2** (sentinel removal): running in parallel on `file-injector.ts`. It deletes sentinel
   constants/guard/assembly. My edit (line 8 regex) is in a **disjoint region** (top-of-file constant),
   so the two edits cannot conflict on the same anchor. Both are exact-text replacements on unique,
   non-overlapping strings.
 - **P1.M2.T2.S1** ("Add Unicode boundary test cases"): this task PERMANENTLY adds the `café#@`/CJK/etc.
-  cases to `sharp-at-file.test.mjs`. **My task does NOT edit the harness** — it verifies via a
+  cases to `file-injector.test.mjs`. **My task does NOT edit the harness** — it verifies via a
   throwaway Level-3 script. Rationale: (a) the plan has a dedicated M2.T2.S1 for harness cases;
   (b) the sibling PRP P1.M1.T1.S2 explicitly scoped harness edits to M2.* ("do NOT touch the harness
   — that's M2.T1.S1"); (c) editing the harness here would collide with M2.T2.S1. The contract item
@@ -134,7 +134,7 @@ This bugfix plan has **concurrent sibling work**. To stay collision-free:
 
 ### File-state at implementation time
 
-`sharp-at-file.ts` is in flux (S2 sentinel-removal parallel). But the regex constant on line 8 is
+`file-injector.ts` is in flux (S2 sentinel-removal parallel). But the regex constant on line 8 is
 **stable across all sentinel work** — S2 never touches line 8. So the exact-text anchor
 `const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;` is present and unique regardless of S2's state.
 The implementer should `grep` to confirm before editing (PRE-FLIGHT).
@@ -143,9 +143,9 @@ The implementer should `grep` to confirm before editing (PRE-FLIGHT).
 
 ## 5. Test harness structure (for the implementer — read, do NOT edit here)
 
-`sharp-at-file.test.mjs`:
+`file-injector.test.mjs`:
 - Resolves the `.ts` **relative to the harness script's own directory** (`SCRIPT_DIR`), so it always
-  imports the committed `./sharp-at-file.ts` (cwd-independent). Run: `node ./sharp-at-file.test.mjs`.
+  imports the committed `./file-injector.ts` (cwd-independent). Run: `node ./file-injector.test.mjs`.
 - Uses Pi's real jiti loader + alias map (same as the extension loader). Model-free (no API key).
 - 28 cases. Regex-relevant ones (all verified still green with the new regex): case 1 (`Review #@a.ts`),
   case 7 (`the foo#@bar thing` → no match), case 8 (`# Heading`/`#1234` → no `#@`), case 9 (two tokens),

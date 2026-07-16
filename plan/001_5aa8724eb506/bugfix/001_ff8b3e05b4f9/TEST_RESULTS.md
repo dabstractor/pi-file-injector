@@ -2,7 +2,7 @@
 
 ## Overview
 
-Creative end-to-end QA of the `#@file` Whole-File Injection extension (`sharp-at-file.ts`,
+Creative end-to-end QA of the `#@file` Whole-File Injection extension (`file-injector.ts`,
 249-line repo version) against the PRD. Testing combined the existing 28-case model-free harness
 (which **passes 28/28**), faithful jiti-based simulation of Pi's input-event runner chaining, and —
 critically — **live end-to-end runs of real Pi `v0.80.7`** with a real model (the two cases the
@@ -10,7 +10,7 @@ harness marks "INTEGRATION / run manually" and never actually executes: PRD §11
 
 **Overall quality:** The single-copy logic is excellent — token parsing, format parity, image/binary
 routing, guards, and error containment all behave per spec. **However, two real, user-facing bugs
-were found on the primary documented usage path** (`pi -e ./sharp-at-file.ts …`), both stemming from
+were found on the primary documented usage path** (`pi -e ./file-injector.ts …`), both stemming from
 the `F1` anti-duplication sentinel added beyond the PRD. They were missed by the standard validation
 because (a) the harness's own `F1` test only re-feeds text through the *same* sentinel-stamping
 handler, and (b) the live `-p`/`-e` integration cases were never run.
@@ -33,7 +33,7 @@ None. Core injection fundamentally works (files are read, formatted, and deliver
 
 **Severity**: Major (borderline Critical — affects **every** invocation on the primary documented path)
 
-**PRD Reference**: PRD §11 (acceptance command `pi -e ./sharp-at-file.ts …`), PRD §6.2 / §9 ("append
+**PRD Reference**: PRD §11 (acceptance command `pi -e ./file-injector.ts …`), PRD §6.2 / §9 ("append
 all blocks below the original prompt" — singular injection), and the `F1` sentinel's own code comment
 which claims to handle "loaded globally AND project-locally, or two -e copies" to "avoid duplicate
 blocks."
@@ -50,7 +50,7 @@ the original prompt text, and injects the same file a **second** time. Every fil
 duplicated.
 
 This is **live in the current environment**: a stale 182-line global copy
-(`~/.pi/agent/extensions/sharp-at-file.ts`, no sentinel / no F3 / no F5) co-exists with the 249-line
+(`~/.pi/agent/extensions/file-injector.ts`, no sentinel / no F3 / no F5) co-exists with the 249-line
 repo copy. Pi's loader dedups extensions by **absolute path**
 (`dist/core/extensions/loader.js:507-513`, `seen = new Set()` on `path.resolve(p)`), so the two
 distinct paths **both** load (global first via discovery, then `-e`). Running the exact command the
@@ -63,14 +63,14 @@ PRD §11 and README prescribe for testing double-injects.
 mkdir -p /tmp/saf-e2e && printf 'The canary is MAROON-PELICAN-4297 once.\n' > /tmp/saf-e2e/secret.txt
 
 # DEFAULT documented test path (PRD §11 / README) — loads BOTH global + repo copies:
-pi --model "deepseek/deepseek-chat" --no-tools -e ./sharp-at-file.ts -p \
+pi --model "deepseek/deepseek-chat" --no-tools -e ./file-injector.ts -p \
   'Review #@/tmp/saf-e2e/secret.txt — how many <file> blocks and how many MAROON-PELICAN-4297? Reply: BLOCKS=<n> CANARY=<n>'
 # OBSERVED:  BLOCKS=2  CANARY=2   ← injected TWICE
 ```
 
 Control tests prove each copy alone is correct:
 ```bash
-pi … -ne -e ./sharp-at-file.ts -p '… #@/tmp/saf-e2e/secret.txt …'   # repo copy ONLY → BLOCKS=1 CANARY=1  ✓
+pi … -ne -e ./file-injector.ts -p '… #@/tmp/saf-e2e/secret.txt …'   # repo copy ONLY → BLOCKS=1 CANARY=1  ✓
 pi …                  -p '… #@/tmp/saf-e2e/secret.txt …'            # global copy ONLY  → BLOCKS=1 CANARY=1  ✓
 ```
 
@@ -120,7 +120,7 @@ HTML containing that comment. Result: the new file is **not** injected at all.
 **Steps to Reproduce** (real Pi, repo copy only via `-ne -e`, confirmed):
 
 ```bash
-pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./sharp-at-file.ts -p \
+pi --model "deepseek/deepseek-chat" --no-tools -ne -e ./file-injector.ts -p \
   'Here is an HTML comment for context: <!--#@file-injected-->
    Also please review: #@/tmp/saf-e2e/secret.txt
    How many times does MAROON-PELICAN-4297 appear? Reply only: CANARY=<number>'
@@ -208,7 +208,7 @@ lookbehind.
 character before `#@` is a non-ASCII letter classified as `\W`. Confirmed live:
 
 ```bash
-pi … -ne -e ./sharp-at-file.ts -p 'Review café#@/tmp/saf-e2e/secret.txt … CANARY=<n>'
+pi … -ne -e ./file-injector.ts -p 'Review café#@/tmp/saf-e2e/secret.txt … CANARY=<n>'
 # OBSERVED:  CANARY=1   ← injected, despite #@ being "mid-word" in café#@…
 ```
 
@@ -265,5 +265,5 @@ format. Update the README/PRD to acknowledge the assembly includes the marker.
 
 **Environment**: Pi `@earendil-works/pi-coding-agent` v0.80.7 (global), real model
 `deepseek/deepseek-chat` with `--no-tools` (so the model could only report what was already injected
-into its context, not call `read`). Repo copy: `sharp-at-file.ts` (249 lines, sentinel/F3/F5/F4).
-Stale global copy: `~/.pi/agent/extensions/sharp-at-file.ts` (182 lines, no sentinel/F3/F5).
+into its context, not call `read`). Repo copy: `file-injector.ts` (249 lines, sentinel/F3/F5/F4).
+Stale global copy: `~/.pi/agent/extensions/file-injector.ts` (182 lines, no sentinel/F3/F5).

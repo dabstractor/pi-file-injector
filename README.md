@@ -24,7 +24,7 @@ The extension is a single `.ts` file with **zero npm dependencies** and **no bui
 loads `.ts` extensions via [jiti](https://github.com/unjs/jiti) (transpile-on-load). There are two
 install models: **copy the `.ts`** into an auto-discovered extensions dir, or install the **repo as
 a pi package** with `pi install`. The repo carries a thin `package.json` whose `"pi"` manifest
-declares `sharp-at-file.ts`, so the directory itself is a loadable package — this is what makes
+declares `file-injector.ts`, so the directory itself is a loadable package — this is what makes
 `pi install .` work and what prevents the `Cannot find module '<dir>'` crash if the directory is
 ever handed to the loader directly (e.g. registered as a package or passed to `-e`).
 
@@ -34,7 +34,7 @@ Pick whichever placement fits your workflow.
 
 ```bash
 mkdir -p ~/.pi/agent/extensions
-cp sharp-at-file.ts ~/.pi/agent/extensions/sharp-at-file.ts
+cp file-injector.ts ~/.pi/agent/extensions/file-injector.ts
 ```
 
 Then start `pi` (or run `/reload` if a session is already running — extensions in the
@@ -44,19 +44,19 @@ auto-discovered locations hot-reload).
 
 ```bash
 mkdir -p .pi/extensions
-cp sharp-at-file.ts .pi/extensions/sharp-at-file.ts
+cp file-injector.ts .pi/extensions/file-injector.ts
 ```
 
 Project-local extensions load after the project is trusted.
 
 ### As a package (`pi install`)
 
-The repo is a valid pi package — its `package.json` declares `sharp-at-file.ts` under a `"pi"`
+The repo is a valid pi package — its `package.json` declares `file-injector.ts` under a `"pi"`
 manifest — so you can install it by path instead of copying a file:
 
 ```bash
 pi install .                            # current directory
-pi install /abs/path/to/pi-auto-reader  # absolute path
+pi install /abs/path/to/pi-file-injector  # absolute path
 ```
 
 This registers the directory in `~/.pi/agent/settings.json` (`packages`) and loads the extension
@@ -76,25 +76,25 @@ finding **F-NEW-1** for the history.
 **When upgrading, delete the old copy first** — don't just add the new one elsewhere:
 
 ```bash
-rm -f ~/.pi/agent/extensions/sharp-at-file.ts   # remove a stale GLOBAL copy
-rm -f .pi/extensions/sharp-at-file.ts           # …and/or a stale PROJECT-LOCAL copy
+rm -f ~/.pi/agent/extensions/file-injector.ts   # remove a stale GLOBAL copy
+rm -f .pi/extensions/file-injector.ts           # …and/or a stale PROJECT-LOCAL copy
 pi remove .                                      # …and/or a `pi install` package registration
 # then install the new copy in exactly ONE of the locations above
 ```
 
-The safe rule: **one copy, one location.** The `pi -e ./sharp-at-file.ts` quick-test path is always
+The safe rule: **one copy, one location.** The `pi -e ./file-injector.ts` quick-test path is always
 safe regardless (it co-loads cleanly and dedups against any global copy).
 
 ### Quick test (one-off, no install)
 
 ```bash
-pi -e ./sharp-at-file.ts
+pi -e ./file-injector.ts
 ```
 
 …or combined with an initial message, the `-p` form documents the same path:
 
 ```bash
-pi -e ./sharp-at-file.ts -p "Review #@a.ts"
+pi -e ./file-injector.ts -p "Review #@a.ts"
 ```
 
 > `pi -e` is for quick tests; it does **not** hot-reload. Use one of the auto-discovery locations
@@ -116,7 +116,7 @@ extension **appends** (it does not inline-replace) and strips the `#@` trigger f
 so `Review #@a.ts` reaches the model as `Review a.ts` — the path stays as a readable link to the
 appended block, and the 2-token `#@` syntax is dropped as noise. (Tokens that don't resolve —
 missing file, directory, read error — are left byte-for-byte verbatim, `#@` included.) These are the
-exact prompts the test harness exercises, so you can run `node ./sharp-at-file.test.mjs` and watch
+exact prompts the test harness exercises, so you can run `node ./file-injector.test.mjs` and watch
 them pass.
 
 **Path completion:** in the TUI, `#@` autocompletes file paths — type `#@` and start the path, and
@@ -249,10 +249,10 @@ when you want partial or size-gated input. Confirmed by the acceptance harness (
 ## Testing
 
 ```bash
-node ./sharp-at-file.test.mjs     # model-free; exits 0 iff all assertions pass
+node ./file-injector.test.mjs     # model-free; exits 0 iff all assertions pass
 ```
 
-The harness imports the **real** `sharp-at-file.ts` (via jiti, exactly like Pi's loader), runs all
+The harness imports the **real** `file-injector.ts` (via jiti, exactly like Pi's loader), runs all
 14 PRD §11 acceptance cases plus edge cases, the three handler guards, the headless/notify path,
 **co-load dedup** (a non-sentinel co-loaded copy must not double-inject a file), the
 **structural multi-file dedup** guard (a prior `<file>` block for one path must not suppress a
