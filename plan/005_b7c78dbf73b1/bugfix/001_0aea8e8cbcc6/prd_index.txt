@@ -1,0 +1,10 @@
+h1.0 Bug Fix Requirements
+ h2.0 Overview
+ h2.1 Critical Issues (Must Fix)
+ h2.2 Major Issues (Should Fix)
+  h3.0 Issue 1: A markdown import whose file exists but is unreadable has its #@/@ marker STRIPPED (silently lost) instead of left verbatim
+ h2.3 Minor Issues (Nice to Fix)
+  h3.1 Issue 2: readConfig unit test T2.S1-f is environment-dependent and fails when a global config sets the key (test-harness isolation gap)
+ h2.4 Testing Summary
+---
+code:5 para:23 list:1
