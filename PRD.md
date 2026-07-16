@@ -1,4 +1,4 @@
-# PRD: `#@file` Whole-File Injection Extension for Pi
+# PRD: `#@file` Whole-File Injection & Markdown Import Extension for Pi
 
 **Status:** Draft · **Target:** Pi `@earendil-works/pi-coding-agent` (verified against v0.80.7) · **Artifact type:** Pi TypeScript extension
 
@@ -20,9 +20,12 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - `@file` → Pi's existing behavior (autocomplete interactively; inject at CLI). Left untouched.
 - `#@file` → **always** delivers the whole file to the model, in every context (injected whole when it fits remaining context, paged when it exceeds it; see §5.5).
 
+**Markdown transitive imports.** When a delivered file is markdown (`.md`/`.markdown`), the extension also scans its *contents* for further `#@<path>` directives and delivers those files too — recursively, because an imported markdown file is itself scanned. This turns a single `#@spec.md` into "spec.md plus everything spec.md points at," with no extra syntax: the import directive inside a markdown file is the **same** `#@<path>` the user types in a prompt. Three guards keep it sane and loop-free: (1) imports resolve **relative to the markdown file's own directory** and absolute/tilde paths are ignored (so a shared doc can't pull arbitrary home/system files), (2) **each absolute path is injected at most once across the entire prompt**, which bounds recursion for free, and (3) `#@` inside fenced or inline code is not an import — code is the escape hatch for a markdown doc that wants to *document* the `#@` syntax. Full spec in §5.6.
+
 ### Value proposition
 - **One syntax, every context.** Because the extension hooks the `input` event (which fires for *every* prompt — interactive typed messages *and* the initial CLI/`-p` message), `#@file` works identically whether you launch with it or type it mid-session. (See §3.)
 - **Explicit intent.** `#@` can't be confused with a path-completion trigger or an email-style `@mention`. The user is saying "give the model this whole file," and that's exactly what happens.
+- **Composable for docs.** `#@spec.md` pulls in everything `spec.md` references with the *same* `#@` directive — spec-and-its-dependencies in one token, loop-safe via dedup (§5.6).
 - **Zero config.** No thresholds, no toggles, no config files. It does one thing.
 
 ### Tagline
@@ -38,6 +41,8 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 3. **No user-facing configuration.** No toggles, no config files, no env vars. The inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5). Behavior is fixed and predictable.
 4. **Correct file-type handling** with no knobs: text → content; image → attached; other binary → a clear note (not garbage); missing/dir → left as a literal token.
 5. **Non-destructive & loop-safe.** Leaves the user's original prompt intact; never breaks a prompt on an error; never re-expands its own or other extensions' injected messages.
+6. **Markdown transitive imports.** A delivered markdown file (`.md`/`.markdown`) is scanned for further `#@<path>` directives; each resolves **relative to that markdown file's directory**, is delivered as its own block, and is itself scanned if markdown. Recursion is bounded by **dedup — each absolute path is injected at most once across the whole prompt** (including paths already present as `<file>` blocks). Absolute/tilde paths inside markdown are ignored; `#@` inside fenced or inline code is ignored. All other rules (file-type handling, paging, budget) apply to imported files unchanged.
+7. **Total-size context accounting.** A single shared context-budget accumulator spans the entire prompt — every top-level token **and every transitive import** — with each delivered file (text whole/head, image, binary note) subtracting its cost *before* the next file is decided, so the inline-vs-paged decision is made against the running total of all files injected so far, not per-file in isolation (§5.6.2).
 
 ### Non-Goals
 - **No silent truncation.** `#@` never drops or caps file contents without telling the model. A file is either injected whole (when it fits remaining context) or delivered in full through paged reads (§5.5).
@@ -45,6 +50,8 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - **No user-facing size config.** The context budget is derived from the active model and current usage. There is no threshold or setting to tune.
 - **No globbing / multi-file** (`#@src/*.ts`). Single concrete path per token.
 - **No directory reads.** `#@some/dir` is left as a literal token.
+- **No transitive imports from non-markdown files.** Only `.md`/`.markdown` content is scanned for `#@` directives; a `#@` inside an injected `.ts`/`.json`/image/etc. is inert.
+- **No absolute/tilde markdown imports.** Markdown imports are relative-only by design (portability + a shared doc can't yank arbitrary home/system paths). Top-level user-prompt `#@` still allows absolute and `~/` paths (§4.4).
 - **No replacement of `@`, `read`, or any built-in.** `#@` is purely additive.
 - **No custom TUI rendering.** Injected content appears in the user's message bubble normally.
 - **No config** of any kind (this bears repeating).
@@ -113,7 +120,7 @@ The built-in CLI `@file` path uses helpers that are **not** exported from the pa
 |---|---|---|
 | `resizeImage(bytes, mime)` | ✅ yes | directly (image downscale to provider limits) |
 | `formatDimensionNote(resized)` | ✅ yes | directly (image dimension hint) |
-| `getLanguageFromPath(path)` | ✅ yes | directly (optional, only if markdown format were ever added) |
+| `getLanguageFromPath(path)` | ✅ yes | not used (markdown is treated as text + scanned for imports, §5.6; no per-language formatting) |
 | `CONFIG_DIR_NAME` | ✅ yes | N/A (no config in v1) |
 | `processImage(bytes, mime)` | ❌ internal | `resizeImage` instead |
 | `detectSupportedImageMimeTypeFromFile(path)` | ❌ internal | small inline MIME table (§5.2) |
@@ -143,6 +150,7 @@ const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
 - `#@` — the literal trigger.
 - `(\S+)` — the path token (no spaces).
 - **Zero-width anchor note:** `(^|(?<=\W))` consumes nothing, so the full match `m[0]` is **exactly** `#@<path>` — precise for string replacement, no leading-char bookkeeping.
+- **Same regex for user prompts and markdown content.** Markdown imports reuse this exact regex; the only differences are a base-directory rule (§4.5) and a code-region filter (§5.6.1).
 
 ### 4.3 Token cleanup
 
@@ -151,9 +159,9 @@ For each captured raw token `r`:
 2. If empty after trimming → skip (leave as-is in text).
 3. **No escape hatch needed.** (Unlike `@`, there's no need for `##@`; if a user wants a literal `#@`, they... won't, it's not real prose. If ever needed, `#@` inside a fenced code block is still matched — document this as a known minor limitation, or note `# @` with a space avoids it.)
 
-### 4.4 Path resolution
+### 4.4 Path resolution (top-level user tokens)
 
-For cleaned token `p`:
+For cleaned token `p` in the **user prompt**:
 1. **Tilde expansion:** if `p` starts with `~`, replace a leading `~/` with `os.homedir() + "/"` (or `~` alone with homedir).
 2. **Resolve:** `const abs = path.resolve(ctx.cwd, p);`
 3. **`fs/promises.stat(abs)`:**
@@ -163,6 +171,16 @@ For cleaned token `p`:
 4. **No cwd restriction.** The user explicitly wrote `#@`; absolute paths, `~/...`, and `../...` are all allowed (same trust model as the built-in `read` tool with an explicit path).
 
 > **Known limitation (document, do not fix):** paths containing spaces cannot be expressed (a space ends the token). Users with such files use the `read` tool.
+
+### 4.5 Markdown import directives (same grammar, narrower rules)
+
+A markdown file (`.md`/`.markdown`) may contain `#@<path>` directives using **exactly the grammar above** (§4.1–§4.3). Two rules narrow them relative to a user-typed token, and one rule exempts code:
+
+1. **Relative only.** An import whose cleaned token starts with `/` or `~` is **ignored** (left verbatim in the injected content, not resolved). Only relative tokens are resolved.
+2. **Resolution base = the importing markdown file's directory.** `path.resolve(dirname(importingMarkdownAbs), token)`. (Top-level user tokens still resolve against `ctx.cwd`, §4.4.)
+3. **Code is exempt.** A `#@<path>` occurring inside a fenced code block or inline code is **not** an import — it is left verbatim and never stripped. This is the escape hatch for markdown that documents the `#@` syntax itself. Detection is approximate-CommonMark (§5.6.1).
+
+Everything else — token cleanup (§4.3), dedup, file-type handling, paging, budget — applies to imports exactly as to top-level tokens.
 
 ---
 
@@ -200,6 +218,7 @@ For an image file:
    - Otherwise: `data = resized.data`, `finalMime = resized.mimeType`.
 3. **Attach:** push `{ type: "image", data, mimeType: finalMime }` into the `images` array (seeded from `event.images ?? []`).
 4. **Reference note** in the text block (see §6), optionally including `formatDimensionNote(resized)`.
+5. **Consume budget** (§5.6.2): subtract a conservative image-token estimate from the shared `remaining`. Images are never paged — they are resized and attached.
 
 ### 5.3 Other binary files (non-image, NUL detected)
 
@@ -208,6 +227,8 @@ Do **not** inject decoded garbage. Emit a clear note instead so the model knows 
 ```
 <file name="/abs/path/to/data.bin"><binary file — contents not injected; use the read tool if needed></file>
 ```
+
+The note itself consumes a small amount of the shared budget (§5.6.2).
 
 ### 5.4 Missing / directory / read error
 
@@ -240,18 +261,66 @@ The model drives the paging across the turn. The extension cannot issue tool cal
 
 **Still impossible.** The model never holds a file larger than its context window all at once. Paged delivery gets every byte read across the turn, but not simultaneously. That is a property of the medium, not of this extension.
 
-**Multi-file prompts.** When more than one `#@` token resolves in one prompt, subtract each file's `fileCost` from `remaining` as it is processed, so later tokens see a budget that accounts for earlier injections.
+**Multi-file prompts & imports.** `remaining` is a single shared accumulator across every delivered file in the prompt — top-level tokens **and all transitive markdown imports** (§5.6). Subtract each file's cost from `remaining` as its block is emitted, so every later decision (token or import) sees a budget that accounts for everything injected before it. See §5.6.2 for the full per-type cost table (text, image, binary note) — this is how the extension accounts for the **total** filesize of all files.
 
-**Scope.** Paged delivery applies to text only. Images are already resized for provider limits (§5.2). Non-image binaries already get a note instead of bytes (§5.3).
+**Scope.** Paged delivery applies to text only (including markdown). Images are resized and attached (§5.2) — they are never paged, but they *do* consume budget (§5.6.2). Non-image binaries get a note instead of bytes (§5.3). All three types — text, image, binary note — subtract from the shared `remaining` so the total accounts for every file.
 
-**Notify.** Surface the mode, guarded on `ctx.hasUI`: `#@ injected N whole` versus `#@ injected N whole, M paged`.
+**Notify.** Surface the mode, guarded on `ctx.hasUI`: `#@ injected N whole` versus `#@ injected N whole, M paged`. `N` and `M` span the whole recursion — top-level files plus every transitive import.
 
-**Constants.** `PAGED_THRESHOLD = 0.6`, `MARGIN = 8192`, `HEAD_CHARS = 8192` (UTF-16 code units, roughly the `read` tool's default 2000-line page), `READ_LIMIT = 2000` (the `read` tool's `DEFAULT_MAX_LINES`, emitted in the directive), `DEFAULT_RESERVE = 8192`.
+**Constants.** `PAGED_THRESHOLD = 0.6`, `MARGIN = 8192`, `HEAD_CHARS = 8192` (UTF-16 code units, roughly the `read` tool's default 2000-line page), `READ_LIMIT = 2000` (the `read` tool's `DEFAULT_MAX_LINES`, emitted in the directive), `DEFAULT_RESERVE = 8192`, `IMAGE_FALLBACK_TOKENS = 2805`.
 
 **Resolved questions:**
 - **O-1.** `getContextUsage()` is called at `input` time. When it is `undefined` or `usage.tokens` is `null` (for example right after compaction), `remaining` is `null` and the fallback injects every text file whole. Overflow protection is best-effort, never a regression (test PD3).
 - **O-2.** `getContextUsage()` returns `{ tokens, contextWindow, percent }`, so the window is read from `usage.contextWindow`. `ctx.model` is used only for `maxTokens` (the reserve); `ctx.model.contextWindow` is not read. (`DEFAULT_WINDOW` is a dead leftover in the code and is not used.)
 - **O-3.** No exported string-based estimator exists (`estimateTokens` takes an `AgentMessage`), so the chars-per-token heuristic `Math.ceil(content.length / 4)` is used.
+
+### 5.6 Markdown transitive imports
+
+A delivered file whose lowercased extension is `md` or `markdown` is, in addition to being a text file (§5.1), an **import source**: its decoded content is scanned for `#@<path>` directives (§4.5), and each resolved import is itself delivered (and, if markdown, scanned in turn).
+
+**Step 1 — read & decode.** Same as §5.1: read the whole file, decode UTF-8. Markdown is always treated as text (it bypasses the §5.1 NUL/binary routing so import scanning always runs). Cost estimate: `Math.ceil(content.length / 4)`.
+
+**Step 2 — claim self.** Add the markdown file's own absolute path to the global `injectedSet` *before* scanning, so a self-import (`notes.md` containing `#@notes.md`) dedups to verbatim and cannot recurse into itself.
+
+**Step 3 — scan for imports.** Compute the file's **code regions** (fenced blocks + inline code, approximate-CommonMark — see §5.6.1), then run `FILE_INJECT_RE` over the content and **drop any match whose start index lies inside a code region**. For each surviving match, clean the token (§4.3); if empty or if it starts with `/` or `~` → ignore (leave verbatim, no strip). Resolve the rest relative to `dirname(abs)` (§4.5). The scan helper maintains a per-file `localSeen` set and checks the global `injectedSet`: if the resolved abs is already in either → leave verbatim (no strip); otherwise add it to `localSeen` and record `{ index, abs }` as a **resolved import**. (The per-file set is what stops two imports of the same file within one markdown from both being stripped when only the first injects; the global set handles cross-file and self-import dedup.)
+
+**Step 4 — strip resolved markers from this file's content.** Remove the literal `#@` (two chars) from each recorded marker, highest index first, leaving the **path** as a readable reference — identical to how resolved markers are stripped from the user prompt (§6.2). The result is the **block content** for this markdown file.
+
+**Step 5 — emit this file's block (paged decision).** Apply the §5.5 inline-vs-paged decision to the *stripped* content (so directive text the model won't see doesn't bias the budget): inject whole (`formatTextFileBlock(abs, stripped)`) if it fits, or head + directive if it exceeds. Subtract the block's cost from the shared `remaining`. Bump `paged` if paged. Imports are resolved from the **full** content regardless of whether the parent is paged (we already read all of it).
+
+**Step 6 — recurse into imports (depth-first).** For each recorded `{ abs }` in **encounter order**, call the shared file injector on `abs`. Because each abs passed dedup at scan time and the injector re-checks the global `injectedSet`, every import is injected at most once across the whole prompt. Ordering is **pre-order depth-first**: this file's block, then each import's subtree, before the next sibling — so the model sees a parent's context before the detail it pulls in.
+
+**Budget sharing.** `remaining` is a single mutable accumulator shared across the entire prompt — top-level tokens and every transitive import. Each emitted block (text whole/head, image, binary note) subtracts its cost *before* the next file is decided, so the inline-vs-paged decision is made against the **running total of all files injected so far**, not per-file in isolation (§5.6.2). This is what "account for the total filesize of all files" means in practice.
+
+**Notify.** `count` and `paged` already span the recursion, so `#@ injected N whole, M paged` reports every delivered file, imports included.
+
+#### 5.6.1 Code-region detection (approximate CommonMark)
+
+Compute a sorted list of `[start, end)` ranges that are code, then skip `#@` matches inside them. The two detection regexes (shown here so the backticks are unambiguous):
+
+```ts
+const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;   // line-anchored; group 1 = the fence run
+const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;  // backtick run, same-length close
+```
+
+1. **Fenced blocks.** Walk lines with a running char offset. A line matching `FENCE_OPEN_RE` opens a block whose fence char is the first of the run (backtick or `~`) and whose length is the run length. From the next line, scan for a closing line that is ` {0,3}` + the **same** fence char repeated ≥ opening length. The range runs from the opening fence's first character through the end of the closing fence line (inclusive of its trailing newline). If no closing fence is found, the range runs to **EOF** (unterminated fences consume the rest, matching CommonMark). Fences of the other char inside a block are literal (do not reopen).
+2. **Inline code.** After fenced ranges are known, run `INLINE_CODE_RE` over the full text; each match's full span (backticks included) is a code range, **unless** it already lies inside a fenced range (skip those so we don't double-count). (Approximate: does not model backslash escapes. Good enough to stop the common `` `#@file` `` doc pattern from importing.)
+
+A match is **in code** if `start ≥ someRange[0] && start < someRange[1]` (binary search over the sorted ranges).
+
+> **Why approximate is fine here.** The only failure mode is a `#@` that *should* be exempt but sits in malformed code, or vice versa. The former leaves a harmless verbatim token; the latter imports a file the user can see referenced. Neither corrupts data. Exact CommonMark parsing is out of scope.
+
+#### 5.6.2 Total-size budget accounting
+
+The budget is cumulative over **every** delivered file in the prompt, not a per-file check:
+
+- `remaining` is computed once (§5.5) and mutated in place as blocks are emitted, in emission order (depth-first).
+- Each delivered file subtracts its cost at emit time:
+  - **Text (whole):** `Math.ceil(content.length / 4)`.
+  - **Text (paged head):** `Math.ceil(head.length / 4)`.
+  - **Image:** a conservative tile estimate from the resized dimensions, `estimateImageTokens(resized) = max(1,⌈w/512⌉)·max(1,⌈h/512⌉)·170 + 85`; when dimensions are unavailable (raw fallback) use the flat `IMAGE_FALLBACK_TOKENS = 2805` (the 2000×2000 resized worst case, 4×4 tiles). Images consume budget but are **never paged** — they are resized and attached (§5.2).
+  - **Binary note:** `Math.ceil(noteString.length / 4)` (small, ~tens of tokens).
+- The inline-vs-paged decision for each file is greedy/online against the *current* `remaining` (which already reflects every file emitted before it, top-level or import). When `remaining` runs low, subsequent files page rather than overflow. No look-ahead is needed: the monotonic shared accumulator guarantees the running total never silently exceeds the window, and paging degrades gracefully as the budget depletes.
 
 ---
 
@@ -278,18 +347,27 @@ Mirror the exact format Pi's own CLI `@file` expansion emits (from `processFileA
 <file name="/absolute/path/to/data.bin"><binary file — contents not injected; use the read tool if needed></file>
 ```
 
+**Paged text** → a head block (§5.5) followed by a directive block:
+```
+<file name="/absolute/path/to/huge.log">
+<first HEAD_CHARS of content>
+</file>
+<file name="/absolute/path/to/huge.log"><paged: <len> chars; head delivered <injectedLines> complete lines; read the rest with the read tool at offset:<startLine>, limit:2000, incrementing offset by 2000 until done></file>
+```
+
 Use the **absolute resolved path** as `name` (matches the CLI format).
 
 ### 6.2 Assembly
 
-Maintain across all `#@` tokens in the prompt:
-- `blocks: string[]` — the `<file>…</file>` strings produced above.
+Maintain as **shared, mutable state across the entire prompt** (top-level tokens + every transitive markdown import — see §5.6):
+- `blocks: string[]` — the `<file>…</file>` strings, appended in **pre-order depth-first** emission order (a file's own block, then its imports' subtrees, before the next sibling).
 - `images: ImageContent[]` — seeded from `event.images ?? []`, appended to for each image.
-- `injected: number` — count of files delivered (a block appended or an image attached), whole or paged; `0` means none.
-- `paged: number` — subset of `injected` delivered via the §5.5 page path (head + directive).
-- `injectedThisRun: Set<string>` — resolved absolute paths injected by this pass; together with any `<file>` blocks already in the text (a prior copy or `@file`), each path is injected at most once.
+- `injectedSet: Set<string>` — resolved absolute paths **claimed** so far; seeded with any paths already present as `<file name="…">` blocks in the text (a prior copy or `@file`), so each path is injected at most once across the whole prompt.
+- `count: number` — files delivered (block appended or image attached), whole or paged, **spanning the whole recursion**; `0` means none.
+- `paged: number` — subset of `count` delivered via the §5.5 page path.
+- `remaining: number | null` — the single context-budget accumulator (§5.6.2); every emitted block subtracts from it.
 
-**Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the `#@` trigger** from each injected marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so `#@` is pure noise). Tokens that did **not** inject (missing / directory / read-error) are left byte-for-byte verbatim, `#@` included:
+**Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the `#@` trigger** from each resolved marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so `#@` is pure noise). This stripping happens in two places: (a) resolved **top-level** markers in the user prompt, and (b) resolved **import** markers inside each markdown file's content, *before* that content becomes its block (§5.6 step 4). Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are left byte-for-byte verbatim, `#@` included:
 
 ```
 <original prompt text, unchanged>
@@ -307,7 +385,7 @@ Maintain across all `#@` tokens in the prompt:
 **Final images:** the accumulated `images` array (unchanged if none).
 
 **Return:**
-- `injected > 0` → `return { action: "transform", text: finalText, images: finalImages };`
+- `count > 0` → `return { action: "transform", text: finalText, images: finalImages };`
 - else → `return { action: "continue" };` (prompt preserved byte-for-byte).
 
 ---
@@ -340,7 +418,7 @@ interface ResizedImage {
 }
 function resizeImage(inputBytes: Uint8Array, mimeType: string, options?: ImageResizeOptions): Promise<ResizedImage | null>;
 ```
-Calling `resizeImage(bytes, mime)` with no options caps to **2000×2000** (matches Pi's `images.autoResize` default). Returns `null` if it can't process.
+Calling `resizeImage(bytes, mime)` with no options caps to **2000×2000** (matches Pi's `images.autoResize` default). Returns `null` if it can't process. The `width`/`height` fields feed the image-token estimate (§5.6.2).
 
 **`input` event contract:**
 ```ts
@@ -379,12 +457,13 @@ Install locations:
 
 Internal sections (in order):
 1. Imports (§7)
-2. Constants: `FILE_INJECT_RE`, `MIME_BY_EXT`, `TRAILING_PUNCT`, helpers
-3. Pure helpers: `expandTilde`, `cleanToken`, `isBinary(buf)`, `extOf(p)`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`
-4. Core: `async function injectFiles(text, imagesIn, ctx): Promise<{ text, images, injected }>`
-5. Factory: `export default function (pi: ExtensionAPI) { pi.on("input", ...) }`
+2. Constants: `FILE_INJECT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
+3. Pure helpers: `cleanToken`, `isAbsoluteOrTilde`, `expandTildeAndResolve`, `extOf`, `isBinary`, `headSlice`, `headStartLine`, `headCompleteLineCount`, `estimateImageTokens`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`, `formatPagedDirectiveBlock`
+4. Markdown helpers: `computeCodeRanges(content)` → sorted `[start,end][]`; `inCode(index, ranges)` → boolean
+5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`
+6. Factory: `export default function (pi: ExtensionAPI) { pi.on("input", ...) }`
 
-Target ~150–220 lines.
+Target ~300–380 lines.
 
 ---
 
@@ -399,11 +478,28 @@ import path from "node:path";
 import os from "node:os";
 
 const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
+const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;
+const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
   gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
 };
+const MD_EXTS = new Set(["md", "markdown"]);
 const TRAILING_PUNCT = ".,;:!?\")]}>'";
+
+// §5.6.2 budget constants
+const PAGED_THRESHOLD = 0.6, MARGIN = 8192, HEAD_CHARS = 8192, READ_LIMIT = 2000;
+const DEFAULT_RESERVE = 8192, IMAGE_FALLBACK_TOKENS = 2805;
+
+// Shared, mutable state carried across the whole prompt (top-level tokens + imports).
+interface State {
+  blocks: string[];
+  images: ImageContent[];
+  injectedSet: Set<string>;   // claimed absolute paths → dedup across the whole prompt
+  remaining: number | null;   // single budget accumulator (§5.6.2)
+  count: number;              // files delivered (whole + paged + image + binary note)
+  paged: number;              // subset delivered via the §5.5 page path
+}
 
 export default function (pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
@@ -412,106 +508,174 @@ export default function (pi: ExtensionAPI) {
     if (event.streamingBehavior === "steer") return { action: "continue" }; // latency during steering
     if (!event.text?.includes("#@")) return { action: "continue" };         // cheap pre-check
 
-    const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx);
-    if (!injected) return { action: "continue" };          // injected counts whole+paged; 0 = nothing delivered
+    // seed dedup with <file> blocks already present (prior copy or @file)
+    const priorPaths = new Set([...event.text.matchAll(/<file name="([^"]+)">/g)].map(x => x[1]));
 
-    const whole = injected - paged;                         // §5.5 mode-aware notify
-    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`, "info");
-    return { action: "transform" as const, text, images };
+    // §5.6.2 budget. Window from usage.contextWindow (NOT ctx.model). O-1: if getContextUsage()
+    // is undefined or usage.tokens is null → remaining = null → inject whole (fallback).
+    const usage = ctx.getContextUsage?.();
+    const remaining = (usage && usage.tokens !== null)
+      ? Math.max(0, usage.contextWindow - usage.tokens - (ctx.model?.maxTokens ?? DEFAULT_RESERVE) - MARGIN)
+      : null;
+
+    const state: State = {
+      blocks: [], images: [...(event.images ?? [])],
+      injectedSet: priorPaths, remaining, count: 0, paged: 0,
+    };
+
+    // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping
+    const resolvedIdx = await processTokenStream(
+      event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false }, state, ctx);
+    if (state.count === 0) return { action: "continue" };   // nothing delivered → byte-for-byte
+
+    // strip '#@' from resolved top-level markers (high→low)
+    let stripped = event.text;
+    for (const i of [...resolvedIdx].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
+    const finalText = `${stripped}\n\n---\n\n${state.blocks.join("\n\n")}`;
+
+    const whole = state.count - state.paged;                 // §5.5 mode-aware notify
+    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${state.paged > 0 ? `, ${state.paged} paged` : ""}`, "info");
+    return { action: "transform" as const, text: finalText, images: state.images };
   });
 }
 
-async function injectFiles(text, imagesIn, ctx) {
-  const blocks: string[] = [];
-  const images = [...imagesIn];
-  let count = 0;     // files delivered (whole + paged + image + binary note)
-  let paged = 0;     // subset delivered via the §5.5 page path
-
-  // §5.5 budget. Window comes from usage.contextWindow (NOT ctx.model). O-1: if getContextUsage()
-  // is undefined or usage.tokens is null → remaining = null → inject whole (fallback).
-  const usage = ctx.getContextUsage?.();
-  let remaining = (usage && usage.tokens !== null)
-    ? Math.max(0, usage.contextWindow - usage.tokens - (ctx.model?.maxTokens ?? DEFAULT_RESERVE) - MARGIN)
-    : null;
-  const priorPaths = new Set([...text.matchAll(/<file name="([^"]+)">/g)].map(x => x[1]));
-  const injectedThisRun = new Set<string>();
-  const injectedIndexes: number[] = [];    // offsets of tokens that injected (for precise #@ strip)
-
+// Scan a text (user prompt OR markdown content) for #@ tokens that resolve, WITHOUT injecting.
+// Per-text dedup via localSeen; global injectedSet check skips already-claimed paths.
+function scanTokens(
+  text: string, baseDir: string,
+  opts: { allowAbsTilde: boolean; skipCode: boolean },
+  state: State,
+): { index: number; abs: string }[] {
+  const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;
+  const localSeen = new Set<string>();
+  const out: { index: number; abs: string }[] = [];
   for (const m of text.matchAll(FILE_INJECT_RE)) {
-    const raw = m[2];                       // token after '#@'
-    const token = cleanToken(raw);          // trim trailing punct
+    if (codeRanges && inCode(m.index!, codeRanges)) continue;          // §5.6.1 — code is exempt
+    const token = cleanToken(m[2]);
     if (!token) continue;
-
-    const abs = expandTildeAndResolve(token, ctx.cwd);  // ~ + path.resolve
-    if (priorPaths.has(abs) || injectedThisRun.has(abs)) continue;  // inject each path once
-
-    let st;
-    try { st = await fs.stat(abs); } catch { continue; }  // missing → leave token
-    if (!st.isFile()) continue;                            // dir → leave token
-
-    const ext = extOf(abs);
-    const mime = MIME_BY_EXT[ext];
-
-    try {
-      if (mime) {
-        // IMAGE
-        const buf = await fs.readFile(abs);
-        const resized = await resizeImage(new Uint8Array(buf), mime);
-        images.push({ type: "image",
-                      data: resized?.data ?? buf.toString("base64"),
-                      mimeType: resized?.mimeType ?? mime });
-        blocks.push(formatImageBlock(abs, resized));
-      } else {
-        // TEXT (or binary)
-        const buf = await fs.readFile(abs);
-        if (isBinary(buf)) {
-          blocks.push(formatBinaryBlock(abs));             // §5.3 note, no garbage
-        } else {
-          const content = buf.toString("utf8");
-          const fileCost = Math.ceil(content.length / 4);  // O-3 chars-per-token heuristic
-          if (remaining === null || fileCost <= PAGED_THRESHOLD * remaining) {
-            blocks.push(formatTextFileBlock(abs, content));           // inline (whole)
-            if (remaining !== null) remaining = Math.max(0, remaining - fileCost);
-          } else if (content.length <= HEAD_CHARS) {
-            blocks.push(formatTextFileBlock(abs, content));           // sub-head-sized → whole (Finding 2)
-          } else {
-            const head = headSlice(content);                          // first HEAD_CHARS, surrogate-safe
-            blocks.push(formatTextFileBlock(abs, head));
-            blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
-            paged++;                                                  // directive resumes at the line after the head
-            if (remaining !== null) remaining = Math.max(0, remaining - Math.ceil(HEAD_CHARS / 4));
-          }
-        }
-      }
-      injectedThisRun.add(abs); injectedIndexes.push(m.index); count++;
-    } catch {
-      // read/processing error → leave token, keep going
-      continue;
-    }
+    if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue;     // §4.5 — markdown: relative only
+    const abs = expandTildeAndResolve(token, baseDir);
+    if (state.injectedSet.has(abs) || localSeen.has(abs)) continue;    // dedup → leave verbatim
+    localSeen.add(abs);
+    out.push({ index: m.index!, abs });
   }
-
-  if (count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // nothing delivered → byte-for-byte
-
-  // strip '#@' from ONLY the tokens that injected (index-based, high→low). Failed/deduped tokens
-  // keep '#@' verbatim; a substring replace would also corrupt '#@a.ts' inside '#@a.ts.bak'.
-  let stripped = text;
-  for (const i of [...injectedIndexes].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
-  const finalText = `${stripped}\n\n---\n\n${blocks.join("\n\n")}`;
-  return { text: finalText, images, injected: count, paged };
+  return out;
 }
 
-// helpers ----------------------------------------------------------
+// Top-level processor: scan the user prompt, inject each resolved token (depth-first),
+// return the start indices of markers that resolved (for '#@' stripping).
+async function processTokenStream(
+  text: string, baseDir: string,
+  opts: { allowAbsTilde: boolean; skipCode: boolean },
+  state: State, ctx: any,
+): Promise<number[]> {
+  const records = scanTokens(text, baseDir, opts, state);   // scan once, before any injection
+  const resolved: number[] = [];
+  for (const r of records) {
+    if (state.injectedSet.has(r.abs)) continue;             // cross-subtree dedup since scan
+    const ok = await injectFile(r.abs, state, ctx);         // claims abs, emits block(s), recurses
+    if (ok) resolved.push(r.index);
+  }
+  return resolved;
+}
+
+// stat → classify → emit block → (if markdown) scan+strip+recurse. Claims abs on success.
+async function injectFile(abs: string, state: State, ctx: any): Promise<boolean> {
+  let st;
+  try { st = await fs.stat(abs); } catch { return false; }             // missing → leave verbatim
+  if (!st.isFile()) return false;                                      // dir → leave verbatim
+  state.injectedSet.add(abs);                                          // CLAIM (dedup, incl. self-import)
+
+  const ext = extOf(abs);
+  const mime = MIME_BY_EXT[ext];
+  try {
+    const buf = await fs.readFile(abs);
+    if (mime) {
+      // IMAGE (§5.2) — consumes budget, never paged
+      const resized = await resizeImage(new Uint8Array(buf), mime);
+      state.images.push({
+        type: "image",
+        data: resized?.data ?? buf.toString("base64"),
+        mimeType: resized?.mimeType ?? mime,
+      });
+      state.blocks.push(formatImageBlock(abs, resized));
+      subtract(state, estimateImageTokens(resized));                   // §5.6.2
+    } else if (MD_EXTS.has(ext)) {
+      // MARKDOWN (§5.6) — text block + transitive imports
+      await injectMarkdown(abs, buf.toString("utf8"), state, ctx);
+    } else if (isBinary(buf)) {
+      // BINARY NOTE (§5.3)
+      const note = formatBinaryBlock(abs);
+      state.blocks.push(note);
+      subtract(state, Math.ceil(note.length / 4));
+    } else {
+      // PLAIN TEXT (§5.1 + §5.5)
+      emitText(abs, buf.toString("utf8"), state);
+    }
+    state.count++;                                                     // exactly one delivery per claimed file
+    return true;
+  } catch {
+    return false;                                                      // read/processing error → leave verbatim
+  }
+}
+
+// §5.6 markdown branch: scan → strip resolved markers → emit this block → recurse imports.
+async function injectMarkdown(abs: string, content: string, state: State, ctx: any): Promise<void> {
+  const dir = path.dirname(abs);
+
+  // Step 3: scan for imports (relative only, outside code)
+  const records = scanTokens(content, dir, { allowAbsTilde: false, skipCode: true }, state);
+
+  // Step 4: strip '#@' from resolved import markers (high→low) → block content
+  let stripped = content;
+  for (const r of [...records].sort((a, b) => b.index - a.index))
+    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + 2);
+
+  // Step 5: emit this file's block (paged decision on STRIPPED content)
+  emitText(abs, stripped, state);
+
+  // Step 6: recurse into imports, depth-first, encounter order (pre-order)
+  for (const r of records) {
+    if (state.injectedSet.has(r.abs)) continue;           // belt-and-suspenders (cross-file dedup)
+    await injectFile(r.abs, state, ctx);
+  }
+}
+
+// §5.5 inline-vs-paged decision; pushes block(s); subtracts cost; bumps paged (NOT count).
+function emitText(abs: string, content: string, state: State) {
+  const fileCost = Math.ceil(content.length / 4);
+  if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
+    state.blocks.push(formatTextFileBlock(abs, content));               // whole
+    subtract(state, fileCost);
+  } else if (content.length <= HEAD_CHARS) {
+    state.blocks.push(formatTextFileBlock(abs, content));               // sub-head-sized → whole
+    subtract(state, fileCost);
+  } else {
+    const head = headSlice(content);                                   // first HEAD_CHARS, surrogate-safe
+    state.blocks.push(formatTextFileBlock(abs, head));
+    state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+    state.paged++;
+    subtract(state, Math.ceil(head.length / 4));
+  }
+}
+
+function subtract(state: State, cost: number) {
+  if (state.remaining !== null) state.remaining = Math.max(0, state.remaining - cost);
+}
+
+// ---------- helpers ----------------------------------------------------------
 function cleanToken(raw: string): string {
   let t = raw;
   while (t.length && TRAILING_PUNCT.includes(t[t.length - 1])) t = t.slice(0, -1);
   return t;
 }
-function expandTildeAndResolve(p: string, cwd: string): string {
+function isAbsoluteOrTilde(p: string): boolean {
+  return p.startsWith("/") || p.startsWith("~");
+}
+function expandTildeAndResolve(p: string, baseDir: string): string {
   const home = os.homedir();
-  const expanded = p === "~" ? home
-                 : p.startsWith("~/") ? path.join(home, p.slice(2))
-                 : p;
-  return path.resolve(cwd, expanded);
+  const expanded = p === "~" ? home : p.startsWith("~/") ? path.join(home, p.slice(2)) : p;
+  return path.resolve(baseDir, expanded);
 }
 function extOf(abs: string): string {
   const base = path.basename(abs);
@@ -523,6 +687,75 @@ function isBinary(buf: Buffer): boolean {
   for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
   return false;
 }
+function estimateImageTokens(resized: any): number {
+  if (resized && typeof resized.width === "number" && typeof resized.height === "number") {
+    const tiles = Math.max(1, Math.ceil(resized.width / 512)) * Math.max(1, Math.ceil(resized.height / 512));
+    return tiles * 170 + 85;
+  }
+  return IMAGE_FALLBACK_TOKENS;
+}
+
+// §5.6.1 code-region detection (approximate CommonMark)
+function computeCodeRanges(content: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  // 1) fenced blocks, line by line, with running char offset
+  let pos = 0;
+  while (pos < content.length) {
+    const nl = content.indexOf("\n", pos);
+    const lineEnd = nl === -1 ? content.length : nl;
+    const line = content.slice(pos, lineEnd);
+    const open = FENCE_OPEN_RE.exec(line);
+    if (open) {
+      const fenceChar = open[1][0];
+      const fenceLen = open[1].length;
+      const start = pos;
+      let k = lineEnd + 1;                       // first char after the opening line's newline
+      let end = content.length;                  // default: unterminated → EOF
+      while (k < content.length) {
+        const nl2 = content.indexOf("\n", k);
+        const le2 = nl2 === -1 ? content.length : nl2;
+        const trimmed = content.slice(k, le2).replace(/^ {0,3}/, "");
+        let r = 0;
+        while (r < trimmed.length && trimmed[r] === fenceChar) r++;
+        if (r >= fenceLen) { end = nl2 === -1 ? content.length : nl2 + 1; break; } // closing fence found
+        if (nl2 === -1) { end = content.length; break; }
+        k = nl2 + 1;
+      }
+      ranges.push([start, end]);
+      pos = end;
+      continue;
+    }
+    pos = nl === -1 ? content.length : nl + 1;
+  }
+  // 2) inline code spans not already inside a fenced range
+  INLINE_CODE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = INLINE_CODE_RE.exec(content)) !== null) {
+    if (!inCode(m.index, ranges)) ranges.push([m.index, m.index + m[0].length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  return ranges;
+}
+function inCode(index: number, ranges: [number, number][]): boolean {
+  let lo = 0, hi = ranges.length - 1;            // binary search over sorted ranges
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (index < ranges[mid][0]) hi = mid - 1;
+    else if (index >= ranges[mid][1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+function headSlice(content: string): string {
+  let head = content.slice(0, HEAD_CHARS);       // UTF-16 code units
+  if (head.length === HEAD_CHARS) {              // back up one if ending on a lone high surrogate
+    const code = head.charCodeAt(head.length - 1);
+    if (code >= 0xd800 && code <= 0xdbff) head = head.slice(0, -1);
+  }
+  return head;
+}
+function headStartLine(head: string): number { return (head.match(/\n/g)?.length ?? 0) + 1; }
+function headCompleteLineCount(head: string): number { return head.match(/\n/g)?.length ?? 0; }
 function formatTextFileBlock(abs: string, content: string): string {
   return `<file name="${abs}">\n${content}\n</file>`;
 }
@@ -533,9 +766,14 @@ function formatImageBlock(abs: string, resized: any): string {
 function formatBinaryBlock(abs: string): string {
   return `<file name="${abs}"><binary file — contents not injected; use the read tool if needed></file>`;
 }
+function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, injectedLines: number): string {
+  return `<file name="${abs}"><paged: ${len} chars; head delivered ${injectedLines} complete lines; ` +
+    `read the rest with the read tool at offset:${startLine}, limit:${READ_LIMIT}, ` +
+    `incrementing offset by ${READ_LIMIT} until done></file>`;
+}
 ```
 
-`injectFiles` returns `injected` as a **count** (number ≥ 0); the handler treats `0` as "nothing injected".
+`state.count` is the number of files delivered (≥ 0, whole + paged + image + binary note); the handler treats `0` as "nothing injected" and returns `continue`.
 
 ---
 
@@ -546,20 +784,20 @@ function formatBinaryBlock(abs: string): string {
 | No `#@` in prompt | `continue` (no work). |
 | `#@nonexistent.txt` | Token left verbatim; no block; no error. |
 | `#@some/dir/` (directory) | Token left verbatim. |
-| `text #@a.txt more` | `#@a.ts` → wait, `#@a.txt`; file injected, appended below; inline marker becomes `a.txt` (`#@` stripped, path stays). |
+| `text #@a.txt more` | File injected, appended below; inline marker becomes `a.txt` (`#@` stripped, path stays). |
 | Multiple `#@a.txt #@b.md` | Both injected; blocks appended in order; notify `2 whole`. |
-| Same path twice (`#@a.ts` + `#@./a.ts`) | Injected once (within-run dedup); the repeat token is left verbatim. |
-| `#@huge.log` (50 MB) | If it fits remaining context: injected whole. If it exceeds it: head block + paged directive (§5.5), and the model reads the rest via `read`. Never silently truncated. |
+| Same path twice (`#@a.ts` + `#@./a.ts`, or `#@a.md` that imports `a.ts`) | Injected once across the **whole prompt** (shared `injectedSet`, including imports); repeats left verbatim. |
+| `#@huge.log` (50 MB) | If it fits remaining context: injected whole. If it exceeds it: head block + paged directive (§5.5). Never silently truncated. |
 | `#@data.bin` (binary, NUL) | Binary note block appended; no garbage. |
 | `#@pic.png` | Image attached as `ImageContent` (resized); reference block appended. |
 | `#@~/notes.md` | Tilde-expanded; resolved; injected. |
 | `#@/etc/hosts` (absolute) | Resolved; injected (explicit user intent). |
 | `#@file.txt.` (trailing period) | Period trimmed → `file.txt`; injected. |
-| `(@file.txt)` | `#@`? No — this is `(@...`. For `(#@file.txt)`: `(` is non-word → matches; token `file.txt)` → trimmed to `file.txt`; injected. |
+| `(#@file.txt)` | `(` is non-word → matches; token `file.txt)` → trimmed to `file.txt`; injected. |
 | `foo#@bar` (mid-word) | **Not matched** (`#@` preceded by word char `o`). |
 | `# @file` (space between) | **Not matched** (trigger is `#@`, not `# @`). |
 | Markdown `# Heading` / issue `#1234` | **Not matched** (no `#@`). |
-| `#@file` inside a fenced code block | Still matched/injected (known minor limitation; use `# @` or rephrase to avoid). |
+| `#@file` inside a fenced code block (user prompt) | Still matched/injected (known minor limitation; use `# @` or rephrase to avoid). |
 | Read throws (permissions) | Caught; token left verbatim; other tokens still processed. |
 | `resizeImage` returns `null` | Fall back to raw base64 of original image bytes. |
 | Empty file (0 bytes) | Injected as empty `<file name="…">\n\n</file>` — correct and cheap. |
@@ -567,6 +805,16 @@ function formatBinaryBlock(abs: string): string {
 | Mid-stream steering | Skipped entirely (latency). |
 | RPC / print mode (`ctx.hasUI === false`) | Still injects; skip the `notify`. |
 | Initial CLI/`-p` message containing `#@file` | **Also injected** (input event fires in `prompt()`). |
+| `#@spec.md` that imports `#@api.md` | Both injected: `spec.md` block (import marker stripped to `api.md`), then `api.md` block. Notify `2 whole`. |
+| Markdown import is itself markdown (`a.md`→`b.md`→`c.md`) | All three injected, pre-order: `a.md`, `b.md`, `c.md`. Each once. |
+| Cycle (`a.md`→`b.md`→`a.md`) | `a.md` injected once (claimed before its own scan); `b.md`'s `#@a.md` left verbatim. No infinite loop. |
+| Markdown import with absolute/tilde (`#@/etc/hosts` inside `a.md`) | Ignored (relative-only); left verbatim as `#@/etc/hosts` in injected content. |
+| `#@path` inside fenced/inline code in `a.md` | Not an import; left verbatim. (Escape hatch for documenting `#@`.) |
+| `#@notes.md` where `notes.md` imports a missing `api.md` | `notes.md` injected (marker stripped); `#@api.md` left verbatim in `notes.md` content. |
+| `#@notes.md` where `notes.md` imports a 50 MB `big.log` | `big.log` evaluated against the shared budget; paged if it exceeds remaining. Counted in notify. |
+| Markdown import resolves outside cwd (`#@../shared/api.md` inside `notes.md`) | Allowed (relative to the markdown's dir); injected. |
+| Missing `.md` at top level (`#@nope.md`) | Token left verbatim (missing); no scanning. |
+| Markdown imports push total over budget | Later files page against the running total; never silently exceed (§5.6.2). |
 
 ---
 
@@ -598,6 +846,12 @@ pi -e .                             # quick test (directory — resolves via pac
 | 12 | initial CLI message | `pi -p "Review #@a.ts"` (extension loaded) | `a.ts` injected in the `-p` run too (input event fires for initial message). |
 | 13 | format parity | compare `#@a.ts` output vs `pi @a.ts "x"` CLI output | Both emit `<file name="/abs/a.ts">\n<content>\n</file>` with identical content. |
 | 14 | `@` unaffected | `Review @a.ts` (interactive) | `@a.ts` left as literal text (Pi's existing behavior preserved); no injection by this extension. |
+| 15 | md import | `notes.md` containing `#@api.md`; `#@notes.md` | `notes.md` block (marker→`api.md`) then `api.md` block; notify `2 whole`; no `read` calls. |
+| 16 | md code-exempt | `notes.md` with `` `#@example.ts` `` in a fenced block + a real `#@api.md` | Only `api.md` imported; `#@example.ts` left verbatim in code. |
+| 17 | md cycle | `a.md`→`#@b.md`, `b.md`→`#@a.md`; `#@a.md` | `a.md` + `b.md` injected once each; `b.md`'s `#@a.md` verbatim; no loop; notify `2 whole`. |
+| 18 | md abs rejected | `notes.md` with `#@/etc/hosts`; `#@notes.md` | `/etc/hosts` not imported; marker verbatim; only `notes.md` injected. |
+| 19 | md relative base | `sub/notes.md` imports `api.md` (sibling); `#@sub/notes.md` | `api.md` resolved as `sub/api.md` (relative to the md's dir), injected. |
+| 20 | budget total | `#@a.md` importing 3 files + `#@big.log` (huge) | Imports share budget with top-level; `big.log` pages when total exceeds remaining; notify counts all delivered files. |
 
 ### Automated sanity check (optional)
 
@@ -605,8 +859,10 @@ pi -e .                             # quick test (directory — resolves via pac
 pi.registerCommand("sharp-at-test", {
   description: "Self-test for #@ injection",
   handler: async (_args, ctx) => {
-    // create temp text + binary files, run injectFiles() on sample strings,
-    // assert: text injected, binary noted, missing left, email/mid-word not matched.
+    // create temp text + binary + markdown (with imports) files; run scanTokens/injectFile
+    // on sample strings; assert: text injected, binary noted, missing left, email/mid-word
+    // not matched, markdown imports resolved relative to the md's dir, code-block imports
+    // skipped, cycle terminates, each path injected once.
     ctx.ui.notify("sharp-at self-test passed", "info");
   },
 });
@@ -624,10 +880,15 @@ pi.registerCommand("sharp-at-test", {
 6. **`resizeImage` takes `Uint8Array`.** Wrap explicitly: `new Uint8Array(buf)`.
 7. **Images are base64, no data-URL prefix.** `ImageContent.data` is raw base64.
 8. **Image resize is a necessity, not a config.** Providers reject oversized images; `resizeImage` (2000×2000 default) is hardcoded so injection actually succeeds. This does not contradict "no config" — it's required for correctness, and the user still gets "the whole image" (downscaled to fit).
-9. **Binary detection is for routing, not gating.** Use the NUL-byte heuristic *only* to avoid injecting decoded garbage from non-image binaries. Image files skip this check entirely (handled by MIME type first).
-10. **Append, don't inline-replace; strip the trigger.** Large files would wreck the transcript bubble. Append blocks below a `---`, and strip `#@` from each injected marker (the path stays as the reference). Failed tokens are left verbatim, `#@` included.
+9. **Binary detection is for routing, not gating.** Use the NUL-byte heuristic *only* to avoid injecting decoded garbage from non-image binaries. Image files skip this check entirely (handled by MIME type first). Markdown skips it too (always treated as text so import scanning runs).
+10. **Append, don't inline-replace; strip the trigger.** Large files would wreck the transcript bubble. Append blocks below a `---`, and strip `#@` from each resolved marker (the path stays). Failed tokens are left verbatim, `#@` included.
 11. **Whole file always reaches the model.** Never silently truncate or cap a file. When it fits remaining context, inject inline; when it exceeds it, page via §5.5. The contract is "the model gets all of it," not "all of it in one block."
 12. **Don't touch `@`.** This extension must not match or transform bare `@path`. Only `#@path`. Verify with test #14.
+13. **Markdown recursion is bounded by dedup, not depth.** Each absolute path is claimed in `injectedSet` *before* its content is scanned (self-imports dedup to verbatim). Termination is guaranteed because the set of injectable files is finite and each is processed at most once. No separate depth limit is needed.
+14. **Code-region detection is approximate CommonMark.** Only fenced blocks and inline code are exempted (§5.6.1). The failure modes are benign (a verbatim token left, or an unexpected import) and never corrupt data. Don't pull in a full MD parser.
+15. **Budget is one shared accumulator.** `remaining` is mutated in emission order across top-level tokens and every transitive import; every block (text/image/binary) subtracts its cost. The inline-vs-paged decision is greedy against the running total — that is how the total filesize of all files is accounted for (§5.6.2).
+16. **Strip resolved markers in both scopes.** Top-level resolved markers are stripped from the user prompt; resolved import markers are stripped from each markdown file's content *before* it becomes a block (§5.6 step 4). Failed/deduped/absolute/inside-code markers keep `#@` verbatim everywhere.
+17. **Scan before inject (top-level).** `processTokenStream` runs `scanTokens` once over the whole prompt *before* injecting anything, so a later top-level token whose path an earlier token's import already claimed is left verbatim (cross-subtree dedup). Markdown does its own scan+strip+emit+recurse in `injectMarkdown`.
 
 ---
 
@@ -652,6 +913,17 @@ There is still no user-facing configuration: no toggles, no thresholds, no env v
 
 ### 13.5 Relationship to a size-gated `@`
 With §5.5, `#@` itself covers both the inline and the oversize cases, so a separate size-gated `@` extension is no longer needed for token-economy reasons. `@` stays as Pi's built-in autocomplete and CLI argument handling, unchanged. If a future feature wants `@` to inline small files interactively (which `#@` already does), it can be built independently; it does not compete with this PRD.
+
+### 13.6 Why markdown transitive imports, and why these guards
+
+`#@` already delivers a whole file; markdown files are the one format that commonly *references other files by path* in-band. Letting `#@spec.md` pull in everything `spec.md` points at matches user intent ("give me the spec and its dependencies") with **no new syntax** — the import directive is the same `#@<path>`.
+
+The three guards are deliberate:
+- **Relative-only + resolve-from-the-md's-dir** makes imports portable and stops a shared markdown doc from silently pulling `/etc/passwd` or `~/.ssh/id_rsa`. Top-level user tokens stay unrestricted (the user typed them deliberately).
+- **Dedup (each abs once)** bounds recursion for free — cycles terminate, shared dependencies are injected once. No fragile depth counter.
+- **Code is exempt** because markdown's primary use of `#@` in the wild is *documenting* `#@`. Without the exemption, every doc that shows a `#@` example would import a stray file. Fenced/inline code is the natural escape hatch.
+
+The cost is real: a single `#@` can now balloon to many files. That is why imports share the single context budget (§5.6.2) and page when the running total exceeds remaining — the model never silently receives more than fits, and the total filesize of every file (top-level plus imports) is accounted for in one accumulator.
 
 ---
 
@@ -698,6 +970,14 @@ No suffix-style `@<file>#` trigger. It would inherit Pi's `@` completion for fre
 trailing `#` the user must type (and often backspace an inserted boundary for), and it makes `#` a
 suffix marker that collides with prose. `#@` (prefix) with a completion provider is strictly better.
 
+### 14.4 Scope note (markdown imports are injection-only)
+
+The autocomplete provider (§14.2) only helps the user type a **top-level** `#@path` in the prompt.
+Import directives **inside** an injected markdown file are never typed in the editor, so they get no
+autocomplete — and they need none (the markdown author writes them by hand in the file, where normal
+file-path completion in their editor applies). The import path is resolved relative to the markdown
+file's directory (§4.5), not the prompt cwd.
+
 ---
 
 ## Appendix A — Minimal skeleton
@@ -711,23 +991,50 @@ import path from "node:path";
 import os from "node:os";
 
 const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
+const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;
+const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
   gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
 };
+const MD_EXTS = new Set(["md", "markdown"]);
+const TRAILING_PUNCT = ".,;:!?\")]}>'";
+const PAGED_THRESHOLD = 0.6, MARGIN = 8192, HEAD_CHARS = 8192, READ_LIMIT = 2000;
+const DEFAULT_RESERVE = 8192, IMAGE_FALLBACK_TOKENS = 2805;
+
+interface State {
+  blocks: string[]; images: ImageContent[];
+  injectedSet: Set<string>; remaining: number | null; count: number; paged: number;
+}
 
 export default function (pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension" || event.streamingBehavior === "steer") return { action: "continue" };
     if (!event.text?.includes("#@")) return { action: "continue" };
 
-    const { text, images, injected } = await injectFiles(event.text, event.images ?? [], ctx);
-    if (!injected) return { action: "continue" };
-    return { action: "transform" as const, text, images };
+    const priorPaths = new Set([...event.text.matchAll(/<file name="([^"]+)">/g)].map(x => x[1]));
+    const usage = ctx.getContextUsage?.();
+    const remaining = (usage && usage.tokens !== null)
+      ? Math.max(0, usage.contextWindow - usage.tokens - (ctx.model?.maxTokens ?? DEFAULT_RESERVE) - MARGIN)
+      : null;
+    const state: State = {
+      blocks: [], images: [...(event.images ?? [])],
+      injectedSet: priorPaths, remaining, count: 0, paged: 0,
+    };
+
+    const resolvedIdx = await processTokenStream(event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false }, state, ctx);
+    if (state.count === 0) return { action: "continue" };
+
+    let stripped = event.text;
+    for (const i of [...resolvedIdx].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
+    const whole = state.count - state.paged;
+    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${state.paged > 0 ? `, ${state.paged} paged` : ""}`, "info");
+    return { action: "transform" as const, text: `${stripped}\n\n---\n\n${state.blocks.join("\n\n")}`, images: state.images };
   });
 }
 
-// ... injectFiles() + helpers per §9 ...
+// ... scanTokens / processTokenStream / injectFile / injectMarkdown / emitText / subtract
+//     + helpers + computeCodeRanges / inCode  per §9 ...
 ```
 
 **Companion file — `package.json`:** the skeleton above is the whole extension, but the repo also
@@ -739,4 +1046,4 @@ needs a `package.json` with a `"pi"` manifest so the *directory* is loadable (se
   "pi": { "extensions": ["file-injector.ts"] } }
 ```
 
-**Done-definition:** all 14 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files; prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.
+**Done-definition:** all 20 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files that fit remaining context; markdown imports resolve relative to the importing file's directory, skip code blocks, terminate on cycles, and dedup across the whole prompt; the context budget accounts for the total filesize of all delivered files (top-level + imports); prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.
