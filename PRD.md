@@ -217,17 +217,24 @@ Leave the original `#@path` token **verbatim** in the text. No block is appended
 
 A file larger than the model's remaining context cannot be injected whole. No mechanism puts a file bigger than the context window in front of the model at once. `#@` handles this without making the user fall back to the `read` tool by hand.
 
-**Budget.** Before injecting a text file, compute the remaining context:
-- `used = ctx.getContextUsage()?.tokens ?? 0`
-- `window = ctx.model?.contextWindow ?? DEFAULT_WINDOW`
-- `reserve = ctx.model?.maxTokens ?? DEFAULT_RESERVE`
-- `remaining = window - used - reserve - MARGIN`
+**Budget.** Compute the remaining context once, before the loop. The window comes from the `ContextUsage` object (`usage.contextWindow`), not `ctx.model.contextWindow`:
+```
+const usage = ctx.getContextUsage?.();
+const remaining = (usage && usage.tokens !== null)
+  ? Math.max(0, usage.contextWindow - usage.tokens - (ctx.model?.maxTokens ?? DEFAULT_RESERVE) - MARGIN)
+  : null;
+```
+When `getContextUsage()` is `undefined` or `usage.tokens` is `null`, `remaining` is `null` (see O-1 fallback).
 
-**Decision.** Estimate the file's own cost `fileCost` (see O-3). If `fileCost <= PAGED_THRESHOLD * remaining`, inject the whole file as today (§5.1, §6). Otherwise, page it. `PAGED_THRESHOLD` defaults to `0.6`: a file that would leave the model less than 40% of remaining context for reasoning trips the page path, even if it technically fits.
+**Decision (per text file).** Estimate the file's own cost with the chars-per-token heuristic `fileCost = Math.ceil(content.length / 4)` (O-3). If `remaining === null` (budget unknown) or `fileCost <= PAGED_THRESHOLD * remaining`, inject the whole file inline (§5.1, §6) and subtract `fileCost` from `remaining`. Otherwise page it (below). `PAGED_THRESHOLD` defaults to `0.6`: a file that would leave the model less than 40% of remaining context for reasoning trips the page path, even if it technically fits.
 
-**Page path.** Instead of `formatTextFileBlock(abs, content)`, emit:
-1. a **head block**: the first `HEAD_BYTES` of the content in a normal `<file name="abs">` block, so the model has real content immediately; then
-2. a **directive block**: a note that the file is large, giving its full path and estimated size, and instructing the model to load the remainder with the `read` tool at `offset:0, limit:2000`, incrementing `offset` until it has read the entire file.
+**Page path.** Instead of one `formatTextFileBlock(abs, content)`, emit two blocks:
+1. a **head block** `formatTextFileBlock(abs, head)`, where `head` is the first `HEAD_CHARS` UTF-16 code units of the content, sliced surrogate-safe (a lone trailing high surrogate is backed up one code unit so the pair reads whole on the next page);
+2. a **directive block** `formatPagedDirectiveBlock(abs, content.length, startLine, injectedLines)`, naming the path and size and telling the model to read the rest with the `read` tool at `offset:startLine, limit:READ_LIMIT`, incrementing `offset` by `READ_LIMIT` until done.
+
+`startLine = (newlines in head) + 1` and `injectedLines = (newlines in head)`: the directive resumes at the first line after the complete lines the head delivered, so no content is skipped regardless of line length (a head ending mid-line re-reads that partial line: redundant tail, never data loss). After paging, subtract the head's estimated cost from `remaining`.
+
+**Sub-head guard.** If the whole content fits in `HEAD_CHARS` (`content.length <= HEAD_CHARS`), inject it whole and emit no directive, even if the threshold tripped: a sub-head-sized file that paged only because of a tight budget would otherwise get a directive pointing past EOF.
 
 The model drives the paging across the turn. The extension cannot issue tool calls itself; the `input` handler only rewrites prompt text.
 
@@ -239,12 +246,12 @@ The model drives the paging across the turn. The extension cannot issue tool cal
 
 **Notify.** Surface the mode, guarded on `ctx.hasUI`: `#@ injected N whole` versus `#@ injected N whole, M paged`.
 
-**Constants (defaults to pin).** `PAGED_THRESHOLD = 0.6`, `MARGIN = 8192`, `HEAD_BYTES = 8192` (about 2000 lines, matching the `read` tool's default `limit`), `DEFAULT_WINDOW = 200000`, `DEFAULT_RESERVE = 8192`.
+**Constants.** `PAGED_THRESHOLD = 0.6`, `MARGIN = 8192`, `HEAD_CHARS = 8192` (UTF-16 code units, roughly the `read` tool's default 2000-line page), `READ_LIMIT = 2000` (the `read` tool's `DEFAULT_MAX_LINES`, emitted in the directive), `DEFAULT_RESERVE = 8192`.
 
-**Open questions (resolve before implementation):**
-- **O-1.** Is `ctx.getContextUsage()` populated at `input` time? It is documented as a turn-time helper; the `input` event fires before the turn. Verify at runtime. If it returns `undefined` or stale data, the budget is unreliable; fall back to injecting whole (current behavior) and treat overflow protection as best-effort.
-- **O-2.** Confirm `ctx.model` exposes `contextWindow` and `maxTokens` directly. If it exposes only `{ provider, id }`, resolve the full model via `ctx.modelRegistry` to read the window.
-- **O-3.** `estimateTokens` exported from `@earendil-works/pi-coding-agent` takes an `AgentMessage`, not a string. No exported string-based estimator exists. Use a chars-per-token heuristic, `fileCost = Math.ceil(content.length / 4)` (matching the `faux` provider's internal estimate), which is sufficient for a threshold gate.
+**Resolved questions:**
+- **O-1.** `getContextUsage()` is called at `input` time. When it is `undefined` or `usage.tokens` is `null` (for example right after compaction), `remaining` is `null` and the fallback injects every text file whole. Overflow protection is best-effort, never a regression (test PD3).
+- **O-2.** `getContextUsage()` returns `{ tokens, contextWindow, percent }`, so the window is read from `usage.contextWindow`. `ctx.model` is used only for `maxTokens` (the reserve); `ctx.model.contextWindow` is not read. (`DEFAULT_WINDOW` is a dead leftover in the code and is not used.)
+- **O-3.** No exported string-based estimator exists (`estimateTokens` takes an `AgentMessage`), so the chars-per-token heuristic `Math.ceil(content.length / 4)` is used.
 
 ---
 
@@ -278,7 +285,9 @@ Use the **absolute resolved path** as `name` (matches the CLI format).
 Maintain across all `#@` tokens in the prompt:
 - `blocks: string[]` — the `<file>…</file>` strings produced above.
 - `images: ImageContent[]` — seeded from `event.images ?? []`, appended to for each image.
-- `injected: number` — count of files successfully injected (blocks appended or images attached); `0` means none.
+- `injected: number` — count of files delivered (a block appended or an image attached), whole or paged; `0` means none.
+- `paged: number` — subset of `injected` delivered via the §5.5 page path (head + directive).
+- `injectedThisRun: Set<string>` — resolved absolute paths injected by this pass; together with any `<file>` blocks already in the text (a prior copy or `@file`), each path is injected at most once.
 
 **Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the `#@` trigger** from each injected marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so `#@` is pure noise). Tokens that did **not** inject (missing / directory / read-error) are left byte-for-byte verbatim, `#@` included:
 
@@ -403,10 +412,11 @@ export default function (pi: ExtensionAPI) {
     if (event.streamingBehavior === "steer") return { action: "continue" }; // latency during steering
     if (!event.text?.includes("#@")) return { action: "continue" };         // cheap pre-check
 
-    const { text, images, injected } = await injectFiles(event.text, event.images ?? [], ctx);
-    if (!injected) return { action: "continue" };          // injected is a count; 0 = none
+    const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx);
+    if (!injected) return { action: "continue" };          // injected counts whole+paged; 0 = nothing delivered
 
-    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${injected} file(s)`, "info");
+    const whole = injected - paged;                         // §5.5 mode-aware notify
+    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`, "info");
     return { action: "transform" as const, text, images };
   });
 }
@@ -414,7 +424,18 @@ export default function (pi: ExtensionAPI) {
 async function injectFiles(text, imagesIn, ctx) {
   const blocks: string[] = [];
   const images = [...imagesIn];
-  let count = 0;
+  let count = 0;     // files delivered (whole + paged + image + binary note)
+  let paged = 0;     // subset delivered via the §5.5 page path
+
+  // §5.5 budget. Window comes from usage.contextWindow (NOT ctx.model). O-1: if getContextUsage()
+  // is undefined or usage.tokens is null → remaining = null → inject whole (fallback).
+  const usage = ctx.getContextUsage?.();
+  let remaining = (usage && usage.tokens !== null)
+    ? Math.max(0, usage.contextWindow - usage.tokens - (ctx.model?.maxTokens ?? DEFAULT_RESERVE) - MARGIN)
+    : null;
+  const priorPaths = new Set([...text.matchAll(/<file name="([^"]+)">/g)].map(x => x[1]));
+  const injectedThisRun = new Set<string>();
+  const injectedIndexes: number[] = [];    // offsets of tokens that injected (for precise #@ strip)
 
   for (const m of text.matchAll(FILE_INJECT_RE)) {
     const raw = m[2];                       // token after '#@'
@@ -422,6 +443,7 @@ async function injectFiles(text, imagesIn, ctx) {
     if (!token) continue;
 
     const abs = expandTildeAndResolve(token, ctx.cwd);  // ~ + path.resolve
+    if (priorPaths.has(abs) || injectedThisRun.has(abs)) continue;  // inject each path once
 
     let st;
     try { st = await fs.stat(abs); } catch { continue; }  // missing → leave token
@@ -445,23 +467,37 @@ async function injectFiles(text, imagesIn, ctx) {
         if (isBinary(buf)) {
           blocks.push(formatBinaryBlock(abs));             // §5.3 note, no garbage
         } else {
-          blocks.push(formatTextFileBlock(abs, buf.toString("utf8"))); // ENTIRE file
+          const content = buf.toString("utf8");
+          const fileCost = Math.ceil(content.length / 4);  // O-3 chars-per-token heuristic
+          if (remaining === null || fileCost <= PAGED_THRESHOLD * remaining) {
+            blocks.push(formatTextFileBlock(abs, content));           // inline (whole)
+            if (remaining !== null) remaining = Math.max(0, remaining - fileCost);
+          } else if (content.length <= HEAD_CHARS) {
+            blocks.push(formatTextFileBlock(abs, content));           // sub-head-sized → whole (Finding 2)
+          } else {
+            const head = headSlice(content);                          // first HEAD_CHARS, surrogate-safe
+            blocks.push(formatTextFileBlock(abs, head));
+            blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+            paged++;                                                  // directive resumes at the line after the head
+            if (remaining !== null) remaining = Math.max(0, remaining - Math.ceil(HEAD_CHARS / 4));
+          }
         }
       }
-      count++;
+      injectedThisRun.add(abs); injectedIndexes.push(m.index); count++;
     } catch {
       // read/processing error → leave token, keep going
       continue;
     }
   }
 
-  if (count === 0) return { text, images: imagesIn, injected: 0 }; // nothing injected → byte-for-byte
+  if (count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // nothing delivered → byte-for-byte
 
-  // strip the #@ trigger from each injected marker (the path stays as the reference; #@ is noise).
-  // Failed tokens took the count===0 path above, so they keep their #@ verbatim.
-  const stripped = text.replace(FILE_INJECT_RE, (_m, _boundary, path) => path);
+  // strip '#@' from ONLY the tokens that injected (index-based, high→low). Failed/deduped tokens
+  // keep '#@' verbatim; a substring replace would also corrupt '#@a.ts' inside '#@a.ts.bak'.
+  let stripped = text;
+  for (const i of [...injectedIndexes].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
   const finalText = `${stripped}\n\n---\n\n${blocks.join("\n\n")}`;
-  return { text: finalText, images, injected: count };
+  return { text: finalText, images, injected: count, paged };
 }
 
 // helpers ----------------------------------------------------------
@@ -511,7 +547,8 @@ function formatBinaryBlock(abs: string): string {
 | `#@nonexistent.txt` | Token left verbatim; no block; no error. |
 | `#@some/dir/` (directory) | Token left verbatim. |
 | `text #@a.txt more` | `#@a.ts` → wait, `#@a.txt`; file injected, appended below; inline marker becomes `a.txt` (`#@` stripped, path stays). |
-| Multiple `#@a.txt #@b.md` | Both injected; blocks appended in order; summary notify `2 file(s)`. |
+| Multiple `#@a.txt #@b.md` | Both injected; blocks appended in order; notify `2 whole`. |
+| Same path twice (`#@a.ts` + `#@./a.ts`) | Injected once (within-run dedup); the repeat token is left verbatim. |
 | `#@huge.log` (50 MB) | If it fits remaining context: injected whole. If it exceeds it: head block + paged directive (§5.5), and the model reads the rest via `read`. Never silently truncated. |
 | `#@data.bin` (binary, NUL) | Binary note block appended; no garbage. |
 | `#@pic.png` | Image attached as `ImageContent` (resized); reference block appended. |
@@ -555,7 +592,7 @@ pi -e .                             # quick test (directory — resolves via pac
 | 6 | directory | `List #@src/` | Token left verbatim. |
 | 7 | mid-word | `the foo#@bar thing` | **No** expansion (`#@` preceded by word char). |
 | 8 | markdown/issue | `# Heading and #1234` | **No** expansion (no `#@`). |
-| 9 | multi | `Diff #@a.ts vs #@b.ts` | Both injected; notify says `2 file(s)`. |
+| 9 | multi | `Diff #@a.ts vs #@b.ts` | Both injected; notify says `2 whole`. |
 | 10 | tilde | `Read #@~/notes.md` | Expanded; injected. |
 | 11 | trailing punct | `See #@a.ts.` | Period trimmed; `a.ts` injected. |
 | 12 | initial CLI message | `pi -p "Review #@a.ts"` (extension loaded) | `a.ts` injected in the `-p` run too (input event fires for initial message). |
