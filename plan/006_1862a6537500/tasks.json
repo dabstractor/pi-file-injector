@@ -81,7 +81,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Fix PRD.md Done-definition: 'all 24' → 'all 32' test cases",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 0.5,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Prior research (plan/006_1862a6537500/architecture/research-doc-audit.md) confirmed: PRD.md:1189 (Appendix A, Done-definition) says 'all 24 manual test cases' but §11's manual test matrix now lists 32 rows (#1–#32, no gaps). This is the ONLY stale test-count reference in the file. The '24' at PRD.md:971 is row #24 (a row index, not a count) — correct, do not touch.\n2. INPUT: PRD.md at line 1189. The exact current text is: '**Done-definition:** all **24** manual test cases in §11 pass; ...'\n3. LOGIC: In PRD.md, change 'all **24** manual test cases' to 'all **32** manual test cases' at the Done-definition line. This is a one-token fix. Verify the §11 matrix does indeed have 32 rows (grep for '| [0-9]' in the manual test matrix block). Do NOT modify any other part of PRD.md.\n4. OUTPUT: PRD.md with the corrected count. Confirm no other stale '24' test-count references exist (grep -n '24.*test\\|24.*case\\|all 24' PRD.md should return nothing after the fix).\n5. DOCS: [Mode B] This subtask IS the changeset-level doc fix — the PRD's own Done-definition is the summary doc that drifted. This rides with the doc-audit task, not with implementing subtasks (there are none to implement — this is a verification delta).",
