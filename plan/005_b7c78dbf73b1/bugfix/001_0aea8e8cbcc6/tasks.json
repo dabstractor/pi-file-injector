@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Restore markdown-import verbatim-on-error (Issue 1) & confirm test isolation (Issue 2)",
-      "status": "Researching",
+      "status": "Complete",
       "description": "A focused correctness bugfix changeset addressing the two QA findings in the Bug Fix Requirements PRD. Issue 1 (Major): a delivered markdown file that imports a file which EXISTS (stat OK, isFile OK) but is UNREADABLE (readFile EACCES/I-O) currently has its `#@`/`@` marker STRIPPED to a bare path inside the parent's emitted block, with no block appended — a silent violation of the PRD §5.4 / §5.6 step-4 / §12.5 / §12.16 'leave verbatim on read-error' guarantee and the README 'permission error → Left as written' table. The fix gates the markdown-import marker-strip on READABILITY (not just existence) so strip ⟺ deliverable. Issue 2 (Minor): the `readConfig` test case T2.S1-f isolation gap — REALITY-CHECK: already fixed in the working tree (uncommitted), 120/120 tests pass; this phase confirms and retains it. No Critical issues. NOTE: the image-resizeImage-THROWS variant of Issue 1 is a documented residual (resizeImage is contractually null-on-failure, not throw) and is out of scope for this changeset — see plan/005_b7c78dbf73b1/bugfix/001_0aea8e8cbcc6/architecture/code_changes_analysis.md.",
       "milestones": [
         {
@@ -62,7 +62,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Issue 2: Confirm the already-applied T2.S1-f test-isolation fix + sync changeset docs",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Issue 2 is a test-harness robustness gap, NOT a product bug. REALITY-CHECK (verified by git diff and a full suite run, and independently confirmed): the isolation fix for `T2.S1-f` is ALREADY PRESENT in the working tree (uncommitted) — the whole T2.S1-* family was rewritten to capture a GLOBAL_BASELINE and assert relative to it; T2.S1-f neutralizes the project dedicated file (`PROJ_FILE_PATH='{}'`) and uses `flip` (negation of baseline). The suite reports 120 passed / 0 failed in a dogfooded-global environment. So this milestone is VERIFY-and-retain, plus the final changeset-level documentation sweep (Mode B) that must run after all implementing subtasks.",
           "tasks": [
             {
@@ -93,14 +93,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Final Mode-B documentation sweep that runs AFTER every implementing subtask in this changeset. This is a correctness bugfix that brings the CODE into compliance with EXISTING documentation (README already states 'permission error → Left as written'; the code was the divergent party). The sweep therefore primarily VERIFIES consistency and decides whether any overview touch or residual note is warranted. It must not be skipped even though the expected doc delta is small.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Sweep README.md + overview docs for consistency with the verbatim-on-error fix",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
