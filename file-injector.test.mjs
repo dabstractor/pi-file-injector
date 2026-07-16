@@ -212,6 +212,15 @@ const SRC = path.join(TMPDIR, "src") + path.sep; // includes trailing slash (tok
 
 const FIX = { cwd: TMPDIR };
 
+// §5.5 paged-delivery mock ctx — a TIGHT budget so oversize text files page. Huge.log (~2 MB,
+// fileCost ~524K) PAGES; a.ts (~97 chars, fileCost ~25) stays WHOLE.
+//   remaining = 50000 - 10000 - 8192 - 8192 = 23616;  PAGED_THRESHOLD * remaining = 14169.6
+const PAGED_FIX = {
+  cwd: TMPDIR,
+  getContextUsage: () => ({ tokens: 10000, contextWindow: 50000, percent: 20 }),
+  model: { contextWindow: 50000, maxTokens: 8192 },
+};
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 8. The 14 PRD §11 acceptance cases (+ edges + guards).
 // ──────────────────────────────────────────────────────────────────────────────
@@ -735,6 +744,65 @@ await runCase("A1", "A1 — #@ autocomplete: rewrites '#'→space for built-in, 
   // applyCompletion: non-#@ prefix delegates to the built-in (returns defined value).
   const delegated = provider.applyCompletion(["x"], 0, 1, { value: "y", label: "y" }, "z");
   assert(delegated !== undefined, "non-#@ apply must delegate to built-in (return defined)");
+});
+
+// ── PAGED DELIVERY (PRD §5.5) — budget-aware inline-vs-paged ────────────────────────────
+
+await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + directive, paged=1", async () => {
+  const r = await mod.injectFiles("Summarize #@huge.log", [], PAGED_FIX);
+  assert(r.injected === 1, `huge.log delivered (count includes paged), got injected=${r.injected}`);
+  assert(r.paged === 1, `huge.log must be PAGED under PAGED_FIX, got paged=${r.paged}`);
+  // head block = first HEAD_BYTES (8192) of the content
+  const expectedHead = '<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>';
+  assert(r.text.includes(expectedHead), "paged head block must contain the first 8192 bytes");
+  // directive block = the exported helper's output
+  const expectedDirective = mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length);
+  assert(r.text.includes(expectedDirective), "paged directive block must be present (full path + size + read instruction)");
+  // #@ stripped from the injected marker; the path stays
+  assert(r.text.startsWith("Summarize huge.log"), "#@huge.log must be stripped to huge.log (path stays)");
+  assert(r.images.length === 0, "text-file paging attaches NO images");
+});
+
+await runCase("PD2", "§5.5 mixed: small whole + large paged under tight budget", async () => {
+  const r = await mod.injectFiles("Review #@a.ts and #@huge.log", [], PAGED_FIX);
+  assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
+  assert(r.paged === 1, `exactly one paged (huge.log), got paged=${r.paged}`);
+  // a.ts WHOLE (its full content block present), huge.log paged (head + directive present)
+  assert(r.text.includes('<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>'),
+    "a.ts must be injected WHOLE (fits budget)");
+  assert(r.text.includes('<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>'),
+    "huge.log must be paged (head block)");
+  assert(r.text.includes(mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length)),
+    "huge.log directive block present");
+});
+
+await runCase("PD3", "§5.5 O-1 fallback: budget unknown (FIX) → huge.log injected WHOLE, paged=0", async () => {
+  // The existing FIX mock has no getContextUsage → remainingBudget null → O-1 fallback → inline.
+  // Complements case #2 (byte-equality) by asserting the paged FIELD directly.
+  const r = await mod.injectFiles("Summarize #@huge.log", [], FIX);
+  assert(r.injected === 1, `huge.log delivered whole under no budget, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging when budget unknown (O-1 fallback), got paged=${r.paged}`);
+  assert(r.text.includes('<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT + '\n</file>'),
+    "huge.log must be the FULL content block (not a head slice) under the O-1 fallback");
+});
+
+await runCase("PD4", "§5.5 images unaffected by budget: pic.png attaches under PAGED_FIX", async () => {
+  // Paging is TEXT-only (PRD §5.5 Scope). An image under a tight budget still attaches.
+  const r = await mod.injectFiles("Describe #@pic.png", [], PAGED_FIX);
+  assert(r.injected === 1, `image delivered, got injected=${r.injected}`);
+  assert(r.paged === 0, `images are never paged, got paged=${r.paged}`);
+  assert(r.images.length === 1, `image attached under PAGED_FIX, got ${r.images.length}`);
+  assert(r.text.includes('<file name="' + PIC + '">'), "image reference block present");
+});
+
+await runCase("PD5", "§5.5 binaries unaffected by budget: data.bin note under PAGED_FIX", async () => {
+  // Paging is TEXT-only. A binary under a tight budget still gets the binary note (no bytes).
+  const r = await mod.injectFiles("Inspect #@data.bin", [], PAGED_FIX);
+  assert(r.injected === 1, `binary delivered, got injected=${r.injected}`);
+  assert(r.paged === 0, `binaries are never paged, got paged=${r.paged}`);
+  assert(r.images.length === 0, `binary attaches NO image, got ${r.images.length}`);
+  const expectedNote = '<file name="' + BIN + '"><binary file \u2014 contents not injected; use the read tool if needed></file>';
+  assert(r.text.includes(expectedNote), "binary note block present (unaffected by budget)");
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Budget-Aware Paged Delivery Implementation",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Add the 5 paged-delivery constants, the formatPagedDirectiveBlock helper, widen injectFiles's ctx and return types, implement the remaining-context budget computation with O-1/O-2 fallbacks, insert the inline-vs-paged decision branch at the text-file path, wire multi-file remaining subtraction, add the paged counter, and update the handler notify to report whole-vs-paged mode. Update JSDoc on injectFiles and the factory function (Mode A docs).",
               "subtasks": [
                 {
@@ -42,7 +42,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Budget computation and inline-vs-paged decision branch in injectFiles",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -66,7 +66,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "Handler notify reports whole-vs-paged mode; update factory JSDoc",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"

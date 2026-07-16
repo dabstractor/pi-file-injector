@@ -152,6 +152,24 @@ export async function injectFiles(
   const blocks: string[] = [];
   const images = [...imagesIn]; // MERGE — runner REPLACES the array on transform; seed originals (item §3a)
   let count = 0;
+  let paged = 0; // §5.5 paged-delivery counter — files delivered head+directive (subset of count)
+
+  // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
+  // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
+  // null (right after compaction). Either → remainingBudget = null → O-1 fallback: inject WHOLE
+  // (current behavior). When available: remaining = window - used - reserve - MARGIN, clamped ≥ 0.
+  let remainingBudget: number | null;
+  try {
+    const usage = ctx.getContextUsage?.();
+    if (usage === undefined || usage.tokens === null) {
+      remainingBudget = null; // O-1 fallback: budget unknown → inject whole (no paging)
+    } else {
+      const reserve = ctx.model?.maxTokens ?? DEFAULT_RESERVE;
+      remainingBudget = Math.max(0, usage.contextWindow - usage.tokens - reserve - MARGIN);
+    }
+  } catch {
+    remainingBudget = null; // getContextUsage threw → O-1 fallback (PRD §12.5: never throw)
+  }
 
   // PRIOR-INJECTION SET (defense-in-depth — validator finding F-NEW-1, recommendation #2). Collect
   // EVERY `<file name="<path>">` already present in `text` — whether stamped by a prior copy of THIS
@@ -221,7 +239,21 @@ export async function injectFiles(
         if (isBinary(buf)) {
           blocks.push(formatBinaryBlock(abs)); // §5.3 note — no decoded garbage (em dash U+2014)
         } else {
-          blocks.push(formatTextFileBlock(abs, buf.toString("utf8"))); // ENTIRE file, no truncation (§5.1)
+          // §5.5 INLINE-VS-PAGED — the whole file always reaches the model. Inline when it fits the
+          // remaining budget (or budget unknown → O-1 fallback); else head block + paged directive.
+          const content = buf.toString("utf8");
+          const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
+          if (remainingBudget === null || fileCost <= PAGED_THRESHOLD * remainingBudget) {
+            // INLINE (whole) — current behavior preserved (PRD §5.1)
+            blocks.push(formatTextFileBlock(abs, content));
+            if (remainingBudget !== null) remainingBudget = Math.max(0, remainingBudget - fileCost);
+          } else {
+            // PAGED — head block (first HEAD_BYTES) + directive (PRD §5.5 Page path)
+            blocks.push(formatTextFileBlock(abs, content.slice(0, HEAD_BYTES)));
+            blocks.push(formatPagedDirectiveBlock(abs, content.length));
+            paged++;
+            remainingBudget = Math.max(0, remainingBudget - Math.ceil(HEAD_BYTES / 4));
+          }
         }
       }
       count++;
@@ -239,7 +271,7 @@ export async function injectFiles(
   // above still returns the prompt byte-for-byte (missing/dir/error tokens keep their #@ verbatim).
   const strippedText = text.replace(FILE_INJECT_RE, (_m, _boundary, path) => path);
   const finalText = `${strippedText}\n\n---\n\n${blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
-  return { text: finalText, images, injected: count, paged: 0 };
+  return { text: finalText, images, injected: count, paged };
 }
 
 /**
