@@ -4,6 +4,10 @@
   "private": true,
   "description": "#@file — inject the whole file, every time, everywhere. A Pi extension.",
   "type": "module",
+  "scripts": {
+    "typecheck": "node ./scripts/typecheck.mjs",
+    "test": "node ./file-injector.test.mjs"
+  },
   "pi": {
     "extensions": ["file-injector.ts"]
   }

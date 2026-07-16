@@ -20,7 +20,6 @@ const TRAILING_PUNCT = ".,;:!?\")]}>'";
 const PAGED_THRESHOLD = 0.6;    // inject whole if fileCost <= PAGED_THRESHOLD * remaining
 const MARGIN = 8192;            // safety bytes subtracted from remaining context
 const HEAD_CHARS = 8192;        // head block size in UTF-16 code units (matches read tool DEFAULT_MAX_LINES=2000 at ~4 chars/line)
-const DEFAULT_WINDOW = 200000;  // fallback context window when ctx.model?.contextWindow is absent
 const DEFAULT_RESERVE = 8192;   // fallback for ctx.model?.maxTokens when model is absent
 const READ_LIMIT = 2000;        // read tool DEFAULT_MAX_LINES — page size emitted in the directive
 
@@ -169,16 +168,19 @@ function headCompleteLineCount(head: string): number {
   return n;
 }
 
-/** PRD §5.5 — directive block for a paged (oversize) text file. Emits a <file name="abs"> note
- *  giving the full path + estimated size and instructing the model to read the REMAINDER past the
- *  injected head via the read tool. `startLine` is the 1-indexed line at which the model should
+/** PRD §5.5 / §6.1 — directive block for a paged (oversize) text file. Emits a <file name="abs"> note
+ *  giving the content length + complete lines already delivered in the head, and instructing the model
+ *  to read the REMAINDER via the read tool. `startLine` is the 1-indexed line at which the model should
  *  resume (computed from the ACTUAL line count of the head so the directive is internally
  *  consistent for ANY line length — never the hardcoded 2001 that assumed 8192 chars = 2000 lines);
  *  Pi read offset is 1-indexed, limit is DEFAULT_MAX_LINES=READ_LIMIT=2000, and the model increments
- *  offset by READ_LIMIT until done. `injectedLines` is the count of complete lines in the head (for
- *  the wording). Reuses the em dash (U+2014) from formatBinaryBlock/formatEmptyImageBlock. */
-export function formatPagedDirectiveBlock(abs: string, totalBytes: number, startLine: number, injectedLines: number): string {
-  return '<file name="' + abs + '"><large file \u2014 estimated ' + totalBytes + ' bytes; first ' + injectedLines + ' lines injected above. Use the read tool to read the rest: offset:' + startLine + ', limit:' + READ_LIMIT + ', incrementing offset by ' + READ_LIMIT + ' until the entire file is read></file>';
+ *  offset by READ_LIMIT until done. `injectedLines` is the count of complete lines in the head.
+ *  The wording follows the PRD §6.1 template exactly: `<paged: <len> chars; head delivered <injectedLines>
+ *  complete lines; read the rest …>` — `len` is the content LENGTH in UTF-16 code units (labeled
+ *  "chars" per PRD §6.1, NOT "bytes"; a multibyte char is still one code unit here, so "bytes" would be
+ *  a mislabel for magnitude). */
+export function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, injectedLines: number): string {
+  return '<file name="' + abs + '"><paged: ' + len + ' chars; head delivered ' + injectedLines + ' complete lines; read the rest with the read tool at offset:' + startLine + ', limit:' + READ_LIMIT + ', incrementing offset by ' + READ_LIMIT + ' until done></file>';
 }
 
 /**
@@ -532,8 +534,12 @@ export function emitText(abs: string, content: string, state: State): void {
     // (a head ending mid-line re-reads that partial line — redundant tail, never data loss).
     const head = headSlice(content);
     if (content.length <= HEAD_CHARS) {
-      // whole content fits the head slice → deliver inline, never page (FINDING 2)
+      // whole content fits the head slice → deliver inline, never page (FINDING 2).
+      // The file is delivered WHOLE, so its whole cost is accounted (PRD §5.6.2 "each delivered file
+      // subtracts its cost at emit time"). Earlier this branch pushed the block without subtract(),
+      // which let a tight-but-positive budget never deplete across a run of small files (F1).
       state.blocks.push(formatTextFileBlock(abs, content));
+      subtract(state, fileCost);
     } else {
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));

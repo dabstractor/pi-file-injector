@@ -1,0 +1,18 @@
+{
+  // Type-check config for file-injector.ts (PRD: the extension type-checks clean under --strict
+  // against pi's shipped .d.ts). `npm run typecheck` resolves the globally-installed pi package,
+  // writes a temp tsconfig with the correct `paths`, and runs tsc — so this file is not run
+  // directly by tsc (the pi .d.ts lives outside the repo, in the global node_modules). It is kept
+  // for editor/LSP hints and to document the intended compiler options.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": "."
+  },
+  "files": ["file-injector.ts"]
+}

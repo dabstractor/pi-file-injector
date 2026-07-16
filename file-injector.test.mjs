@@ -895,7 +895,7 @@ await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + direct
   const expectedStart = nl + 1;
   const expectedDirective = mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length, expectedStart, injectedLines);
   assert(r.text.includes(expectedDirective),
-    `paged directive must resume at offset:${expectedStart} (head=${injectedLines} complete lines), got directive=${JSON.stringify((r.text.match(/<file name="[^"]*huge.log"><large file[\s\S]*?<\/file>/) || [])[0])}`);
+    `paged directive must resume at offset:${expectedStart} (head=${injectedLines} complete lines), got directive=${JSON.stringify((r.text.match(/<file name="[^"]*huge.log"><paged:[\s\S]*?<\/file>/) || [])[0])}`);
   // CORRECTNESS PROBE (closes Coverage Gap #1): simulate the model following the directive and assert
   // ZERO lines are skipped. Union {complete head lines ∪ offset-stepped reads of READ_LIMIT} must cover
   // all lines. This is what validate.sh's discovery probe does — it is how Finding 1 was caught. The
@@ -982,10 +982,33 @@ await runCase("PD6", "§5.5 Finding 2: sub-head-sized file under tight budget �
     const expectedBlock = '<file name="' + small + '">\n' + "AB".repeat(2000) + '\n</file>';
     assert(r.text.includes(expectedBlock), "whole content must be injected inline (no head slice)");
     // And NO directive block is emitted (would point past EOF).
-    assert(!r.text.includes("<large file"), "no 'large file' directive for a sub-head-sized file (Finding 2)");
+    assert(!r.text.includes("<paged:"), "no paged directive for a sub-head-sized file (Finding 2)");
   } finally {
     fsSync.rmSync(small, { force: true });
   }
+});
+
+// PD-SUBHEAD-BUDGET (validator F1): the sub-head-guard branch (content ≤ HEAD_CHARS after tripping
+// the page threshold) must subtract fileCost — like the whole path. F1 is a budget-accounting
+// consistency fix with NO single-call externally-observable behavior change (the report rates it
+// low-medium: the sub-head guard always delivers whole by design (Finding 2), so whether subtract
+// ran or not, injected/paged/the emitted blocks are identical for any one injectFiles call). The
+// effect only compounds internally across many files. We therefore pin the fix structurally: read
+// the emitText source and assert the sub-head-guard branch contains a subtract(state, fileCost)
+// call (matching the whole branch). This is a regression guard against the one-line fix being
+// reverted, and documents WHY no behavioral case can distinguish it.
+await runCase("PD-SUBHEAD-BUDGET", "§5.6.2 sub-head guard subtracts fileCost (source-level regression guard) [F1]", async () => {
+  const src = fsSync.readFileSync(path.join(process.cwd(), "file-injector.ts"), "utf8");
+  // locate emitText and inspect only its body
+  const fnStart = src.indexOf("function emitText(");
+  assert(fnStart !== -1, "emitText must exist in file-injector.ts");
+  const fnBody = src.slice(fnStart, src.indexOf("\n}", fnStart) + 2);
+  // the sub-head-guard branch is `if (content.length <= HEAD_CHARS) {` — find it
+  const guardIdx = fnBody.indexOf("content.length <= HEAD_CHARS");
+  assert(guardIdx !== -1, "sub-head guard branch must exist in emitText");
+  const guardBlock = fnBody.slice(guardIdx, fnBody.indexOf("} else {", guardIdx));
+  assert(guardBlock.includes("subtract(state, fileCost)"),
+    `sub-head guard must call subtract(state, fileCost) — F1 fix present in: ${JSON.stringify(guardBlock)}`);
 });
 
 await runCase("PD7", "§5.5 Finding 1: long-lined file (head < 1 line) → directive offset derived from head, 0% loss", async () => {
@@ -1004,7 +1027,7 @@ await runCase("PD7", "§5.5 Finding 1: long-lined file (head < 1 line) → direc
     // The head ends mid-first-line → 0 complete lines (no newline in head) → injectedLines=0,
     // startLine=1 (model re-reads from line 1; line 1's tail is redundant, lines 2–300 are new).
     assert(r.text.includes("offset:1, limit:2000"),
-      `long-lined file: directive must resume at offset:1 (head ends mid-first-line), not offset:2001; got text=${JSON.stringify((r.text.match(/<file name="[^"]*longlines.log"><large file[\s\S]*?<\/file>/) || [])[0])}`);
+      `long-lined file: directive must resume at offset:1 (head ends mid-first-line), not offset:2001; got text=${JSON.stringify((r.text.match(/<file name="[^"]*longlines.log"><paged:[\s\S]*?<\/file>/) || [])[0])}`);
     // CORRECTNESS PROBE: following the directive covers every line (0 lost). The old code lost all 301.
     const total = LL_CONTENT.split("\n").length; // 301 (trailing empty after final \n)
     const seen = new Set();
@@ -1048,6 +1071,20 @@ await runCase("PD8", "§5.5 Finding 3: head slice is surrogate-safe (no lone tra
   } finally {
     fsSync.rmSync(emojiFile, { force: true });
   }
+});
+
+// PD-TEMPLATE pins the PRD §6.1 directive template EXACTLY (validator F2: the paged-directive wording
+// must match the spec, and the length must be labeled "chars" not "bytes"). The earlier tests called
+// mod.formatPagedDirectiveBlock(...) and so passed against any output; this asserts the literal string.
+await runCase("PD-TEMPLATE", "§6.1 paged directive block matches the PRD template exactly (chars, not bytes) [F2]", async () => {
+  const abs = "/abs/huge.log";
+  const got = mod.formatPagedDirectiveBlock(abs, 524288, 2001, 2000);
+  // PRD §6.1: `<paged: <len> chars; head delivered <injectedLines> complete lines; read the rest with
+  // the read tool at offset:<startLine>, limit:2000, incrementing offset by 2000 until done>`
+  const expected = '<file name="' + abs + '"><paged: 524288 chars; head delivered 2000 complete lines; read the rest with the read tool at offset:2001, limit:2000, incrementing offset by 2000 until done></file>';
+  assert(got === expected, `directive must equal the PRD §6.1 template, got ${JSON.stringify(got)}`);
+  assert(!got.includes("bytes"), "directive must NOT label the length as 'bytes' (it is a char/code-unit count) [F2]");
+  assert(!got.includes("<large file"), "directive must NOT use the legacy '<large file' wording [F2]");
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1390,10 +1427,11 @@ await runCase(20, "§5.6.2 shared budget: bigdoc.md + 3 imports whole, huge.log 
   assert(iB < i1 && i1 < i2 && i2 < i3 && i3 < iH,
     `pre-order DFS: bigdoc<part1<part2<part3<huge.log, got iB=${iB},i1=${i1},i2=${i2},i3=${i3},iH=${iH}`);
   // huge.log PAGED: a head block + a directive block (2 occurrences of its <file name> tag). The directive
-  // uses the REAL format '<large file — ... Use the read tool ...>' (NOT '<paged:>'; see file-injector.ts L180).
+  // uses the PRD §6.1 format '<paged: ... chars; head delivered ... complete lines; read the rest with the read tool ...>'.
   const hugeTags = (r.text.match(new RegExp('<file name="' + HUGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
   assert(hugeTags === 2, `huge.log must have a HEAD block + a DIRECTIVE block (2 tags), got ${hugeTags}`);
-  assert(r.text.includes("Use the read tool"), "huge.log paged directive present (real format; §5.5)");
+  assert(r.text.includes("<paged:"), "huge.log paged directive present (PRD §6.1 '<paged: ...>' format)");
+  assert(r.text.includes("with the read tool"), "huge.log paged directive references the read tool (§6.1 'read the rest with the read tool')");
   // bigdoc.md's import markers are STRIPPED (all 4 imports resolved+exist → injectable → stripped).
   assert(r.text.slice(iB, i1).includes("Logs: huge.log"), "bigdoc.md block: the #@huge.log marker stripped to huge.log");
   assert(!r.text.slice(iB, i1).includes("#@"), "bigdoc.md block must contain NO '#@' markers (all imports resolved+stripped)");
