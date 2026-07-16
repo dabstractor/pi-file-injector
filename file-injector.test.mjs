@@ -119,6 +119,10 @@ assert(typeof mod.formatBinaryBlock === "function", "mod.formatBinaryBlock must 
 assert(typeof mod.formatEmptyImageBlock === "function", "mod.formatEmptyImageBlock must be a function (F5)");
 assert(typeof mod.formatPagedDirectiveBlock === "function", "mod.formatPagedDirectiveBlock must be a function (§5.5 paged delivery)");
 assert(typeof mod.hasValidImageMagic === "function", "mod.hasValidImageMagic must be a function (F3)");
+assert(typeof mod.scanTokens === "function", "mod.scanTokens must be a function (scan-only, recursion-ready)");
+assert(typeof mod.injectFile === "function", "mod.injectFile must be a function (stat→claim→classify→count)");
+assert(typeof mod.emitText === "function", "mod.emitText must be a function (inline-vs-paged text decision)");
+assert(typeof mod.isAbsoluteOrTilde === "function", "mod.isAbsoluteOrTilde must be a function (§4.5 markdown relative-only guard)");
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. Mock pi/ctx factories + handler capture (verified pattern — drives guards/notify/transform).

@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Refactor core to shared mutable State (no behavior change)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Introduce a shared `State` object carried across the whole prompt, consolidate the two dedup sets into `state.injectedSet`, and restructure the single linear `injectFiles` loop into recursion-ready helpers (scanTokens / processTokenStream / injectFile / emitText / subtract). MI-1: text/image/binary only — NO markdown yet. The hard acceptance gate is byte-for-byte preservation of all existing behavior.",
               "subtasks": [
                 {
@@ -44,7 +44,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Extract scanTokens / processTokenStream / injectFile / emitText (recursion-ready)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -76,7 +76,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Markdown constants + code-region detection helpers",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"

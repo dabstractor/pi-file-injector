@@ -201,15 +201,180 @@ function subtract(state: State, cost: number): void {
   }
 }
 
+/** PRD §4.5 / §9 — markdown imports are relative-only; top-level user tokens allow absolute/tilde.
+ *  scanTokens drops these when opts.allowAbsTilde is false. (No-op at top level: allowAbsTilde===true.)
+ *  OWNED BY T1.S2 — T2.S1 REUSES this export (do NOT re-declare it there). */
+export function isAbsoluteOrTilde(p: string): boolean {
+  return p.startsWith("/") || p.startsWith("~");
+}
+
+/** Shared ctx type for injectFiles / processTokenStream / injectFile (DRY; jiti erases at runtime). */
+type Ctx = {
+  cwd: string;
+  getContextUsage?: () =>
+    { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+  model?: { contextWindow: number; maxTokens: number } | undefined;
+};
+
+/**
+ * PRD §9 / §5.6 step 3 — scan a text (user prompt OR markdown content) for `#@` tokens that resolve,
+ * WITHOUT injecting. Pure (no I/O, no state mutation beyond the per-text localSeen set). Per-text dedup
+ * via localSeen; global state.injectedSet check skips already-claimed paths (prior <file> blocks OR files
+ * injected earlier this run / in a parent recursion). Returns { index; abs }[] in text order.
+ *
+ * opts.skipCode: T1.S2 STUB — top-level scan passes skipCode:false, so NO code check runs. T2.S1 will
+ *   add `const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;` and, inside the loop,
+ *   `if (codeRanges && inCode(m.index!, codeRanges)) continue;` (PRD §5.6.1). Do NOT reference those
+ *   names here — they do not exist yet.
+ * opts.allowAbsTilde: when false, tokens starting with / or ~ are dropped (markdown relative-only, §4.5).
+ */
+export function scanTokens(
+  text: string,
+  baseDir: string,
+  opts: { allowAbsTilde: boolean; skipCode: boolean },
+  state: State,
+): { index: number; abs: string }[] {
+  const localSeen = new Set<string>();
+  const out: { index: number; abs: string }[] = [];
+  for (const m of text.matchAll(FILE_INJECT_RE)) {
+    // (T2.S1 inserts the code-region exemption here when skipCode:true lands.)
+    const token = cleanToken(m[2]); // trim trailing punctuation (§4.3)
+    if (!token) continue; // empty after trim => skip, leave verbatim
+    if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue; // §4.5 — markdown: relative only
+    const abs = expandTildeAndResolve(token, baseDir); // ~ expand + resolve(baseDir) (§4.4)
+    if (state.injectedSet.has(abs) || localSeen.has(abs)) continue; // dedup → leave verbatim
+    localSeen.add(abs);
+    out.push({ index: m.index!, abs });
+  }
+  return out;
+}
+
+/**
+ * PRD §9 / §12.17 — top-level processor. Scan the text ONCE (before any injection), then inject each
+ * resolved token depth-first via injectFile. Returns the start indices of markers that resolved, in scan
+ * order, for `#@` stripping by injectFiles. Scan-before-inject gives cross-subtree dedup (a later token
+ * whose path an earlier import claimed is left verbatim). PRIVATE — exercised indirectly via injectFiles.
+ *
+ * The belt-and-suspenders `state.injectedSet.has(r.abs)` re-check is a NO-OP at top level in T1.S2
+ * (scanTokens' localSeen already made each abs unique in records); it becomes load-bearing in T2 when
+ * injectFile recurses into markdown imports.
+ */
+async function processTokenStream(
+  text: string,
+  baseDir: string,
+  opts: { allowAbsTilde: boolean; skipCode: boolean },
+  state: State,
+  ctx: Ctx,
+): Promise<number[]> {
+  const records = scanTokens(text, baseDir, opts, state); // scan once, before any injection
+  const resolved: number[] = [];
+  for (const r of records) {
+    if (state.injectedSet.has(r.abs)) continue; // cross-subtree dedup since scan (no-op at top level in T1.S2)
+    const ok = await injectFile(r.abs, state, ctx); // claims abs, emits block(s); never throws
+    if (ok) resolved.push(r.index);
+  }
+  return resolved;
+}
+
+/**
+ * PRD §9 / §5.1-§5.3 — stat → claim → classify → emit → count. Claims `abs` in state.injectedSet AFTER
+ * stat+isFile succeed but BEFORE read, so a self-import or mid-recursion re-entry dedups to verbatim
+ * (recursion-readiness for T2 markdown; behavior-neutral at top level). NEVER throws: stat miss / !isFile
+ * / read or resize error → return false (token left verbatim, PRD §5.4 / §12.5).
+ *
+ * Classification (preserve F3/F5; NO markdown branch yet — T2.S3): (1) empty image (mime && buf.length===0)
+ * → F5 note; (2) real image (mime && hasValidImageMagic) → attach ImageContent + image block; (3) binary
+ * (isBinary) → binary note; (4) else → emitText. Budget: ONLY emitText subtracts (T2.S2 adds image/binary).
+ * Returns true iff a block/image was emitted (state.count bumped exactly once per claimed file).
+ */
+export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<boolean> {
+  let st;
+  try {
+    st = await fs.stat(abs);
+  } catch {
+    return false; // missing → leave verbatim (PRD §5.4)
+  }
+  if (!st.isFile()) return false; // directory / socket / etc. → leave verbatim (PRD §5.4)
+  state.injectedSet.add(abs); // CLAIM — dedup incl. self-import (recursion-readiness)
+
+  const ext = extOf(abs); // lowercase ext, "" for no-dot/hidden (S2)
+  const mime = MIME_BY_EXT[ext]; // undefined → not a recognized image → text/binary path
+  try {
+    const buf = await fs.readFile(abs); // read ONCE; reused by image + text/binary paths
+    if (mime && buf.length === 0) {
+      // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
+      // Align with the text path's empty-file handling: emit a note block, attach nothing.
+      state.blocks.push(formatEmptyImageBlock(abs));
+    } else if (mime && hasValidImageMagic(buf, mime)) {
+      // F3 — validate the ACTUAL bytes match the declared image type before attaching.
+      // A mislabeled file (e.g. text named `.png`) fails the magic-number sniff and falls
+      // through to the text/binary path instead of attaching decoded garbage as an image.
+      const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
+      state.images.push({
+        type: "image",
+        data: resized?.data ?? buf.toString("base64"), // null => raw base64 of ORIGINAL bytes
+        mimeType: resized?.mimeType ?? mime, // null => original mime
+      });
+      state.blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file>
+    } else if (isBinary(buf)) {
+      // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014)
+      state.blocks.push(formatBinaryBlock(abs));
+    } else {
+      // PLAIN TEXT (PRD §5.1 + §5.5) — inline-vs-paged decision (lifted verbatim into emitText)
+      emitText(abs, buf.toString("utf8"), state);
+    }
+    state.count++; // exactly one delivery per claimed file
+    return true;
+  } catch {
+    return false; // read/resize error → leave THIS token verbatim (PRD §5.4, §12.5)
+  }
+}
+
+/**
+ * PRD §9 / §5.5 — inline-vs-paged decision for a text file. Pushes block(s) onto state.blocks and subtracts
+ * the block's cost from state.remaining via subtract(). Bumps state.paged on the page path (NOT count —
+ * injectFile bumps count once per file). Lifted VERBATIM from the former inline text branch of injectFiles
+ * (T1.S1): whole if budget unknown or fileCost ≤ PAGED_THRESHOLD·remaining; sub-head guard (content ≤
+ * HEAD_CHARS → whole, no directive, no extra subtract); else head + directive + paged++ + subtract(head cost).
+ */
+export function emitText(abs: string, content: string, state: State): void {
+  const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
+  if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
+    // INLINE (whole) — current behavior preserved (PRD §5.1)
+    state.blocks.push(formatTextFileBlock(abs, content));
+    subtract(state, fileCost);
+  } else {
+    // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
+    //
+    // FINDING 2: if the WHOLE content already fits in the head, there is nothing to page —
+    // inject it whole and do NOT emit a directive (a sub-head-sized file that tripped the
+    // page threshold only because of a tight budget would otherwise get a 'read the rest'
+    // directive pointing past EOF, causing a spurious read error for content already delivered).
+    //
+    // FINDING 1: derive the directive's resume offset from the ACTUAL line count of the head
+    // (headStartLine = newlines+1; headCompleteLineCount = newlines). The old hardcoded
+    // offset:2001 assumed the 8192-char head equals 2000 lines, which is only true for ~4-char
+    // lines; for realistic files it silently lost the lines between the head's real end and
+    // line 2000 (up to 100% for long-lined files). The directive now points exactly past the
+    // COMPLETE lines the head delivered, so no content is skipped regardless of line length
+    // (a head ending mid-line re-reads that partial line — redundant tail, never data loss).
+    const head = headSlice(content);
+    if (content.length <= HEAD_CHARS) {
+      // whole content fits the head slice → deliver inline, never page (FINDING 2)
+      state.blocks.push(formatTextFileBlock(abs, content));
+    } else {
+      state.blocks.push(formatTextFileBlock(abs, head));
+      state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+      state.paged++;
+      subtract(state, Math.ceil(HEAD_CHARS / 4));
+    }
+  }
+}
+
 export async function injectFiles(
   text: string,
   imagesIn: ImageContent[],
-  ctx: {
-    cwd: string;
-    getContextUsage?: () =>
-      { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
-    model?: { contextWindow: number; maxTokens: number } | undefined;
-  },
+  ctx: Ctx,
 ): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number }> {
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
@@ -259,114 +424,15 @@ export async function injectFiles(
     paged: 0, // §5.5 paged-delivery counter — files delivered head+directive (subset of count)
   };
 
-  // Issue 2 — start indices of tokens that ACTUALLY injected (pushed at each success site below).
-  // Used after the loop to strip '#@' from EXACTLY those tokens (failed/dir/error and deduped
-  // repeats are never pushed → they keep '#@' verbatim, PRD §6.2). Group 1 of FILE_INJECT_RE is
-  // zero-width, so m.index is exactly the '#'; splicing out 2 chars drops exactly '#@'.
-  const injectedIndexes: number[] = [];
-
-  for (const m of text.matchAll(FILE_INJECT_RE)) {
-    const raw = m[2]; // capture group 2 = path token after #@ (group 1 is the zero-width ^ anchor)
-    const token = cleanToken(raw); // trim trailing punctuation (S2)
-    if (!token) continue; // empty after trim => skip, leave verbatim
-
-    const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
-
-    // PER-TOKEN DEDUP — if a <file> block for this exact absolute path was already injected (by a
-    // prior copy in the runner's input-handler chain, by Pi's own @file expander, OR earlier in THIS
-    // run), skip re-injecting. state.injectedSet consolidates the prior-injection set with the
-    // within-run set (Issue 1); a same-path repeat in one prompt (e.g. "Compare #@a.ts with #@a.ts",
-    // or "#@a.ts" + "#@./a.ts") therefore injects ONCE. Cooperation-independent: works even when the
-    // prior copy was a non-sentinel version. Fixes Issue 1.
-    if (state.injectedSet.has(abs)) continue;
-
-    let st;
-    try {
-      st = await fs.stat(abs);
-    } catch {
-      continue; // missing file => leave token verbatim (PRD §5.4)
-    }
-    if (!st.isFile()) continue; // directory / socket / etc. => leave token verbatim (PRD §5.4)
-
-    const ext = extOf(abs); // lowercase ext, "" for no-dot/hidden (S2)
-    const mime = MIME_BY_EXT[ext]; // undefined => not a recognized image => text/binary path
-
-    try {
-      const buf = await fs.readFile(abs); // read ONCE; reused by image + text/binary paths
-
-      // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
-      // Align with the text path's empty-file handling: emit a note block, attach nothing.
-      if (mime && buf.length === 0) {
-        state.blocks.push(formatEmptyImageBlock(abs));
-        state.injectedSet.add(abs); // consolidated dedup (Issue 1)
-        injectedIndexes.push(m.index); // record injected-token index for precise #@ strip (Issue 2)
-        state.count++;
-        continue;
-      }
-
-      // F3 — validate the ACTUAL bytes match the declared image type before attaching.
-      // A mislabeled file (e.g. text named `.png`) fails the magic-number sniff and falls
-      // through to the text/binary path instead of attaching decoded garbage as an image.
-      const isRealImage = mime ? hasValidImageMagic(buf, mime) : false;
-
-      if (mime && isRealImage) {
-        // IMAGE path (PRD §5.2) — classified by MIME first; SKIPS the NUL-byte check entirely.
-        const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
-        state.images.push({
-          type: "image",
-          data: resized?.data ?? buf.toString("base64"), // null => raw base64 of ORIGINAL bytes
-          mimeType: resized?.mimeType ?? mime, // null => original mime
-        });
-        state.blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file> (T2.S1 guards null)
-      } else {
-        // TEXT / BINARY path (PRD §5.1 / §5.3) — also the F3 fallback for mislabeled image-ext files.
-        if (isBinary(buf)) {
-          state.blocks.push(formatBinaryBlock(abs)); // §5.3 note — no decoded garbage (em dash U+2014)
-        } else {
-          // §5.5 INLINE-VS-PAGED — the whole file always reaches the model. Inline when it fits the
-          // remaining budget (or budget unknown → O-1 fallback); else head block + paged directive.
-          const content = buf.toString("utf8");
-          const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
-          if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
-            // INLINE (whole) — current behavior preserved (PRD §5.1)
-            state.blocks.push(formatTextFileBlock(abs, content));
-            subtract(state, fileCost);
-          } else {
-            // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
-            //
-            // FINDING 2: if the WHOLE content already fits in the head, there is nothing to page —
-            // inject it whole and do NOT emit a directive (a sub-head-sized file that tripped the
-            // page threshold only because of a tight budget would otherwise get a 'read the rest'
-            // directive pointing past EOF, causing a spurious read error for content already delivered).
-            //
-            // FINDING 1: derive the directive's resume offset from the ACTUAL line count of the head
-            // (headStartLine = newlines+1; headCompleteLineCount = newlines). The old hardcoded
-            // offset:2001 assumed the 8192-char head equals 2000 lines, which is only true for ~4-char
-            // lines; for realistic files it silently lost the lines between the head's real end and
-            // line 2000 (up to 100% for long-lined files). The directive now points exactly past the
-            // COMPLETE lines the head delivered, so no content is skipped regardless of line length
-            // (a head ending mid-line re-reads that partial line — redundant tail, never data loss).
-            const head = headSlice(content);
-            if (content.length <= HEAD_CHARS) {
-              // whole content fits the head slice → deliver inline, never page (FINDING 2)
-              state.blocks.push(formatTextFileBlock(abs, content));
-            } else {
-              state.blocks.push(formatTextFileBlock(abs, head));
-              state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
-              state.paged++;
-              subtract(state, Math.ceil(HEAD_CHARS / 4));
-            }
-          }
-        }
-      }
-      state.injectedSet.add(abs); // consolidated dedup (Issue 1) — covers text-inline/paged/image/binary
-      injectedIndexes.push(m.index); // record injected-token index for precise #@ strip (Issue 2)
-      state.count++;
-    } catch {
-      // read/resize error => leave THIS token verbatim, keep processing the rest (PRD §5.4, §12.5)
-      continue;
-    }
-  }
+  // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping.
+  // processTokenStream scans ONCE (before any injection) then calls injectFile per record (PRD §12.17),
+  // returning the start indices of markers that ACTUALLY injected. Failed tokens (missing/dir/error)
+  // and deduped repeats are never returned → they keep '#@' verbatim (PRD §6.2). scanTokens' per-text
+  // localSeen + state.injectedSet give cross-subtree dedup (a later token whose path an earlier import
+  // claimed is left verbatim); processTokenStream's belt-and-suspenders injectedSet re-check is a no-op
+  // at top level in T1.S2 (each abs is already unique in records) but load-bearing for T2 recursion.
+  const resolvedIdx = await processTokenStream(
+    text, ctx.cwd, { allowAbsTilde: true, skipCode: false }, state, ctx);
 
   if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
@@ -374,14 +440,14 @@ export async function injectFiles(
   // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
   // every #@ is 2 tokens of pure noise. Reached only when count > 0, so the nothing-injected path
   // above still returns the prompt byte-for-byte (missing/dir/error tokens keep their #@ verbatim).
-  // §6.2 — strip the '#@' trigger ONLY from tokens that ACTUALLY injected (Issue 2). Failed tokens
-  // (missing/dir/error) and deduped repeats were never pushed, so they keep '#@' verbatim.
+  // §6.2 — strip the '#@' trigger ONLY from tokens that ACTUALLY injected. Failed tokens
+  // (missing/dir/error) and deduped repeats were never returned, so they keep '#@' verbatim.
   // INDEX-BASED SPLICE (not substring replace): an injected match can be a prefix of another token
   // (e.g. '#@a.ts' ⊂ '#@a.ts.bak'), so a substring replace would corrupt the longer token. Group 1
   // of FILE_INJECT_RE is zero-width → m.index is exactly the '#'; removing 2 chars drops exactly
   // '#@'. Process high→low so earlier offsets stay valid.
   let strippedText = text;
-  for (const i of [...injectedIndexes].sort((a, b) => b - a)) {
+  for (const i of [...resolvedIdx].sort((a, b) => b - a)) {
     strippedText = strippedText.slice(0, i) + strippedText.slice(i + 2);
   }
   const finalText = `${strippedText}\n\n---\n\n${state.blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
