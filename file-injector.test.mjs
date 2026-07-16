@@ -326,7 +326,7 @@ await runCase(9, "multi-file: both injected in order; notify count", async () =>
   const slot = captureHandler();
   const out = await slot.cb({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must return transform, got '${out.action}'`);
-  assert(rec.notify && rec.notify.m === "#@ injected 2 files", `notify message must be the count, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  assert(rec.notify && rec.notify.m === "#@ injected 2 whole", `notify message must be the count, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
   assert(rec.notify.t === "info", `notify type must be 'info', got '${rec.notify && rec.notify.t}'`);
 });
 
@@ -358,7 +358,7 @@ await runCase(12, "handler transforms interactive input (input event fires for -
   const out = await slot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform an interactive #@ prompt, got '${out.action}'`);
   assert(out.text && out.text.includes('<file name="' + A_TS + '">'), "transformed text must contain the injected block");
-  assert(rec.notify && rec.notify.m === "#@ injected 1 file", "notify must fire for the interactive path");
+  assert(rec.notify && rec.notify.m === "#@ injected 1 whole", "notify must fire for the interactive path");
 });
 integrationCase(
   12,
@@ -701,16 +701,16 @@ await runCase("F5", "F5 — 0-byte image file → note block, NO empty ImageCont
   assert(r.text.includes(expected), "0-byte image must produce the empty-image note block");
 });
 
-await runCase("F4", "F4 — notify pluralization (1 file / N files)", async () => {
+await runCase("F4", "F4 — notify wording (1 whole / N whole)", async () => {
   const { ctx, rec } = makeMockCtx(TMPDIR);
   const slot = captureHandler();
   const out = await slot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform, got '${out.action}'`);
-  assert(rec.notify && rec.notify.m === "#@ injected 1 file", `singular prompt must say '1 file', got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  assert(rec.notify && rec.notify.m === "#@ injected 1 whole", `singular prompt must say '1 whole', got ${JSON.stringify(rec.notify && rec.notify.m)}`);
   const { ctx: ctx2, rec: rec2 } = makeMockCtx(TMPDIR);
   const slot2 = captureHandler();
   await slot2.cb({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx2);
-  assert(rec2.notify && rec2.notify.m === "#@ injected 2 files", `plural prompt must say '2 files', got ${JSON.stringify(rec2.notify && rec2.notify.m)}`);
+  assert(rec2.notify && rec2.notify.m === "#@ injected 2 whole", `plural prompt must say '2 whole', got ${JSON.stringify(rec2.notify && rec2.notify.m)}`);
 });
 
 // ── U1: Unicode word-boundary regression (Issue 5) ────────────────────────────
@@ -857,19 +857,19 @@ await runCase("PD5", "§5.5 binaries unaffected by budget: data.bin note under P
 // ── §5.5 HANDLER NOTIFY (PRD §5.5 Notify) — mode-aware notify via the input handler ──────
 // The handler now destructures `paged` from injectFiles and reports whole-vs-paged mode. The existing
 // notify cases (F4 pluralization, #9 multi-file, #12 interactive, H1 headless) use a budget-less ctx →
-// paged is always 0 → they exercise the paged===0 backward-compat path (existing "N file(s)" style).
+// paged is always 0 → they exercise the paged===0 path (unified "N whole" wording).
 // PN1–PN4 cover the paged>0 path and the headless guard under paging. PN2/PN3/PN4 build a budget-aware
 // mock ctx that MERGES makeMockCtx's notify-recording ui+hasUI with PAGED_FIX's tight budget (the two
 // existing mocks are complementary: makeMockCtx has ui but no budget; PAGED_FIX has budget but no ui).
 
-await runCase("PN1", "§5.5 notify: all-whole prompt (no budget) → 'N files' (existing style preserved)", async () => {
-  // No budget → injectFiles O-1 fallback → all whole → paged=0 → existing pluralized message.
+await runCase("PN1", "§5.5 notify: all-whole prompt (no budget) → 'N whole' (unified whole style)", async () => {
+  // No budget → injectFiles O-1 fallback → all whole → paged=0 → unified "N whole" message.
   const { ctx, rec } = makeMockCtx(TMPDIR);
   const slot = captureHandler();
   const out = await slot.cb({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform, got '${out.action}'`);
-  assert(rec.notify && rec.notify.m === "#@ injected 2 files",
-    `paged===0 must use the existing plural style, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  assert(rec.notify && rec.notify.m === "#@ injected 2 whole",
+    `paged===0 uses the unified whole style, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
   assert(rec.notify.t === "info", `notify type must be 'info', got '${rec.notify && rec.notify.t}'`);
 });
 

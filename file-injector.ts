@@ -334,13 +334,12 @@ export default function (pi: ExtensionAPI) {
     const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx); // §5.5 — paged count drives the mode-aware notify below
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered
 
-    // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). paged===0 preserves the
-    // existing pluralized "N file(s)" style; paged>0 reports whole and paged counts separately.
+    // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). Unified wording: always
+    // "N whole"; append ", M paged" only when paging. paged===0 → "#@ injected N whole"; paged>0 →
+    // "#@ injected N whole, M paged".
     const whole = injected - paged;
-    const msg = paged > 0
-      ? `#@ injected ${whole} whole, ${paged} paged`
-      : `#@ injected ${injected} ${injected === 1 ? "file" : "files"}`;
-    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // F4 pluralization preserved on the paged===0 path; guarded for print/json headless modes (api_verification §5)
+    const msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
+    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 unified whole/paged wording; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
   });
 

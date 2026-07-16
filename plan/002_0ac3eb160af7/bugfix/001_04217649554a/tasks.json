@@ -61,21 +61,21 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Minor Spec-Compliance Fixes (Issues 3 and 4)",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Fix the two Minor (Nice to Fix) spec-deviation bugs. Issue 3: the all-whole notify message says '#@ injected N file(s)' instead of PRD 5.5's '#@ injected N whole'. Issue 4: the paged-delivery directive says 'offset:0', but Pi's read tool offset is 1-indexed so offset:0 re-reads the already-injected head block (and offset:0 is identical to offset:1). These are independent single-location fixes (the notify block in the input handler; the formatPagedDirectiveBlock helper) and have no dependency on M1. Verified strategies and exact test impact are in architecture/code_changes_analysis.md.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Unify the notify wording to PRD 5.5 (N whole / N whole, M paged) (Issue 3)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Change the all-whole notify branch to use the PRD 5.5 wording ('#@ injected N whole') so the message is consistent in both the all-whole and the paged cases. The paged>0 branch already uses whole/paged and is unchanged.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Update the handler notify message and the 4 test cases that pin the old wording",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 3 section). CONFIRMED LIVE: 'Review #@a.ts' -> notify '#@ injected 1 file'; PRD 5.5 Notify examples say '#@ injected N whole' versus '#@ injected N whole, M paged'. The current handler computes 'whole = injected - paged' and builds msg with a ternary: when paged>0 it emits '#@ injected <whole> whole, <paged> paged'; when paged===0 it emits '#@ injected <injected> file' or 'files'. The paged>0 branch is already correct; only the paged===0 branch deviates.\n2. INPUT: The 'input' handler in the default factory (registered via pi.on('input', ...)). injected and paged come from injectFiles. ctx.hasUI gates the notify; ctx.ui.notify(msg, 'info').\n3. LOGIC: Replace the branched msg with a single unified expression matching PRD 5.5: the message is the string '#@ injected ' followed by whole, followed by ' whole', and when paged>0 additionally ', ' + paged + ' paged'. In other words: when paged===0 the message is '#@ injected N whole'; when paged>0 it is '#@ injected N whole, M paged'. Keep the 'if (ctx.hasUI) ctx.ui.notify(msg, info)' guard and the 'return { action: transform, text, images }' unchanged. (Implicit TDD: update the assertions first so they fail, then apply the fix.)\n4. OUTPUT: notify reads '#@ injected N whole' for all-whole and '#@ injected N whole, M paged' when paging. UPDATE exactly these existing assertions (verified by grep - all mechanical 'file(s)' to 'whole'): Case 9 (around line 329) '#@ injected 2 files' -> '#@ injected 2 whole'; Case 12 (around line 361) '#@ injected 1 file' -> '#@ injected 1 whole'; F4 (around lines 661 and 665) '1 file'->'1 whole' and '2 files'->'2 whole'; PN1 (around line 823) '#@ injected 2 files' -> '#@ injected 2 whole' and refresh its name/comment ('existing plural style preserved' -> 'unified whole style'). PN2 (around line 836, '1 whole, 1 paged') and PN3 (around line 847, '0 whole, 1 paged') already match the paged branch - leave them. Full suite green.\n5. DOCS: none - the notify string is not quoted in README.md, so no doc surface changes. [Mode A: none.]",
@@ -92,14 +92,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Make the paged-delivery directive internally consistent so it does not re-read the injected head (Issue 4)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "The formatPagedDirectiveBlock helper instructs the model to read at offset:0, limit:2000, but Pi's read tool offset is 1-indexed ('offset ? Math.max(0, offset-1) : 0'), so offset:0 (identical to offset:1) starts at line 1 and re-reads the ~2000 lines already delivered as the head block. Make the directive point the model past the head (Option A, recommended) so the head is not re-read, and add a hardcoded-string assertion to pin the corrected offset (existing PD1/PD2 only assert presence via the helper, not correctness).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Update formatPagedDirectiveBlock to resume past the head + pin the offset with a hardcoded assertion",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 4 section) and architecture/external_deps.md section 1. CONFIRMED: Pi's read tool offset is 1-indexed with a 0-clamp - 'startLine = offset ? Math.max(0, offset-1) : 0' (dist/core/tools/read.js) - so offset:0 and offset:1 are IDENTICAL (both start at line 1), re-reading the already-injected head. The head block is content.slice(0, HEAD_BYTES) (8192 BYTES); the read window is line-based (limit:2000). An EXACT line offset to skip a byte head is impossible, BUT the PRD itself frames 'HEAD_BYTES = 8192 (about 2000 lines, matching the read tool default limit)', so an approximate line offset is consistent with the PRD own equivalence. Pick Option A (resume past the head, smallest diff, keeps the head+directive two-block structure). Also note: PD1/PD2 assert the directive via mod.formatPagedDirectiveBlock(...) (presence, not correctness) - they would pass even for an obviously wrong offset.\n2. INPUT: formatPagedDirectiveBlock(abs: string, totalBytes: number): string (exported pure helper) and the paged branch in injectFiles that calls blocks.push(formatPagedDirectiveBlock(abs, content.length)).\n3. LOGIC: Change ONLY the directive string in formatPagedDirectiveBlock to point the model past the ~2000-line head (keep HEAD_BYTES and the byte head block in injectFiles unchanged). Recommended wording: a note saying the large file has an estimated <totalBytes> bytes with the first ~2000 lines injected above, and instructing the model to read the rest with 'offset:2001, limit:2000', incrementing offset by 2000 until the entire file is read (offset:2001 = first line after the ~2000-line head; consistent with the PRD '8192 bytes ~= 2000 lines' framing). Keep the em dash (U+2014) convention. Do NOT change the head slice (content.slice(0, HEAD_BYTES)) or the HEAD_BYTES constant. (Implicit TDD: add the hardcoded assertion first, watch it fail on the old offset:0, then apply the string change.)\n4. OUTPUT: formatPagedDirectiveBlock emits a directive whose offset resumes AFTER the injected head. PD1/PD2 keep passing (they derive the expected string from the helper). ADD a hardcoded-string assertion to PD1 (and/or PD2) that pins the corrected offset, e.g. assert that r.text includes the substring 'offset:2001, limit:2000' with a message explaining the directive must resume past the injected head, not re-read it. Optionally add a short comment to PD1 noting the directive is now internally consistent with the read tool 1-indexed offset. Full suite green.\n5. DOCS: none - the directive string is model-facing and not quoted in README.md. [Mode A: none.]",
