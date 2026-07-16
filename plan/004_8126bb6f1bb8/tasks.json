@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Markdown Import Extension Shorthand",
-      "status": "Ready",
+      "status": "Complete",
       "description": "DELTA on the already-shipped `#@file` extension (plan/003 = Markdown Transitive Imports = Complete). Add one focused feature: a `#@<path>` directive INSIDE an injected markdown file may omit its `.md`/`.markdown` extension — `#@PRD` resolves to `PRD.md` (then `PRD.markdown`) when no bare `PRD` exists. This is MARKDOWN-IMPORT-ONLY; top-level user-prompt `#@` tokens stay EXACT-MATCH. Exact-match always wins; dedup keys on the resolved absolute path. Baseline before this phase: 77/77 tests green, typecheck 0 errors. Research is stored in plan/004_8126bb6f1bb8/architecture/ (system_context.md, codebase_insertion_points.md, delta_analysis.md, external_deps.md). No new Pi APIs, no new npm deps, no structural refactor — reuses the shared-State markdown-import recursion from plan/003 verbatim.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Implement, validate & document extension shorthand",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Land the shorthand resolution core (two new stat-based helpers + an async scanTokens that threads tryMdExt through both call sites), expand the PRD §11 acceptance matrix (cases 21–24) and §10 edge cases (EDG-1..4), keep the existing 77-case suite byte-for-byte green, typecheck clean, then sync the one changeset-level README bullet. Single milestone because the change is localized (~4 SP total) and the blast radius is exactly two async call sites + two new helpers.",
           "tasks": [
             {
@@ -69,14 +69,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Mode B (final) changeset-level doc task: surface the new markdown-import extension-shorthand capability in README.md. Per-file/touched JSDoc already rode with P1.M1.T1.S1 (Mode A). This task covers the whole-feature/overview doc that only makes sense once the feature + its acceptance matrix are in place. Declares dependencies on every implementing subtask it summarizes so it runs last. No code change.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "README.md — add Extension shorthand bullet to the Markdown imports subsection",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

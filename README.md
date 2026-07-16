@@ -77,9 +77,10 @@ Images are matched by their real bytes, not just the extension. A text file rena
 
 **Paths:** relative (against your current directory), absolute (`#@/etc/hosts`), tilde (`#@~/notes.md`), and `../` all work.
 
-**Markdown imports:** a `#@` inside a delivered `.md` or `.markdown` file is itself an import, using the same grammar. Four rules narrow it:
+**Markdown imports:** a `#@` inside a delivered `.md` or `.markdown` file is itself an import, using the same grammar. Five rules narrow it:
 
 - **Relative paths only.** Imports resolve against the markdown file's own directory, not your current directory. Absolute (`#@/etc/hosts`) and tilde (`#@~/notes.md`) imports inside a markdown file are ignored and left verbatim.
+- **Extension shorthand.** A markdown import may omit the `.md`/`.markdown` extension: `#@PRD` resolves to `PRD.md` (then `PRD.markdown`) when no bare `PRD` exists. Exact match wins (a bare `readme` beats `readme.md`), and a token already ending in any extension is left as-is (so `#@PRD.md` never becomes `PRD.md.md`). This is a markdown-import convenience only — at the prompt you type the full name.
 - **Code is the escape hatch.** A `#@` inside a fenced or inline code span is not an import — it stays verbatim. So a doc can show `` `#@example.ts` `` as an example without importing anything.
 - **Each file is injected at most once.** Across the whole prompt — top-level tokens, every import, and cycles — a given file appears in one block only. Shared dependencies dedup; cycles terminate.
 - **Shared budget.** Imports draw on the same context budget as the top-level prompt. When the running total exceeds the window, later files page (head block plus a `read`-tool directive) instead of overflow.
