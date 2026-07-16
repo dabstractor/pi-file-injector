@@ -6,6 +6,13 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
+/** PRD §4.6 — markdown opt-in bare-`@` imports (the wiki-style `@path` shorthand). The lookbehind forbids a
+ *  preceding `#` (so `#@file` is matched ONCE by FILE_INJECT_RE and NEVER here — no double candidate) AND a
+ *  preceding word char (letter/digit/underscore — so `user@host.com`, `café@x`, `日本語@x` don't match).
+ *  Unicode `\p{}` classes + the `u` flag mirror the shipped FILE_INJECT_RE for consistency. NOT exported.
+ *  (PRD §4.6 literal `/(^|(?<=[^\w#]))@(\S+)/g` is the ASCII-equivalent form; this Unicode form is the
+ *  recommendation.) Wires into scanTokens via `opts.bareAt` (markdown-only / opt-in, P1.M2). */
+const BARE_AT_RE = /(^|(?<![\p{L}\p{N}_#]))@(\S+)/gu;
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -428,29 +435,45 @@ type Ctx = {
  * opts.tryMdExt: when true, an extensionless token whose exact path is not a regular file falls back to
  *   `<exact>.md` then `<exact>.markdown` (markdown-import shorthand, PRD §4.5 rule 3). Top-level user-prompt
  *   scan passes `false` (§4.4 exact-only → top-level behavior is byte-for-byte identical to today).
+ * opts.bareAt: OPTIONAL. When truthy, scanTokens ALSO matches bare `@path` markers (BARE_AT_RE, PRD §4.6)
+ *   alongside the `#@` markers, returning a union of candidate records sorted by index. Each record carries
+ *   `prefixLen` (2 for `#@`, 1 for a bare `@`) so a consumer can strip the correct marker width. Markdown-
+ *   only / opt-in; the two regexes never double-match the same `#@` (BARE_AT_RE forbids a preceding `#`).
+ *   When absent/false, ONLY `#@` matches run → byte-for-byte identical to the single-regex form.
+ *
+ * Returns { index; prefixLen; abs }[] in text order (prefixLen is the marker char width: 2 for `#@`, 1 for `@`).
  */
 export async function scanTokens(
   text: string,
   baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt?: boolean },
   state: State,
-): Promise<{ index: number; abs: string }[]> {
+): Promise<{ index: number; prefixLen: number; abs: string }[]> {
   const localSeen = new Set<string>();
-  const out: { index: number; abs: string }[] = [];
+  const out: { index: number; prefixLen: number; abs: string }[] = [];
   // §5.6.1 — when scanning markdown content, precompute code regions once and skip `#@` matches whose
   // start index lies inside a fenced block or inline code span (the markdown escape hatch, §4.5 rule 3).
   // null when skipCode:false (top-level user-prompt scan) → inCode is never called → no behavior change.
   const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;
-  for (const m of text.matchAll(FILE_INJECT_RE)) {
-    if (codeRanges && inCode(m.index!, codeRanges)) continue; // §5.6.1 — skip #@ inside code
-    const token = cleanToken(m[2]); // trim trailing punctuation (§4.3)
+  // Candidate markers: `#@` always (prefixLen 2); bare `@` only when opts.bareAt (prefixLen 1). BARE_AT_RE
+  // forbids a preceding `#`, so `#@file` appears once (via FILE_INJECT_RE), never twice. When bareAt is
+  // absent/false, cands holds only the FILE_INJECT_RE matches in index-ascending order (matchAll yields
+  // ascending), so the sort is a no-op and the per-candidate body below is byte-for-byte identical to the
+  // prior single-loop form.
+  const cands: { idx: number; token: string; prefixLen: number }[] = [];
+  for (const m of text.matchAll(FILE_INJECT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 2 });
+  if (opts.bareAt) for (const m of text.matchAll(BARE_AT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 1 });
+  cands.sort((a, b) => a.idx - b.idx);
+  for (const c of cands) {
+    if (codeRanges && inCode(c.idx, codeRanges)) continue; // §5.6.1 — skip markers inside code
+    const token = cleanToken(c.token); // trim trailing punctuation (§4.3)
     if (!token) continue; // empty after trim => skip, leave verbatim
     if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue; // §4.5 — markdown: relative only
     const abs = await resolveImportPath(token, baseDir, opts.tryMdExt); // §4.5 — exact, then .md/.markdown (stats)
     if (!abs) continue; // nothing resolved → leave verbatim (missing/dir/non-regular)
     if (state.injectedSet.has(abs) || localSeen.has(abs)) continue; // dedup on RESOLVED abs → leave verbatim
     localSeen.add(abs);
-    out.push({ index: m.index!, abs });
+    out.push({ index: c.idx, prefixLen: c.prefixLen, abs });
   }
   return out;
 }

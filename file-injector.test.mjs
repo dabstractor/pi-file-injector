@@ -1730,6 +1730,100 @@ await runCase("EDG-4", "§10 md edge: #@sub/notes (sub/notes.md exists) → sub/
   assert(!r.text.includes("See #@sub/notes here."), "the resolved import marker must NOT retain #@");
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ── P1.M1.T1.S1: scanTokens bare-`@` engine unit tests (PRD §4.6 — the BARE_AT_RE union) ──
+// scanTokens is the single chokepoint where markers are detected. When opts.bareAt is truthy it ALSO runs
+// BARE_AT_RE alongside FILE_INJECT_RE, returning a union of candidate records sorted by index, each tagged
+// with prefixLen (2 for `#@`, 1 for bare `@`). The State literal needs NO bareAt field — scanTokens reads
+// only injectedSet here. Fixtures TMPDIR/api.md, a.md, b.md already exist (buildFixtures). When bareAt is
+// absent/false the scan is byte-for-byte identical to today (only `#@`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// T1.S1-8 — bareAt OFF ignores bare `@`. With bareAt:false, scanTokens runs ONLY FILE_INJECT_RE, so a prose
+// `@api.md` (no `#@`) yields NO records. Proves the optional default keeps behavior identical.
+await runCase("T1.S1-8", "scanTokens bare-@ off: 'Review @api.md here' → [] (no #@, bare-@ not scanned)", async () => {
+  const arr = await mod.scanTokens(
+    "Review @api.md here",
+    TMPDIR,
+    { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: false },
+    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(Array.isArray(arr) && arr.length === 0, `bareAt:false must ignore bare @, got ${JSON.stringify(arr)}`);
+});
+
+// T1.S1-9 — bareAt ON matches both forms. '@api.md' (prefixLen 1) AND '#@b.md' (prefixLen 2) both resolve.
+await runCase("T1.S1-9", "scanTokens bare-@ on: '@api.md and #@b.md' → 2 records (prefixLen 1 + 2)", async () => {
+  const arr = await mod.scanTokens(
+    "@api.md and #@b.md",
+    TMPDIR,
+    { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
+    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 2, `expected 2 records (bare @ + #@), got ${arr.length}: ${JSON.stringify(arr)}`);
+  const bare = arr.find((r) => r.prefixLen === 1);
+  const hash = arr.find((r) => r.prefixLen === 2);
+  assert(bare && bare.abs === API, `bare-@ record must be prefixLen 1 with abs api.md, got ${JSON.stringify(bare)}`);
+  assert(hash && hash.abs === B_MD, `#@ record must be prefixLen 2 with abs b.md, got ${JSON.stringify(hash)}`);
+  assert(arr[0].index < arr[1].index, "records must be sorted by index ascending");
+});
+
+// T1.S1-10 — NO DOUBLE-MATCH on `#@`. BARE_AT_RE's lookbehind forbids a preceding `#`, so '#@a.md' is
+// matched ONCE (by FILE_INJECT_RE, prefixLen 2). NOTE: even if both regexes produced a candidate, dedup keys
+// on the RESOLVED abs — so a same-path double is invisible at the record level. The authoritative exclusion
+// is the verified regex itself (BARE_AT_RE is not exported, so it can't be tested directly from the .mjs).
+await runCase("T1.S1-10", "scanTokens no-double-match: '#@a.md' (bareAt:true) → ONE record, prefixLen 2, index 0", async () => {
+  const arr = await mod.scanTokens(
+    "#@a.md",
+    TMPDIR,
+    { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
+    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 1, `#@a.md must yield exactly ONE record (no double-match), got ${arr.length}: ${JSON.stringify(arr)}`);
+  assert(arr[0].prefixLen === 2, `the surviving record must be the #@ form (prefixLen 2), got ${arr[0].prefixLen}`);
+  assert(arr[0].index === 0, `record must be at index 0, got ${arr[0].index}`);
+  assert(arr[0].abs === A_MD, `record must resolve to a.md, got ${arr[0].abs}`);
+});
+
+// T1.S1-11 — mid-word / Unicode `@` excluded. BARE_AT_RE forbids a preceding word char (\p{L}\p{N}_), so
+// 'user@host.com' (letter before @) does NOT match. Nothing resolves → empty.
+await runCase("T1.S1-11", "scanTokens bare-@ mid-word excluded: 'email user@host.com' → [] (even with bareAt:true)", async () => {
+  const arr = await mod.scanTokens(
+    "email user@host.com",
+    TMPDIR,
+    { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
+    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 0, `mid-word @ must be excluded, got ${JSON.stringify(arr)}`);
+});
+
+// T1.S1-12 — DEDUP on resolved abs. '#@api.md' (prefixLen 2) and '@api.md' (prefixLen 1) both resolve to the
+// SAME abs (TMPDIR/api.md). Dedup keys on the resolved abs → the second candidate is dropped via localSeen.
+// The first one wins by index order (the #@ at index 0 sorts before the bare @ at index 8).
+await runCase("T1.S1-12", "scanTokens dedup: '#@api.md @api.md' → ONE record (both resolve to api.md)", async () => {
+  const arr = await mod.scanTokens(
+    "#@api.md @api.md",
+    TMPDIR,
+    { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
+    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 1, `dedup must collapse to ONE record, got ${arr.length}: ${JSON.stringify(arr)}`);
+  assert(arr[0].abs === API, `record must resolve to api.md, got ${arr[0].abs}`);
+  assert(arr[0].prefixLen === 2, `first-by-index (#@) wins → prefixLen 2, got ${arr[0].prefixLen}`);
+  assert(arr[0].index === 0, `surviving record is the #@ at index 0, got ${arr[0].index}`);
+});
+
+// T1.S1-13 — code-exempt. With skipCode:true, a bare '@api.md' INSIDE a fenced code block is skipped
+// (computeCodeRanges/inCode applies to bare-@ candidates exactly as it does to #@). Nothing resolves → empty.
+await runCase("T1.S1-13", "scanTokens bare-@ code-exempt: fenced '@api.md' (skipCode:true) → []", async () => {
+  const arr = await mod.scanTokens(
+    "```\n@api.md\n```",
+    TMPDIR,
+    { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: true },
+    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 0, `bare-@ inside a fenced block must be skipped (code-exempt), got ${JSON.stringify(arr)}`);
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
