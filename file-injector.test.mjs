@@ -182,6 +182,18 @@ function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "empty.png"), "");
   fsSync.mkdirSync(path.join(TMPDIR, "src"), { recursive: true }); // a directory
 
+  // Markdown transitive-import fixtures (PRD §5.6). notes.md has BOTH a real #@api.md (prose) AND a
+  // fenced #@example.ts (code-exempt) — it serves cases 15 (import) + 16 (code-exempt). sub/api.md is
+  // DELIBERATELY distinct from top-level api.md so case 19 can prove resolution is relative to the md's dir.
+  fsSync.writeFileSync(path.join(TMPDIR, "notes.md"), "# Notes\n\nImports #@api.md here.\n\n```\n#@example.ts\n```\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "api.md"), "# API\n\nTop-level API surface.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "a.md"), "# A\n\nRefs #@b.md.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "b.md"), "# B\n\nBack #@a.md.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "notesAbs.md"), "# Abs\n\nIgnored #@/etc/hosts here.\n");
+  fsSync.mkdirSync(path.join(TMPDIR, "sub"), { recursive: true });
+  fsSync.writeFileSync(path.join(TMPDIR, "sub", "notes.md"), "# Sub Notes\n\nSee #@api.md.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "sub", "api.md"), "# Sub API\n\nSibling API in sub/.\n");
+
   // ~2 MB huge.log: many repeated lines. Exact byte-equality vs. the fixture proves "entire file,
   // no truncation" without bloating the repo. Computed once so case #2 can compare block content
   // byte-for-byte against THIS exact buffer.
@@ -218,6 +230,21 @@ const HUGE = path.join(TMPDIR, "huge.log");
 const SRC = path.join(TMPDIR, "src") + path.sep; // includes trailing slash (token "src/")
 
 const FIX = { cwd: TMPDIR };
+
+// Markdown transitive-import path constants (PRD §5.6 — cases 15-19).
+const NOTES = path.join(TMPDIR, "notes.md");
+const API = path.join(TMPDIR, "api.md");
+const A_MD = path.join(TMPDIR, "a.md");
+const B_MD = path.join(TMPDIR, "b.md");
+const NOTES_ABS = path.join(TMPDIR, "notesAbs.md");
+const SUB_NOTES = path.join(TMPDIR, "sub", "notes.md");
+const SUB_API = path.join(TMPDIR, "sub", "api.md");
+
+// countFileBlocks — counts <file name="ABS"> block-openers for `abs` in `text`. Dedupes the inline
+// regex-count pattern (escape-special-chars + match length) used across F1/F1c/DUP1/etc.
+function countFileBlocks(text, abs) {
+  return (text.match(new RegExp('<file name="' + abs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+}
 
 // §5.5 paged-delivery mock ctx — a TIGHT budget so oversize text files page. Huge.log (~2 MB,
 // fileCost ~524K) PAGES; a.ts (~97 chars, fileCost ~25) stays WHOLE.
@@ -1215,6 +1242,76 @@ await runCase("BG3", "§5.6.2 — empty-image (F5) + huge.log under PAGED_FIX: e
   assert(emptyIdx !== -1, "empty-image note block must be present");
   assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
   assert(emptyIdx < hugeHeadIdx, `empty-image note block must precede the huge.log head block (emission order), got empty=${emptyIdx} huge=${hugeHeadIdx}`);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ── MARKDOWN TRANSITIVE IMPORTS (PRD §5.6) — cases 15-19 (FIX, no budget → all whole) ──
+// A delivered .md is an import SOURCE: its content is scanned for #@<path>, each resolved import is
+// itself delivered (and, if markdown, scanned in turn). Recursion is relative-only, code-exempt, and
+// dedup-bounded (NOT depth-limited). FIX has no budget → emitText injects whole → injected===count, paged===0.
+// ──────────────────────────────────────────────────────────────────────────────
+await runCase(15, "md import: notes.md imports api.md → both blocks (pre-order), marker stripped, injected=2", async () => {
+  const r = await mod.injectFiles("Review #@notes.md", [], FIX);
+  assert(r.injected === 2, `expected injected===2 (notes.md + api.md), got ${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notes.md"), "top-level #@notes.md marker stripped to notes.md");
+  const iNotes = r.text.indexOf('<file name="' + NOTES + '">');
+  const iApi = r.text.indexOf('<file name="' + API + '">');
+  assert(iNotes !== -1 && iApi !== -1, "both notes.md and api.md blocks must be present");
+  assert(iNotes < iApi, "notes.md block must appear BEFORE api.md block (pre-order depth-first: parent then import)");
+  // the import marker inside notes.md is stripped to the bare path (the fenced #@example.ts is left verbatim)
+  assert(r.text.includes("Imports api.md here."), "notes.md block: resolved import marker stripped to api.md");
+  assert(!r.text.includes("Imports #@api.md here."), "the resolved import marker must NOT retain #@");
+});
+
+await runCase(16, "md code-exempt: fenced #@example.ts left verbatim; only api.md imported", async () => {
+  const r = await mod.injectFiles("Review #@notes.md", [], FIX);  // same notes.md as #15
+  assert(r.injected === 2, `only notes.md + api.md injected (example.ts is code-exempt), got ${r.injected}`);
+  // the fenced #@example.ts is left VERBATIM in the notes.md block (code-region exemption, §5.6.1)
+  assert(r.text.includes("#@example.ts"), "the fenced #@example.ts must be left VERBATIM (code-exempt, not stripped)");
+  // example.ts is never imported (code-exempt → never resolved, never stat'd; it is not even a fixture)
+  assert(!r.text.includes('<file name="' + path.join(TMPDIR, "example.ts") + '">'),
+    "example.ts must NOT be injected (inside a fenced block → code-exempt)");
+});
+
+await runCase(17, "md cycle: a.md↔b.md → each once, b.md's #@a.md verbatim, no loop, injected=2", async () => {
+  const r = await mod.injectFiles("Start #@a.md", [], FIX);
+  assert(r.injected === 2, `a.md + b.md injected once each (cycle terminates via dedup), got ${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  const iA = r.text.indexOf('<file name="' + A_MD + '">');
+  const iB = r.text.indexOf('<file name="' + B_MD + '">');
+  assert(iA !== -1 && iB !== -1, "both a.md and b.md blocks present");
+  assert(iA < iB, "a.md block before b.md block (pre-order: a.md then its import b.md)");
+  assert(countFileBlocks(r.text, A_MD) === 1, `a.md must appear exactly ONCE (dedup), got ${countFileBlocks(r.text, A_MD)}`);
+  assert(countFileBlocks(r.text, B_MD) === 1, `b.md must appear exactly ONCE (dedup), got ${countFileBlocks(r.text, B_MD)}`);
+  // b.md's #@a.md is LEFT VERBATIM: a.md was claimed (in injectFile) before b.md scanned it → dedup → verbatim.
+  assert(r.text.includes("Back #@a.md."), "b.md's #@a.md must be left VERBATIM (a.md already injected → deduped, NOT stripped)");
+});
+
+await runCase(18, "md abs rejected: #@/etc/hosts ignored (relative-only), verbatim, only notesAbs.md injected", async () => {
+  const r = await mod.injectFiles("Read #@notesAbs.md", [], FIX);
+  assert(r.injected === 1, `only notesAbs.md injected (absolute import ignored), got ${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  // the #@/etc/hosts marker is left VERBATIM (relative-only rule fires BEFORE resolution/stat)
+  assert(r.text.includes("#@/etc/hosts"), "the absolute #@/etc/hosts must be left VERBATIM (relative-only, not resolved)");
+  assert(!r.text.includes('<file name="/etc/hosts">'), "/etc/hosts must NOT be injected (relative-only rule)");
+});
+
+await runCase(19, "md relative base: sub/notes.md's #@api.md → sub/api.md (md's dir, not cwd), injected=2", async () => {
+  const r = await mod.injectFiles("Read #@sub/notes.md", [], FIX);
+  assert(r.injected === 2, `sub/notes.md + sub/api.md injected, got ${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Read sub/notes.md"), "top-level #@sub/notes.md marker stripped to sub/notes.md");
+  const iSubNotes = r.text.indexOf('<file name="' + SUB_NOTES + '">');
+  const iSubApi = r.text.indexOf('<file name="' + SUB_API + '">');
+  assert(iSubNotes !== -1 && iSubApi !== -1, "both sub/notes.md and sub/api.md blocks present");
+  assert(iSubNotes < iSubApi, "sub/notes.md block before sub/api.md block (pre-order)");
+  // CRITICAL: api.md resolved as sub/api.md (relative to the markdown's dir), NOT TMPDIR/api.md.
+  assert(r.text.includes("Sibling API in sub/."), "sub/api.md's DISTINCT content present (proves resolution relative to md dir)");
+  assert(!r.text.includes("Top-level API surface."), "the top-level api.md must NOT be injected (resolution is relative to the md's dir)");
+  // sub/notes.md's #@api.md marker stripped to api.md
+  assert(r.text.includes("See api.md."), "sub/notes.md's import marker stripped to api.md");
+  assert(!r.text.includes("See #@api.md."), "the resolved import marker must NOT retain #@");
 });
 
 // 10. Summary + cleanup + exit.

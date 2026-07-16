@@ -69,7 +69,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Markdown transitive imports + total-size budget accounting",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Add the markdown import feature (§5.6 + §4.5 + §5.6.1) and the per-type budget accounting (§5.6.2). New constants (MD_EXTS, code-region regexes, IMAGE_FALLBACK_TOKENS), new helpers (isAbsoluteOrTilde, computeCodeRanges, inCode, estimateImageTokens, injectMarkdown), wire the markdown branch into injectFile, and make images + binary notes consume the shared budget. Adds PRD §11 cases 15-20 + markdown fixtures.",
               "subtasks": [
                 {
@@ -116,7 +116,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S3",
                   "title": "injectMarkdown (6-step) + wire markdown into injectFile + cases 15-19",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1",
@@ -144,7 +144,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S4",
                   "title": "Shared-budget case 20 + edge cases + module-surface sync",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S3"

@@ -479,6 +479,13 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
       });
       state.blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file>
       subtract(state, estimateImageTokens(resized)); // §5.6.2 — image consumes budget (tile estimate; never paged)
+    } else if (MD_EXTS.has(ext)) {
+      // MARKDOWN (PRD §5.6) — text block + transitive imports. Markdown bypasses the §5.1 NUL/binary routing
+      // so import scanning always runs (§5.6 step 1). injectMarkdown (§5.6 six steps): claim self → scan
+      // relative-only imports outside code → strip resolved #@ markers → emit this block (paged decision on
+      // the STRIPPED content) → recurse depth-first (pre-order). Recursion is dedup-bounded (each abs claimed
+      // before its scan; cycles dedup to verbatim), NOT depth-limited. injectFile owns the count++ + the claim.
+      await injectMarkdown(abs, buf.toString("utf8"), state, ctx);
     } else if (isBinary(buf)) {
       // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014)
       const binBlock = formatBinaryBlock(abs);
@@ -533,6 +540,65 @@ export function emitText(abs: string, content: string, state: State): void {
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }
+  }
+}
+
+/**
+ * PRD §5.6 — markdown transitive imports (the six-step algorithm). Called by injectFile's markdown branch
+ * (a delivered .md/.markdown is an import source). Recursion contract:
+ *   • RELATIVE-ONLY (§4.5 rule 1): imports starting with / or ~ are ignored (left verbatim) — only relative
+ *     tokens resolve. (Contrast: top-level user tokens allow / and ~.)
+ *   • CODE-EXEMPT (§5.6.1 / §4.5 rule 3): a #@ inside a fenced block or inline code span is NOT an import
+ *     — left verbatim, never stripped. (Detection is approximate-CommonMark, reused from scanTokens.)
+ *   • DEDUP-BOUNDED, NOT depth-limited (§12.13): each abs is claimed in state.injectedSet BEFORE its scan,
+ *     so a self-import or cycle (a.md→b.md→a.md) dedups to verbatim and cannot recurse infinitely. The set
+ *     of injectable files is finite and each is processed at most once — termination is guaranteed without
+ *     a depth counter.
+ *   • PRE-ORDER depth-first: this file's block is emitted (Step 5) BEFORE recursing into imports (Step 6),
+ *     so the model sees a parent's context before the detail it pulls in.
+ *
+ * Six steps (PRD §5.6):
+ *   2. Claim self (idempotent: injectFile pre-claimed abs; included for contract self-containedness).
+ *   3. scanTokens(content, dirname(abs), { allowAbsTilde:false, skipCode:true }) → resolved import records.
+ *   4. Strip '#@' from each resolved marker (high→low, leaving the path) → `stripped` = block content.
+ *      Unresolved/deduped/absolute/inside-code markers keep '#@' verbatim (never in records).
+ *   5. emitText(abs, stripped, state) — the paged decision runs on the STRIPPED content (so directive text
+ *      the model won't see does not bias the budget). emitText owns the subtract + paged bump (NOT count).
+ *   6. Recurse into imports in ENCOUNTER order: if not already claimed, await injectFile(abs) (which claims,
+ *      classifies, bumps count, and recurses again if the import is itself markdown).
+ *
+ * PRIVATE — exercised indirectly via injectFiles (PRD §11 cases 15-19). Does NOT bump count (injectFile
+ * owns the single count++ per claimed file; imports bump count in their own injectFile).
+ *
+ * @param abs     the importing markdown's absolute path (already claimed by injectFile; resolution base = dirname)
+ * @param content the markdown's decoded UTF-8 content (buf.toString("utf8") from injectFile)
+ * @param state   the shared State (blocks/images/injectedSet/remaining/count/paged) threaded across the prompt
+ * @param ctx     threaded to the recursive injectFile calls (cwd unused — imports resolve from dirname(abs))
+ */
+async function injectMarkdown(abs: string, content: string, state: State, ctx: Ctx): Promise<void> {
+  // Step 2 — CLAIM SELF (idempotent: injectFile already added abs; included per PRD §5.6 step-2 contract).
+  state.injectedSet.add(abs);
+
+  const dir = path.dirname(abs); // §4.5 rule 2 — imports resolve relative to the markdown's directory, not cwd
+
+  // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true).
+  const records = scanTokens(content, dir, { allowAbsTilde: false, skipCode: true }, state);
+
+  // Step 4 — strip '#@' from each resolved import marker (high→low so earlier offsets stay valid), leaving
+  // the path. `stripped` becomes THIS file's block content.
+  let stripped = content;
+  for (const r of [...records].sort((a, b) => b.index - a.index)) {
+    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + 2); // m.index is the '#' (lookbehind is zero-width)
+  }
+
+  // Step 5 — emit THIS file's block. The paged decision runs on the STRIPPED content (§5.6 step 5).
+  emitText(abs, stripped, state); // emitText owns formatTextFileBlock + subtract + the paged head/directive + state.paged++
+
+  // Step 6 — recurse into imports, depth-first, ENCOUNTER ORDER (pre-order). Each record.abs already passed
+  // dedup at scan time; the injectedSet re-check is belt-and-suspenders (cross-file dedup since the scan).
+  for (const r of records) {
+    if (state.injectedSet.has(r.abs)) continue; // already claimed (e.g. by a sibling subtree meanwhile)
+    await injectFile(r.abs, state, ctx); // claims abs, classifies, bumps count, recurses again if markdown
   }
 }
 
