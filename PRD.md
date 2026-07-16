@@ -14,11 +14,11 @@ Pi has no simple, consistent way to say **"put this entire file into the model's
 - Worse, `@file` is **overloaded**: it means "autocomplete a path" interactively *and* "inject a file" at the CLI. Users cannot express a clear, unconditional "inject the whole file" intent in either context without it being ambiguous.
 
 ### Solution
-A new, dedicated syntax: **`#@<path>`**. It is an **unconditional, whole-file injection** trigger. When the user writes `#@filename.txt` anywhere in a prompt and submits, the extension reads the **entire** file and injects its contents into the prompt **before** the model sees it — every time, with no size limit and no configuration.
+A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery** trigger: whatever file the user names, the model receives all of it. When the user writes `#@filename.txt` anywhere in a prompt and submits, the extension reads the file and delivers it into the prompt **before** the model sees it. If the file fits the model's remaining context it is injected whole; if it exceeds the remaining context it is delivered in pages the model reads through the `read` tool (see §5.5). No configuration either way.
 
 `#@` is deliberately a **different symbol** from `@` so there is zero ambiguity:
 - `@file` → Pi's existing behavior (autocomplete interactively; inject at CLI). Left untouched.
-- `#@file` → **always** inject the whole file, in every context.
+- `#@file` → **always** delivers the whole file to the model, in every context (injected whole when it fits remaining context, paged when it exceeds it; see §5.5).
 
 ### Value proposition
 - **One syntax, every context.** Because the extension hooks the `input` event (which fires for *every* prompt — interactive typed messages *and* the initial CLI/`-p` message), `#@file` works identically whether you launch with it or type it mid-session. (See §3.)
@@ -26,22 +26,23 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional, whole-file in
 - **Zero config.** No thresholds, no toggles, no config files. It does one thing.
 
 ### Tagline
-> "`#@file` — inject the whole file, every time, everywhere."
+> "`#@file`: the whole file, every time, everywhere."
 
 ---
 
 ## 2. Goals & Non-Goals
 
 ### Goals
-1. **New syntax `#@<path>`** that unconditionally injects the **entire** contents of the referenced file into the model's context at prompt-submission time.
+1. **New syntax `#@<path>`** that unconditionally **delivers the entire file** into the model's context at prompt-submission time: injected whole when it fits remaining context, paged via the model's `read` tool when it does not (§5.5).
 2. **Works in every input context** — interactive TUI, the initial CLI/`-p` message, and RPC — because it operates on the `input` event.
-3. **No configuration.** No size limits, no word counts, no toggles, no config files, no env vars. Fixed, predictable behavior.
+3. **No user-facing configuration.** No toggles, no config files, no env vars. The inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5). Behavior is fixed and predictable.
 4. **Correct file-type handling** with no knobs: text → content; image → attached; other binary → a clear note (not garbage); missing/dir → left as a literal token.
 5. **Non-destructive & loop-safe.** Leaves the user's original prompt intact; never breaks a prompt on an error; never re-expands its own or other extensions' injected messages.
 
 ### Non-Goals
-- **No size gating.** This is intentional and is the central design choice (see §13). The user asked for the whole file every time; if they `#@` a 10 MB file, they get a 10 MB injection. The risk is documented, not gated.
-- **No chunking / offset / limit.** `#@` always injects the *entire* file. For partial reads the user uses the `read` tool.
+- **No silent truncation.** `#@` never drops or caps file contents without telling the model. A file is either injected whole (when it fits remaining context) or delivered in full through paged reads (§5.5).
+- **No manual fallback.** Oversize files are paged automatically. The user does not have to notice an overflow and switch to the `read` tool themselves.
+- **No user-facing size config.** The context budget is derived from the active model and current usage. There is no threshold or setting to tune.
 - **No globbing / multi-file** (`#@src/*.ts`). Single concrete path per token.
 - **No directory reads.** `#@some/dir` is left as a literal token.
 - **No replacement of `@`, `read`, or any built-in.** `#@` is purely additive.
@@ -176,9 +177,9 @@ Given an existing regular file at `abs`, classify by extension (lowercased, no d
    - If a NUL is found **and** the extension is not a known image type → go to §5.3 (binary note).
    - Otherwise treat as text.
 3. **Decode:** `const content = buf.toString("utf8");`
-4. **Inject the entire content** — no truncation, no limit. (See §6 for format.)
+4. **Inject the entire content** if it fits the remaining context budget; otherwise hand off to §5.5 (paged delivery). No silent truncation in either path. (See §6 for format.)
 
-> There is **no word/byte limit anywhere**. This is the defining behavior of `#@`.
+> The defining behavior of `#@` is that **the whole file always reaches the model**. When it fits remaining context it is injected inline; when it does not, §5.5 pages it through the model's `read` tool so the model still reads all of it.
 
 ### 5.2 Image files
 
@@ -211,6 +212,39 @@ Do **not** inject decoded garbage. Emit a clear note instead so the model knows 
 ### 5.4 Missing / directory / read error
 
 Leave the original `#@path` token **verbatim** in the text. No block is appended for it. The model sees the literal reference and can react (call `read`, ask the user, etc.). Never throw.
+
+### 5.5 Oversize files: automatic paged delivery
+
+A file larger than the model's remaining context cannot be injected whole. No mechanism puts a file bigger than the context window in front of the model at once. `#@` handles this without making the user fall back to the `read` tool by hand.
+
+**Budget.** Before injecting a text file, compute the remaining context:
+- `used = ctx.getContextUsage()?.tokens ?? 0`
+- `window = ctx.model?.contextWindow ?? DEFAULT_WINDOW`
+- `reserve = ctx.model?.maxTokens ?? DEFAULT_RESERVE`
+- `remaining = window - used - reserve - MARGIN`
+
+**Decision.** Estimate the file's own cost `fileCost` (see O-3). If `fileCost <= PAGED_THRESHOLD * remaining`, inject the whole file as today (§5.1, §6). Otherwise, page it. `PAGED_THRESHOLD` defaults to `0.6`: a file that would leave the model less than 40% of remaining context for reasoning trips the page path, even if it technically fits.
+
+**Page path.** Instead of `formatTextFileBlock(abs, content)`, emit:
+1. a **head block**: the first `HEAD_BYTES` of the content in a normal `<file name="abs">` block, so the model has real content immediately; then
+2. a **directive block**: a note that the file is large, giving its full path and estimated size, and instructing the model to load the remainder with the `read` tool at `offset:0, limit:2000`, incrementing `offset` until it has read the entire file.
+
+The model drives the paging across the turn. The extension cannot issue tool calls itself; the `input` handler only rewrites prompt text.
+
+**Still impossible.** The model never holds a file larger than its context window all at once. Paged delivery gets every byte read across the turn, but not simultaneously. That is a property of the medium, not of this extension.
+
+**Multi-file prompts.** When more than one `#@` token resolves in one prompt, subtract each file's `fileCost` from `remaining` as it is processed, so later tokens see a budget that accounts for earlier injections.
+
+**Scope.** Paged delivery applies to text only. Images are already resized for provider limits (§5.2). Non-image binaries already get a note instead of bytes (§5.3).
+
+**Notify.** Surface the mode, guarded on `ctx.hasUI`: `#@ injected N whole` versus `#@ injected N whole, M paged`.
+
+**Constants (defaults to pin).** `PAGED_THRESHOLD = 0.6`, `MARGIN = 8192`, `HEAD_BYTES = 8192` (about 2000 lines, matching the `read` tool's default `limit`), `DEFAULT_WINDOW = 200000`, `DEFAULT_RESERVE = 8192`.
+
+**Open questions (resolve before implementation):**
+- **O-1.** Is `ctx.getContextUsage()` populated at `input` time? It is documented as a turn-time helper; the `input` event fires before the turn. Verify at runtime. If it returns `undefined` or stale data, the budget is unreliable; fall back to injecting whole (current behavior) and treat overflow protection as best-effort.
+- **O-2.** Confirm `ctx.model` exposes `contextWindow` and `maxTokens` directly. If it exposes only `{ provider, id }`, resolve the full model via `ctx.modelRegistry` to read the window.
+- **O-3.** `estimateTokens` exported from `@earendil-works/pi-coding-agent` takes an `AgentMessage`, not a string. No exported string-based estimator exists. Use a chars-per-token heuristic, `fileCost = Math.ceil(content.length / 4)` (matching the `faux` provider's internal estimate), which is sufficient for a threshold gate.
 
 ---
 
@@ -478,7 +512,7 @@ function formatBinaryBlock(abs: string): string {
 | `#@some/dir/` (directory) | Token left verbatim. |
 | `text #@a.txt more` | `#@a.ts` → wait, `#@a.txt`; file injected, appended below; inline marker becomes `a.txt` (`#@` stripped, path stays). |
 | Multiple `#@a.txt #@b.md` | Both injected; blocks appended in order; summary notify `2 file(s)`. |
-| `#@huge.log` (50 MB) | **Entire file injected.** No limit. (Documented risk, §13.) |
+| `#@huge.log` (50 MB) | If it fits remaining context: injected whole. If it exceeds it: head block + paged directive (§5.5), and the model reads the rest via `read`. Never silently truncated. |
 | `#@data.bin` (binary, NUL) | Binary note block appended; no garbage. |
 | `#@pic.png` | Image attached as `ImageContent` (resized); reference block appended. |
 | `#@~/notes.md` | Tilde-expanded; resolved; injected. |
@@ -514,7 +548,7 @@ pi -e .                             # quick test (directory — resolves via pac
 | # | Setup | Input | Expected |
 |---|---|---|---|
 | 1 | small `a.ts` (~50 words) | `Review #@a.ts` | Prompt sent to model already contains `a.ts` contents in a `<file name="…">` block; **no `read` tool call**. Original prompt text unchanged; block appended after `---`. |
-| 2 | `huge.log` (50 MB) | `Summarize #@huge.log` | **Entire file injected.** No truncation, no limit. (May blow context — that's the documented behavior.) |
+| 2 | `huge.log` (50 MB) | `Summarize #@huge.log` | If it fits remaining context: injected whole, no `read` call. If it exceeds it: head block + paged directive (§5.5); the model pages the rest via `read`. Notify reflects the mode. |
 | 3 | `pic.png` | `Describe #@pic.png` | `ImageContent` attached; `<file name="…">…</file>` reference appended; inline marker becomes `pic.png` (`#@` stripped). |
 | 4 | `data.bin` (binary) | `Inspect #@data.bin` | Binary note block appended; no decoded garbage. |
 | 5 | missing | `Fix #@nope.ts` | Token left verbatim; prompt otherwise unchanged; model handles. |
@@ -555,36 +589,32 @@ pi.registerCommand("sharp-at-test", {
 8. **Image resize is a necessity, not a config.** Providers reject oversized images; `resizeImage` (2000×2000 default) is hardcoded so injection actually succeeds. This does not contradict "no config" — it's required for correctness, and the user still gets "the whole image" (downscaled to fit).
 9. **Binary detection is for routing, not gating.** Use the NUL-byte heuristic *only* to avoid injecting decoded garbage from non-image binaries. Image files skip this check entirely (handled by MIME type first).
 10. **Append, don't inline-replace; strip the trigger.** Large files would wreck the transcript bubble. Append blocks below a `---`, and strip `#@` from each injected marker (the path stays as the reference). Failed tokens are left verbatim, `#@` included.
-11. **Entire file, always.** Do not add truncation, word counts, or byte limits anywhere. The one defining behavior of `#@` is "the whole file, every time." If you feel tempted to add a cap, re-read §13 — the cap is a *different feature* (`@` with size-gating), not this one.
+11. **Whole file always reaches the model.** Never silently truncate or cap a file. When it fits remaining context, inject inline; when it exceeds it, page via §5.5. The contract is "the model gets all of it," not "all of it in one block."
 12. **Don't touch `@`.** This extension must not match or transform bare `@path`. Only `#@path`. Verify with test #14.
 
 ---
 
 ## 13. Design Rationale & Tradeoffs
 
-### 13.1 Why unconditional (no size gate)
-The user explicitly wants **"inject the entire file every time. No maxWords, no config."** This is the point of `#@`: a single, predictable affordance whose contract is "whatever file I name, the model gets all of it." Gating it would make it a worse `@`-with-config rather than a distinct tool.
+### 13.1 Why unconditional delivery (no silent size gate)
+The user wants **"inject the entire file every time. No maxWords, no config."** The earlier framing of this as "no size gate, accept that huge files blow the context" was dishonest: the model's context window is a hard limit, and a file larger than the remaining context cannot be injected whole by anyone. The honest contract is "the whole file always reaches the model": injected inline when it fits, paged through the model's `read` tool when it does not (§5.5). There is still no silent truncation and no size knob for the user.
 
 ### 13.2 The tradeoff (be honest about it)
-Unconditional injection means a careless `#@` on a huge file can **blow the context window** or trigger a provider error. This is accepted:
-- It's the user's explicit, deliberate action (they typed `#@`, a non-default symbol).
-- For partial/large reads, the `read` tool (with `offset`/`limit`) already exists and remains the right tool.
-- The whole reason `#@` is a *separate* symbol from `@` is so this unconditional behavior is opt-in by syntax and never surprises someone who just typed `@`.
+For files that fit remaining context, behavior is unchanged: the whole file is injected inline. For files that exceed it, the tradeoff is that the file arrives **paged** rather than in one block:
+- The model reads the file across the turn via the `read` tool, so it sees all of it but never holds all of it simultaneously (impossible past the context window).
+- Paging is model-driven: the extension emits a directive, the model issues the reads. This is reliable for typical `#@` tasks (review, summarize, diff) but not guaranteed, because the `input` handler can only rewrite prompt text; it cannot force a tool call.
+- The alternatives are worse: silently truncating the file (the model works from a partial file with no signal), or letting the request fail (the user gets an error and must retry by hand).
 
 ### 13.3 Why a separate symbol instead of reusing `@`
 - `@` is overloaded (autocomplete + CLI inject). Overloading it further with "inject whole file interactively" would be ambiguous and would change existing behavior.
 - `#@` is unambiguous, collision-free (§3.2), and signals stronger intent — the `#` reads as "force/sharp/inject."
 - The `#` does **not** piggyback on Pi's `@` autocomplete on its own — Pi's file-completion gate only fires for `@` at a token boundary, and `#` glued in front closes it. Path completion for `#@` is provided by a separate autocomplete provider (see §14).
 
-### 13.4 Why no config
-Configuring this feature would defeat its purpose. The contract is "always, entirely." Adding knobs (size, format, image toggle) reintroduces exactly the complexity the user asked to remove. If size-gated injection is later wanted, that is the *other* extension (`@` with a threshold), not this one.
+### 13.4 Why no user-facing config
+There is still no user-facing configuration: no toggles, no thresholds, no env vars. The inline-vs-paged decision is computed from the active model's context window and the current usage estimate (§5.5). The user writes `#@path` and the extension decides. Knobs for format or image handling would reintroduce the complexity the user asked to remove; the context budget is not a knob, it is derived.
 
-### 13.5 Relationship to a possible future size-gated `@` extension
-This PRD and a size-gated `@` extension are **complementary, not competing**:
-- `#@file` → whole file, always (this PRD).
-- `@file` (gated) → small files inline, large files delegate to `read` (the token-economics sweet-spot feature).
-
-They can coexist: `#@` for "I know I want all of it," `@` for "inline it if it's small."
+### 13.5 Relationship to a size-gated `@`
+With §5.5, `#@` itself covers both the inline and the oversize cases, so a separate size-gated `@` extension is no longer needed for token-economy reasons. `@` stays as Pi's built-in autocomplete and CLI argument handling, unchanged. If a future feature wants `@` to inline small files interactively (which `#@` already does), it can be built independently; it does not compete with this PRD.
 
 ---
 
