@@ -185,6 +185,8 @@ A markdown file (`.md`/`.markdown`) may contain `#@<path>` directives using **ex
 3. **Extension shorthand.** When the cleaned token has no file extension (`path.extname(token) === ""` — e.g. `PRD`, `sub/notes`), resolution tries `<exact>.md` then `<exact>.markdown` if the exact path is not an existing regular file: `#@PRD` → `PRD.md` (or `PRD.markdown`). Exact-match wins (a bare `PRD` file beats `PRD.md`); tokens already ending in `.md`/`.markdown` or any other extension are exact-only, so `#@PRD.md` never becomes `PRD.md.md`. Top-level user tokens do **not** get this fallback (exact-match only, §4.4).
 4. **Code is exempt.** A `#@<path>` occurring inside a fenced code block or inline code is **not** an import — it is left verbatim and never stripped. This is the escape hatch for markdown that documents the `#@` syntax itself. Detection is approximate-CommonMark (§5.6.1).
 
+5. **Depth-uniform, no cwd fallback.** These rules apply identically at **every** recursion level — the markdown file a top-level `#@` token points directly at is not special-cased relative to files deeper in the chain. Resolution is *always* `dirname(importingMarkdownAbs)`; `ctx.cwd` is never consulted for an in-file import. Consequently a same-named file in **both** the importing file's directory and `ctx.cwd` resolves to the importing file's directory (the cwd copy is never chosen, never falls back), and a token that is missing in the importing file's directory stays verbatim even if a same-named file happens to exist under `ctx.cwd`.
+
 Everything else — token cleanup (§4.3), dedup, file-type handling, paging, budget — applies to imports exactly as to top-level tokens.
 
 ### 4.6 Optional bare-`@` markdown imports (config: `markdownBareAtImports`)
@@ -213,6 +215,8 @@ By default a markdown import **requires** the `#@` prefix (§4.5). Some doc conv
 ```
 
 **Effect.** When `markdownBareAtImports === true`, markdown import scanning (§5.6) matches **both** `#@<path>` *and* a bare `@<path>`. The bare match uses `BARE_AT_RE = /(^|(?<=[^\w#]))@(\S+)/g` — an `@` at start-of-string or after a non-word char that is **not `#`**, so `#@file` is matched once (by `#@`), never twice. Every other rule — relative-only resolution, extension shorthand (§4.5 rule 3), code-exempt (rule 4), dedup, paging, budget — applies identically. The marker is stripped to its path just like `#@` (stripping 1 char instead of 2).
+
+**Depth-uniform (no first-file asymmetry).** Bare-`@` matching applies at **every** recursion depth, including the very first file a top-level `#@` token pulls in. There is no level at which a delivered markdown file must use `#@` while deeper files may use `@`; the scan in §5.6 step 3 runs `BARE_AT_RE` for every markdown file it processes, and the resolution base is always `dirname(abs)` of *that* file (§4.5 rule 2/5) — never `ctx.cwd` — regardless of depth.
 
 **Scope.** Bare-`@` matching is **markdown-only**. The top-level user prompt is unaffected (always `#@`, §4.4); a bare `@path` at the prompt stays Pi's existing behavior and is never injected by this extension. Non-resolving bare tokens (e.g. `@username` with no matching file) are left verbatim, so a prose mention imports only when it happens to name a real file relative to the markdown's directory.
 
@@ -901,6 +905,8 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 | `#@notes.md` where `notes.md` imports a missing `api.md` | `notes.md` injected (marker stripped); `#@api.md` left verbatim in `notes.md` content. |
 | `#@notes.md` where `notes.md` imports a 50 MB `big.log` | `big.log` evaluated against the shared budget; paged if it exceeds remaining. Counted in notify. |
 | Markdown import resolves outside cwd (`#@../shared/api.md` inside `notes.md`) | Allowed (relative to the markdown's dir); injected. |
+| Markdown import with a same-named file in BOTH the md's dir AND cwd (`#@b.md` inside `dir/a.md`; both `dir/b.md` and `./b.md` exist) | `dir/b.md` injected (md's dir wins); cwd-root `./b.md` never chosen. Resolution is file-relative at every depth. |
+| Markdown import missing in the md's dir but present under cwd (`#@ghost.md` inside `dir/a.md`; only `./ghost.md` exists) | Left verbatim (`#@ghost.md`); **no** cwd fallback — the cwd copy is never injected. |
 | Markdown import w/o extension (`#@PRD` in `a.md`; `PRD.md` exists) | Resolves to `PRD.md` (extension shorthand); injected & scanned. Marker stripped to `PRD`. |
 | Markdown import w/o extension, `.markdown` (`#@PRD`; only `PRD.markdown`) | Resolves to `PRD.markdown`; injected. |
 | Markdown import, exact beats shorthand (`#@readme`; both `readme` and `readme.md`) | Bare `readme` (exact) wins; `readme.md` not imported. |
@@ -912,6 +918,8 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 | Markdown imports push total over budget | Later files page against the running total; never silently exceed (§5.6.2). |
 | `markdownBareAtImports` off (default); `@api.md` in `a.md` | Bare `@` not matched; left verbatim. Only `#@` imports. |
 | `markdownBareAtImports` on; `@api.md` in `a.md` (file exists) | Imported (bare-`@`); marker stripped to `api.md`. Same rules as `#@`. |
+| `markdownBareAtImports` on; bare `@` in the FIRST imported file (prompt `#@a.md`; `a.md` contains `@b.md`) | `b.md` imported — the first file is not special-cased; bare-`@` is honored at depth 0→1 just like deeper levels. No `#@` required inside `a.md`. |
+| `markdownBareAtImports` on; bare-`@` chain across depths (prompt `#@a.md`; `a.md`→`@b.md`→`@c.md`) | `a.md`, `b.md`, `c.md` all injected; every level honored (no asymmetry between first and deeper files). |
 | `#@api.md` with the option on | Matched once by `#@` (bare regex skips a `#`-preceded `@`); never double-matched. |
 | `@username` in prose (option on; no `username.md`) | Not resolved → left verbatim. Prose imports only if it names a real file. |
 | `@api.md` at the top level (option on) | Unaffected — top-level is `#@`-only; Pi's normal `@` behavior. |
@@ -966,8 +974,16 @@ pi -e .                             # quick test (directory — resolves via pac
 | 27 | bare-`@` on, `#@` still works | config on; `notes.md` with `#@api.md`; `#@notes.md` | `#@api.md` matched once, injected once; notify `2 whole`. |
 | 28 | bare-`@` on, top-level unaffected | config on; prompt `#@notes.md` (notes imports `@x.md`); also type `@other.md` in prompt | `@other.md` at top level left as Pi's `@` behavior (not injected); only the `#@` chain runs. |
 | 29 | bare-`@` via settings.json | `markdownBareAtImports:true` under `fileInjector` in settings.json; `notes.md` with `@api.md` (exists); `#@notes.md` | Same as #26 but via the settings.json key: `api.md` imported (bare), notify `2 whole`. |
+| 30 | md relative disambiguation | `dir/a.md` imports `#@b.md`; **both** `dir/b.md` and `./b.md` exist; `#@dir/a.md` | `dir/b.md` injected (the md's dir wins); cwd-root `./b.md` has zero blocks. Proves resolution is file-relative, not cwd-relative. |
+| 31 | md relative, deep + cwd-indep. | `directory/otherdir/some/file.md` imports `#@file2.md`; only `…/some/file2.md` exists; also a stray `./file2.md`; `#@directory/otherdir/some/file.md` | `…/some/file2.md` injected (the importing file's dir), never `./file2.md`. |
+| 32 | bare-`@` first-file + chain | config on; prompt `#@a.md`; `a.md`→`@b.md`→`@c.md` (all bare `@`) | `a.md`, `b.md`, `c.md` all injected; the first imported file's bare-`@` is honored (no asymmetry vs. deeper files); notify `3 whole`. |
 
 ### Automated sanity check (optional)
+
+Beyond the in-process `sharp-at-test` command above, two standalone Node scripts (zero-dep, load the real extension via Pi's jiti loader) pin the behaviors in this section as runnable regression gates:
+
+- **`file-injector.test.mjs`** — the full §11 matrix + §10 edges (the project's `npm test`).
+- **`relative-imports.test.mjs`** — focused on the two properties that are easiest to regress: **(a)** every `[#]@path` inside a delivered markdown resolves relative to that file's directory at every depth (never `ctx.cwd`; a same-named cwd-root file never wins, and a missing-in-dir import never falls back to cwd), and **(b)** with `markdownBareAtImports` on, bare-`@` is honored at **every** depth including the very first imported file (cases 30–32 above). Covers four layers: `resolveImportPath`, `scanTokens`, `injectFiles`, and the real `input` handler with a hermetic project config.
 
 ```ts
 pi.registerCommand("sharp-at-test", {

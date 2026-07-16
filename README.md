@@ -79,7 +79,7 @@ Images are matched by their real bytes, not just the extension. A text file rena
 
 **Markdown imports:** a `#@` inside a delivered `.md` or `.markdown` file is itself an import, using the same grammar. Five rules narrow it:
 
-- **Relative paths only.** Imports resolve against the markdown file's own directory, not your current directory. Absolute (`#@/etc/hosts`) and tilde (`#@~/notes.md`) imports inside a markdown file are ignored and left verbatim.
+- **Relative paths only.** Imports resolve against the markdown file's own directory, not your current directory. Absolute (`#@/etc/hosts`) and tilde (`#@~/notes.md`) imports inside a markdown file are ignored and left verbatim. If the same name exists in both the importing file's directory and your current directory, the importing file's directory wins — so `#@file2.md` inside `dir/otherdir/some/file.md` resolves to `dir/otherdir/some/file2.md`, never `./file2.md`. This holds at every nesting depth; your current directory is never consulted for an in-file import.
 - **Extension shorthand.** A markdown import may omit the `.md`/`.markdown` extension: `#@PRD` resolves to `PRD.md` (then `PRD.markdown`) when no bare `PRD` exists. Exact match wins (a bare `readme` beats `readme.md`), and a token already ending in any extension is left as-is (so `#@PRD.md` never becomes `PRD.md.md`). This is a markdown-import convenience only — at the prompt you type the full name.
 - **Code is the escape hatch.** A `#@` inside a fenced or inline code span is not an import — it stays verbatim. So a doc can show `` `#@example.ts` `` as an example without importing anything.
 - **Each file is injected at most once.** Across the whole prompt — top-level tokens, every import, and cycles — a given file appears in one block only. Shared dependencies dedup; cycles terminate.
@@ -112,7 +112,7 @@ Both forms are read from a global and a project location and shallow-merged in t
 
 The project sources are honored only in a trusted project, so an untrusted checkout can't turn it on. (`settings.json` is open-schema, so Pi preserves the `fileInjector` key through `/settings` edits.)
 
-When it's on, a bare `@api.md` inside a delivered markdown file imports exactly like `#@api.md`: relative-only paths, extension shorthand, code-exempt, deduped against everything else, and drawing on the same shared budget. `#@` keeps working unchanged and is never matched twice — a `#@api.md` is one import, not two. A missing or malformed source (or one that doesn't set the key) leaves everything at the default, so it never errors.
+When it's on, a bare `@api.md` inside a delivered markdown file imports exactly like `#@api.md`: relative-only paths, extension shorthand, code-exempt, deduped against everything else, and drawing on the same shared budget. `#@` keeps working unchanged and is never matched twice — a `#@api.md` is one import, not two. A missing or malformed source (or one that doesn't set the key) leaves everything at the default, so it never errors. This is uniform at **every** depth: the first file a top-level `#@` token pulls in is not special-cased — its bare `@` imports are honored exactly like those in files deeper in the chain.
 
 It affects markdown content only — a bare `@path` you type in your prompt is never injected. See [Limits](#limits).
 

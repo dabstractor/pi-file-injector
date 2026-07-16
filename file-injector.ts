@@ -140,13 +140,24 @@ export async function resolveImportPath(
   baseDir: string,
   tryMdExt: boolean,
 ): Promise<string | null> {
-  const abs = expandTildeAndResolve(token, baseDir); // §4.4 — ~ expand + resolve(baseDir) — NO stat
-  if (await isRegularFile(abs)) return abs;          // §4.5 rule 3 — EXACT MATCH ALWAYS WINS
-  if (tryMdExt && path.extname(token) === "") {     // §4.5 rule 3 — extensionless shorthand ONLY
-    if (await isRegularFile(abs + ".md")) return abs + ".md";
-    if (await isRegularFile(abs + ".markdown")) return abs + ".markdown";
+  // Candidate filenames to try, in order (most-specific first). `token` is already cleanToken()'d by the
+  // caller, but \S+ can still glue markdown formatting / sentence junk to a .md filename (an italic line
+  // like "*see @ARCHITECTURE.md.*" captures "ARCHITECTURE.md.*"). A filename's extension is its natural
+  // terminator, so when the token contains .md/.markdown we ALSO try it truncated immediately after the
+  // LAST .md/.markdown (drops trailing *, **, etc.). `_` is a valid filename char and is never stripped.
+  // The full token always wins over the truncation (a genuine "weird.md.bak" beats "weird.md").
+  const candidates: string[] = [token];
+  const extCut = token.match(/^.*\.(?:md|markdown)/); // greedy → cut after the LAST .md/.markdown
+  if (extCut && extCut[0] !== token) candidates.push(extCut[0]);
+  for (const cand of candidates) {
+    const abs = expandTildeAndResolve(cand, baseDir); // §4.4 — ~ expand + resolve(baseDir) — NO stat
+    if (await isRegularFile(abs)) return abs;          // §4.5 rule 3 — EXACT MATCH ALWAYS WINS
+    if (tryMdExt && path.extname(cand) === "") {      // §4.5 rule 3 — extensionless shorthand ONLY
+      if (await isRegularFile(abs + ".md")) return abs + ".md";
+      if (await isRegularFile(abs + ".markdown")) return abs + ".markdown";
+    }
   }
-  return null;                                       // nothing resolved → caller leaves marker verbatim
+  return null;                                        // nothing resolved → caller leaves marker verbatim
 }
 
 /** §4.6 — config shape. markdownBareAtImports: also match bare "@path" in markdown (opt-in). Loaded on
