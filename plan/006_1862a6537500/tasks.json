@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Verification & Documentation Coherence Gate (Delta v006)",
-      "status": "Planned",
+      "status": "Researching",
       "description": "This is a VERIFICATION + DOC-AUDIT delta, NOT greenfield implementation. The #@file extension is already fully implemented (file-injector.ts, 1114 lines) with 182 tests passing green and tsc --strict clean. Three requirement-level changes were introduced in PRD.md since session-005 (4-source config merge; depth-uniform markdown resolution with no cwd fallback; depth-uniform bare-@ matching) — all three are ALREADY implemented and tested green. The legitimate work is: (1) a confirmation gate that the green state holds against the updated spec, and (2) closing one known stale-doc nit (PRD.md Done-definition says '24' but §11 now lists 32 test cases). No new code is expected unless the gate surfaces a genuine regression.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Confirm v006 delta requirements + close stale-doc nit",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Confirm the current repo satisfies the three delta requirement changes (4-source config, depth-uniform resolution, depth-uniform bare-@) via the existing test suites + typecheck, then close the one stale-doc nit in PRD.md's Done-definition.",
           "tasks": [
             {
@@ -74,7 +74,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Doc audit — fix stale test-case count + confirm documentation coherence",
-              "status": "Planned",
+              "status": "Researching",
               "description": "This IS the changeset-level documentation sweep for the delta (Mode B per SOW §5). (1) Fix the one known stale-doc nit: PRD.md Done-definition says 'all 24 manual test cases' but §11 now lists 32. (2) Confirm README.md and JSDoc are coherent with the shipped behavior — no edits expected unless genuine drift is found (prior research found none).",
               "subtasks": [
                 {
@@ -95,7 +95,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "Confirm README.md markdownBareAtImports config section coherence with §4.6",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 0.5,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Prior research (plan/006_1862a6537500/architecture/research-doc-audit.md) confirmed README.md:88–117 documents BOTH config forms (dedicated file + settings.json fileInjector key), all 4 precedence locations, the trust gate, and depth-uniform resolution. No drift was found. This subtask re-confirms that coherence still holds.\n2. INPUT: README.md (134 lines), specifically the '### Optional: bare-@ markdown imports' section (lines 88–117). PRD.md §4.6 (the authoritative spec for config sources and precedence).\n3. LOGIC: Read README.md lines 88–117. Verify against PRD §4.6: (a) both config forms documented with examples; (b) four precedence locations listed in order; (c) trust gate ('trusted project only') stated for project sources; (d) depth-uniform property stated. If all coherent (expected), no edit needed — mark complete. If any claim drifted from the shipped code, correct the doc to match code behavior (not the other way).\n4. OUTPUT: Confirmation that README.md config docs are coherent with §4.6, or the minimal edit if drift is found.\n5. DOCS: [Mode A] If this subtask finds drift in README.md, the fix rides here with this subtask. If no drift (expected), DOCS line is 'none — no user-facing/config/API surface change'.",
@@ -109,7 +109,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S3",
                   "title": "Confirm readConfig/SETTINGS_KEY/injectMarkdown JSDoc coherence with §4.5/§4.6",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 0.5,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Prior research (plan/006_1862a6537500/architecture/research-config-and-resolution.md) confirmed the JSDoc on readConfig (file-injector.ts:167–183) documents all 4 sources, precedence, trust gate, and SETTINGS_KEY form. The injectMarkdown JSDoc documents dirname(abs) resolution and bareAt threading. No drift was found.\n2. INPUT: file-injector.ts JSDoc comments on: readConfig (lines 167–183), SETTINGS_KEY const (line 171), injectMarkdown (line 838+). PRD.md §4.5 rule 5 and §4.6 (authoritative spec for depth-uniform resolution and config sources).\n3. LOGIC: Read the JSDoc on readConfig and injectMarkdown in file-injector.ts. Verify: (a) readConfig JSDoc lists all 4 sources in precedence order with trust gate + SETTINGS_KEY form; (b) SETTINGS_KEY const comment explains the settings.json key; (c) injectMarkdown JSDoc notes dirname(abs) resolution (depth-uniform, no cwd fallback) and bareAt threading. If all coherent (expected), no edit needed. If drift found, correct the JSDoc to match shipped behavior.\n4. OUTPUT: Confirmation that JSDoc is coherent with §4.5/§4.6, or the minimal fix if drift is found.\n5. DOCS: [Mode A] If this subtask finds JSDoc drift, the fix rides here. If no drift (expected), DOCS line is 'none — no user-facing/config/API surface change'.",
