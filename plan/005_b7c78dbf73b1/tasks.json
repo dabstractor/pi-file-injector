@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Bare-@ Engine + Config Foundation (building blocks)",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Two independent, self-contained building blocks (each TDD-complete with its own unit tests): (1) extend the scanTokens choke point to ALSO match bare @<path> when an opt-in flag is set, carrying a prefixLen so downstream stripping knows whether to remove 1 or 2 marker chars; (2) add the config foundation (verified exports CONFIG_DIR_NAME + getAgentDir, the FileInjectorConfig type, and a pure readConfig loader). Neither block touches the pipeline wiring yet — that is M2.",
           "tasks": [
             {
@@ -43,14 +43,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Config foundation (imports + FileInjectorConfig + readConfig) + unit tests + guard sync",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Add the pure config-reading foundation that §4.6 depends on: import the VERIFIED exports CONFIG_DIR_NAME and getAgentDir, declare the FileInjectorConfig type, and implement readConfig (global → project-if-trusted shallow merge, malformed/missing → default {}). Standalone, exported, never-throws — no factory/session_start wiring yet (that is M2). Also add readConfig to the test harness module-surface guard.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Add CONFIG_DIR_NAME/getAgentDir imports + FileInjectorConfig + readConfig function (with unit tests + ASSERTED_EXPORTS guard update)",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/005_b7c78dbf73b1/architecture/api_verification.md §1-2 and codebase_delta.md §2-3. VERIFIED: CONFIG_DIR_NAME === '.pi' (dist/config.js:394) and getAgentDir():string → ~/.pi/agent (dist/config.d.ts:75), both re-exported at dist/index.d.ts:2. The existing import line is `import { resizeImage, formatDimensionNote, type ResizedImage } from \"@earendil-works/pi-coding-agent\";`. The test harness module-surface guard (~L132-151) lists every shipped function in ASSERTED_EXPORTS and fails if a shipped function is in NEITHER ASSERTED_EXPORTS nor PURE_HELPERS_NOT_ASSERTED — a new export MUST be added or the gate fails.\n2. INPUT: The existing imports section of file-injector.ts and the existing ASSERTED_EXPORTS guard in file-injector.test.mjs. No runtime dependencies beyond the already-used node:fs, node:path.\n3. LOGIC: (a) Add CONFIG_DIR_NAME and getAgentDir to the existing @earendil-works/pi-coding-agent import. (b) Add `interface FileInjectorConfig { markdownBareAtImports?: boolean; }`. (c) Add an EXPORTED `readConfig(ctx: { cwd: string; isProjectTrusted: () => boolean }): Promise<FileInjectorConfig>` per PRD §9 readConfig pseudocode: a tryRead helper that JSON.parses the file (trim + '||\"{}\"' fallback for empty) and returns {} on any error; read the GLOBAL config at path.join(getAgentDir(), 'file-injector.json') first; then if ctx.isProjectTrusted() read the PROJECT config at path.join(ctx.cwd, CONFIG_DIR_NAME, 'file-injector.json') and shallow-merge it over the global (project wins). Missing or malformed either file → default {} (markdownBareAtImports undefined → treated as false downstream). NEVER throws. Prefer the narrow typed ctx param shown here (only cwd + isProjectTrusted are used) so it is unit-testable with a tiny mock — do NOT type it as `any`.\n4. OUTPUT: readConfig is exported and pure (only reads JSON files); FileInjectorConfig is a type (no runtime export). Consumed by P1.M2.T1.S1 (which adds the module-level cfg var + session_start load + handler). The test harness guard now recognizes readConfig.\n5. TEST (implicit TDD, into file-injector.test.mjs): unit-test readConfig directly — it takes a narrow {cwd, isProjectTrusted} so no makeMockCtx change needed (pass a literal object). Cases: (a) no config files → {}. (b) project {markdownBareAtImports:true} with isProjectTrusted()=>true → {markdownBareAtImports:true}. (c) same project config with isProjectTrusted()=>false → IGNORED (trust gate) → {}. (d) project malformed JSON (e.g. '{bad') with trusted → {} (no throw). (e) ALSO add 'readConfig' to ASSERTED_EXPORTS AND a `assert(typeof mod.readConfig === \"function\", ...)` line alongside the existing typeof asserts (~L113-130), so the module-surface guard passes. (Global-path merge precedence is hard to sandbox without touching ~; cover it in M2's integration test via session_start, not here.)\n6. DOCS: [Mode A] Add JSDoc on readConfig documenting the two config locations, the trust gate, the shallow-merge precedence, and the malformed→default behavior (mirrors PRD §4.6). Rides WITH the work.",

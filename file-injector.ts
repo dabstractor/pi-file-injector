@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { resizeImage, formatDimensionNote, type ResizedImage } from "@earendil-works/pi-coding-agent";
+import { resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir, type ResizedImage } from "@earendil-works/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -138,6 +138,35 @@ export async function resolveImportPath(
     if (await isRegularFile(abs + ".markdown")) return abs + ".markdown";
   }
   return null;                                       // nothing resolved → caller leaves marker verbatim
+}
+
+/** §4.6 — file-injector.json config shape. markdownBareAtImports: also match bare "@path" in markdown
+ *  (opt-in). Loaded on session_start (P1.M2.T1.S1); missing/malformed → {} → markdownBareAtImports
+ *  undefined → treated as false downstream. */
+interface FileInjectorConfig { markdownBareAtImports?: boolean; }
+
+/** PRD §4.6 / §9 — read file-injector.json config. GLOBAL first (~/.pi/agent/file-injector.json via
+ *  getAgentDir()), then PROJECT-if-trusted (<cwd>/.pi/file-injector.json via CONFIG_DIR_NAME=".pi"),
+ *  shallow-merged (project wins: `{ ...global, ...project }`). Missing or malformed EITHER file →
+ *  default {} (markdownBareAtImports undefined → false downstream). NEVER throws (tryRead catches all
+ *  read/parse errors → {}). The narrow `{cwd, isProjectTrusted}` ctx (only the two fields used) makes it
+ *  unit-testable with a literal mock; do NOT type it as `any` (item §3). Consumed by P1.M2.T1.S1's
+ *  session_start handler (`cfg = await readConfig(ctx)`). */
+export async function readConfig(ctx: { cwd: string; isProjectTrusted: () => boolean }): Promise<FileInjectorConfig> {
+  const tryRead = async (p: string): Promise<FileInjectorConfig> => {
+    try {
+      return JSON.parse((await fs.readFile(p, "utf8")).trim() || "{}");
+    } catch {
+      return {};
+    }
+  };
+  // GLOBAL first (~/.pi/agent/file-injector.json).
+  let cfg: FileInjectorConfig = await tryRead(path.join(getAgentDir(), "file-injector.json"));
+  // PROJECT-if-trusted (<cwd>/.pi/file-injector.json), shallow-merged (project wins).
+  if (ctx.isProjectTrusted()) {
+    cfg = { ...cfg, ...(await tryRead(path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json"))) };
+  }
+  return cfg;
 }
 
 /** PRD §5.2 — lowercase extension for MIME_BY_EXT lookup, or "" for no-dot / hidden-file (dot at 0). */

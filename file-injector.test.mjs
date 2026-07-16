@@ -128,6 +128,7 @@ assert(typeof mod.inCode === "function", "mod.inCode must be a function (binary 
 assert(typeof mod.estimateImageTokens === "function", "mod.estimateImageTokens must be a function (§5.6.2 image token estimate)");
 assert(typeof mod.resolveImportPath === "function", "mod.resolveImportPath must be a function (§4.5 exact→.md/.markdown resolution ladder)");
 assert(typeof mod.isRegularFile === "function", "mod.isRegularFile must be a function (stat + isFile, never throws)");
+assert(typeof mod.readConfig === "function", "mod.readConfig must be a function (§4.6 config reader: global+project merge, trust gate, never throws)");
 
 // ── MODULE-SURFACE COMPLETENESS (S4 sync) ── The 16 asserts above name the MEANINGFUL exports. This guard
 // enforces the FULL contract: every function the module SHIPS is either (a) asserted by name above, or (b) a
@@ -138,7 +139,7 @@ const ASSERTED_EXPORTS = new Set([
   "default", "injectFiles", "cleanToken", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
   "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
   "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
-  "resolveImportPath", "isRegularFile",
+  "resolveImportPath", "isRegularFile", "readConfig",
 ]);
 const PURE_HELPERS_NOT_ASSERTED = new Set(["expandTildeAndResolve", "extOf", "isBinary"]); // tested indirectly via injectFiles
 {
@@ -246,6 +247,14 @@ function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "PRD.md"), "# PRD\n"); // NO bare `PRD` → shorthand target
   fsSync.writeFileSync(path.join(TMPDIR, "only.markdown"), "# Only\n"); // NO bare `only`/`only.md`
   fsSync.writeFileSync(path.join(TMPDIR, ".env"), "KEY=val\n"); // dotfile exact-wins fixture
+
+  // T2.S1 — PRD §4.6 project-local config fixture (file-injector.json). The project config dir is .pi/
+  // (CONFIG_DIR_NAME === ".pi", VERIFIED). Cases T2.S1-b/c read this valid {markdownBareAtImports:true};
+  // case T2.S1-d OVERWRITES it with malformed JSON inline (then restores in a finally). The global
+  // ~/.pi/agent/file-injector.json is INTENTIONALLY NOT created here (must not touch the real home dir;
+  // global-merge precedence is covered by P1.M2.T1.S1's session_start integration test).
+  fsSync.mkdirSync(path.join(TMPDIR, ".pi"), { recursive: true }); // {recursive:true} → no-op if a parallel fixture already made it
+  fsSync.writeFileSync(path.join(TMPDIR, ".pi", "file-injector.json"), JSON.stringify({ markdownBareAtImports: true }));
 
   // ── Extension-shorthand fixtures (PRD §4.5 rule 3 — T1.S2 cases 21–24 + EDG-1..4). SELF-CONTAINED names
   //    that do NOT collide with S1's README/README.md/PRD.md/only.markdown/.env or the existing markdown
@@ -1822,6 +1831,62 @@ await runCase("T1.S1-13", "scanTokens bare-@ code-exempt: fenced '@api.md' (skip
     { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 0, `bare-@ inside a fenced block must be skipped (code-exempt), got ${JSON.stringify(arr)}`);
+});
+
+// ── T2.S1: readConfig unit tests (PRD §4.6 — the config reader: global+project merge, trust gate, never throws) ──
+// readConfig takes a NARROW {cwd, isProjectTrusted} ctx (item §3 — NOT `any`) so it is unit-testable with a
+// literal mock object (NO makeMockCtx needed). The fixture <TMPDIR>/.pi/file-injector.json =
+// {"markdownBareAtImports":true} is written in buildFixtures. getAgentDir() reads the REAL ~/.pi/agent/ at
+// runtime, so a real global config (with ANY keys) could merge into the result — hence each case asserts on
+// the markdownBareAtImports VALUE (project WINS via spread when trusted; gated/malformed → undefined), NOT a
+// deepEqual on the whole object (global could contribute unrelated keys). This is the robust subset testable
+// here; the global→project merge PRECEDENCE is structurally guaranteed by `{ ...cfg, ...project }` and is
+// covered end-to-end by P1.M2.T1.S1's session_start integration test.
+
+// T2.S1-a — NO project config effect on markdownBareAtImports. The global ~/.pi/agent/file-injector.json is
+// almost certainly absent in the test env, and there is no markdownBareAtImports key anywhere it matters →
+// the result has markdownBareAtImports === undefined. (Assert the VALUE, not deepEqual {} — a real global
+// config could add unrelated keys.)
+await runCase("T2.S1-a", "readConfig no-config → markdownBareAtImports undefined", async () => {
+  const r = await mod.readConfig({ cwd: path.join(os.tmpdir(), "nonexistent-saf-dir"), isProjectTrusted: () => true });
+  assert(r.markdownBareAtImports === undefined,
+    `no config files → markdownBareAtImports undefined, got ${r.markdownBareAtImports}`);
+});
+
+// T2.S1-b — PROJECT WINS (trusted). <TMPDIR>/.pi/file-injector.json = {"markdownBareAtImports":true}; with
+// isProjectTrusted:true the project file IS read and its key lands (project wins via spread even if a real
+// global config also sets it). Assert the VALUE (true), not deepEqual {markdownBareAtImports:true} (global
+// could add unrelated keys).
+await runCase("T2.S1-b", "readConfig project {markdownBareAtImports:true} + trusted → project wins (true)", async () => {
+  const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+  assert(r.markdownBareAtImports === true,
+    `trusted project config → markdownBareAtImports true (project wins), got ${r.markdownBareAtImports}`);
+});
+
+// T2.S1-c — TRUST GATE (untrusted). Same project config as (b), but isProjectTrusted:false → the project file
+// is NEVER read (the §4.6 trust gate). Its markdownBareAtImports key never lands → undefined. An untrusted
+// project MUST NOT be able to enable bare-@ (security boundary).
+await runCase("T2.S1-c", "readConfig project config + UNTRUSTED → ignored (undefined)", async () => {
+  const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => false });
+  assert(r.markdownBareAtImports === undefined,
+    `untrusted project → config ignored (trust gate), markdownBareAtImports undefined, got ${r.markdownBareAtImports}`);
+});
+
+// T2.S1-d — MALFORMED JSON → {} (never throws). Overwrite the project config with "{bad" (malformed) for THIS
+// case only, then RESTORE the valid fixture in a finally so sibling cases see valid JSON. readConfig's tryRead
+// must catch the JSON.parse error → {} → markdownBareAtImports undefined. If readConfig threw, runCase's catch
+// → FAIL (the desired signal that the never-throws invariant is broken).
+await runCase("T2.S1-d", "readConfig malformed project JSON + trusted → {} (undefined), no throw", async () => {
+  const cfgPath = path.join(TMPDIR, ".pi", "file-injector.json");
+  const valid = fsSync.readFileSync(cfgPath, "utf8"); // save the valid content
+  fsSync.writeFileSync(cfgPath, "{bad");              // malformed JSON for this case only
+  try {
+    const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+    assert(r.markdownBareAtImports === undefined,
+      `malformed project JSON → markdownBareAtImports undefined (default {}), got ${r.markdownBareAtImports}`);
+  } finally {
+    fsSync.writeFileSync(cfgPath, valid);             // RESTORE so sibling cases (if any run after) see valid JSON
+  }
 });
 
 // 10. Summary + cleanup + exit.
