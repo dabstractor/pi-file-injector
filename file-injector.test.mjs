@@ -806,6 +806,58 @@ await runCase("PD5", "§5.5 binaries unaffected by budget: data.bin note under P
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// ── §5.5 HANDLER NOTIFY (PRD §5.5 Notify) — mode-aware notify via the input handler ──────
+// The handler now destructures `paged` from injectFiles and reports whole-vs-paged mode. The existing
+// notify cases (F4 pluralization, #9 multi-file, #12 interactive, H1 headless) use a budget-less ctx →
+// paged is always 0 → they exercise the paged===0 backward-compat path (existing "N file(s)" style).
+// PN1–PN4 cover the paged>0 path and the headless guard under paging. PN2/PN3/PN4 build a budget-aware
+// mock ctx that MERGES makeMockCtx's notify-recording ui+hasUI with PAGED_FIX's tight budget (the two
+// existing mocks are complementary: makeMockCtx has ui but no budget; PAGED_FIX has budget but no ui).
+
+await runCase("PN1", "§5.5 notify: all-whole prompt (no budget) → 'N files' (existing style preserved)", async () => {
+  // No budget → injectFiles O-1 fallback → all whole → paged=0 → existing pluralized message.
+  const { ctx, rec } = makeMockCtx(TMPDIR);
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform, got '${out.action}'`);
+  assert(rec.notify && rec.notify.m === "#@ injected 2 files",
+    `paged===0 must use the existing plural style, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  assert(rec.notify.t === "info", `notify type must be 'info', got '${rec.notify && rec.notify.t}'`);
+});
+
+await runCase("PN2", "§5.5 notify: mixed prompt (tight budget) → '1 whole, 1 paged'", async () => {
+  // Merged ctx: makeMockCtx's notify-recording ui + hasUI, + PAGED_FIX's tight budget.
+  // a.ts (small, ~90 chars) → WHOLE; huge.log (~2 MB) → PAGED. injected=2, paged=1, whole=1.
+  const { ctx: base, rec } = makeMockCtx(TMPDIR);
+  const ctx = { ...base, getContextUsage: PAGED_FIX.getContextUsage, model: PAGED_FIX.model };
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "Review #@a.ts and #@huge.log", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform, got '${out.action}'`);
+  assert(rec.notify && rec.notify.m === "#@ injected 1 whole, 1 paged",
+    `mixed prompt must report whole + paged counts, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+});
+
+await runCase("PN3", "§5.5 notify: all-paged prompt (tight budget) → '0 whole, 1 paged'", async () => {
+  // Only huge.log, tight budget → PAGED. injected=1, paged=1, whole=0.
+  const { ctx: base, rec } = makeMockCtx(TMPDIR);
+  const ctx = { ...base, getContextUsage: PAGED_FIX.getContextUsage, model: PAGED_FIX.model };
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "Summarize #@huge.log", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform, got '${out.action}'`);
+  assert(rec.notify && rec.notify.m === "#@ injected 0 whole, 1 paged",
+    `all-paged prompt must report 0 whole + paged count, got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+});
+
+await runCase("PN4", "§5.5 notify: headless (hasUI===false) + tight budget → notify NEVER called", async () => {
+  // The hasUI guard must suppress notify even on the paged>0 path (huge.log paged).
+  const { ctx: base, rec } = makeMockCtx(TMPDIR, { hasUI: false });
+  const ctx = { ...base, getContextUsage: PAGED_FIX.getContextUsage, model: PAGED_FIX.model };
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "Summarize #@huge.log", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must still transform when headless, got '${out.action}'`);
+  assert(rec.notify === undefined, "notify must NEVER fire when ctx.hasUI===false, even under paging");
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));

@@ -292,10 +292,11 @@ export async function injectFiles(
  * Works everywhere: interactive, `pi -p "...#@file..."`, and RPC — because the hook is the `input`
  * event inside `prompt()`, not argv parsing (unlike Pi's built-in `@file` CLI expansion).
  *
- * No limits, no config: the whole file is injected every time — no truncation, no word / byte cap.
- * Large files may blow the model's context; that is the documented, intended behavior. Images are
- * downscaled (2000×2000) only because providers reject oversized images; the whole image is still
- * delivered (downscaled to fit). The handler short-circuits (`continue`) when the input originated
+ * The whole file always reaches the model: injected inline when it fits the remaining context budget,
+ * or delivered as a head block plus a paging directive (instructing the model to read the rest via the
+ * read tool) when it exceeds it (PRD §5.5). The budget is derived from the active model context window
+ * and current usage — no user-facing config. Images are downscaled (2000×2000) because providers reject
+ * oversized images. The handler short-circuits (`continue`) when the input originated
  * from an extension (loop prevention), is a mid-stream steering nudge (latency), or simply has no `#@`
  * token — and it never throws (injectFiles isolates each file in its own try/catch).
  */
@@ -305,10 +306,16 @@ export default function (pi: ExtensionAPI) {
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
     if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
 
-    const { text, images, injected } = await injectFiles(event.text, event.images ?? [], ctx);
-    if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1)
+    const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx); // §5.5 — paged count drives the mode-aware notify below
+    if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered
 
-    if (ctx.hasUI) ctx.ui.notify(`#@ injected ${injected} ${injected === 1 ? "file" : "files"}`, "info"); // F4 — proper pluralization; guarded for print/json headless modes (api_verification §5)
+    // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). paged===0 preserves the
+    // existing pluralized "N file(s)" style; paged>0 reports whole and paged counts separately.
+    const whole = injected - paged;
+    const msg = paged > 0
+      ? `#@ injected ${whole} whole, ${paged} paged`
+      : `#@ injected ${injected} ${injected === 1 ? "file" : "files"}`;
+    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // F4 pluralization preserved on the paged===0 path; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
   });
 

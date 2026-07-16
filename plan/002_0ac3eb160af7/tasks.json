@@ -4,21 +4,21 @@
       "type": "Phase",
       "id": "P1",
       "title": "Paged Delivery for Oversize Files (PRD §5.5)",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Add automatic paged delivery to the existing #@file extension so that text files exceeding the model's remaining context budget are delivered as a head block plus a paging directive (instructing the model to read the rest via the read tool) instead of being injected whole. The existing MVP is fully implemented; this delta adds §5.5 only. Images, binaries, missing/directory handling, strip-#@, and autocomplete are unchanged. All Pi API claims (getContextUsage, ctx.model shape, estimateTokens, read tool default limit) are VERIFIED against v0.80.7 — see plan/002_0ac3eb160af7/architecture/pi_api_verification.md.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Implement & Validate Paged Delivery",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Implement budget-aware inline-vs-paged branching in injectFiles, update the handler notify to report mode, update JSDoc (Mode A), and sync the README (Mode B). The change is scoped to file-injector.ts (single file) and file-injector.test.mjs (test harness). No new files, no new dependencies.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Budget-Aware Paged Delivery Implementation",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add the 5 paged-delivery constants, the formatPagedDirectiveBlock helper, widen injectFiles's ctx and return types, implement the remaining-context budget computation with O-1/O-2 fallbacks, insert the inline-vs-paged decision branch at the text-file path, wire multi-file remaining subtraction, add the paged counter, and update the handler notify to report whole-vs-paged mode. Update JSDoc on injectFiles and the factory function (Mode A docs).",
               "subtasks": [
                 {
@@ -66,7 +66,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "Handler notify reports whole-vs-paged mode; update factory JSDoc",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"
@@ -86,14 +86,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Sync changeset-level documentation (Mode B)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Update README.md to reflect the new paged-delivery behavior. Three sections are stale: 'Why' (line 3), 'What gets injected' table (line 41), and 'Limits' (line 72, 'No size gate' bullet). This is a cross-cutting doc sync that only makes sense once all implementation is in place.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Update README.md Why, What gets injected, and Limits sections for paged delivery",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
