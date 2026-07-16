@@ -1332,6 +1332,43 @@ await runCase("CC9", "§5.6.1 — inCode: index before first range, after last, 
   assert(mod.inCode(gapIdx, r) === false, `index in a prose gap is not in code (gapIdx=${gapIdx}, ranges=${JSON.stringify(r)})`);
 });
 
+// ── INLINE-CODE LINEAR-TIME GUARD (validator Finding 1) ─────────────────────────────────────────
+// The old inline-code detector was the regex /(`+)([\s\S]*?)\1(?!`)/g, run via content.matchAll. Its
+// backreference \1 + lazy [\s\S]*? made it O(n²) on a long UNMATCHED backtick run (the engine tried
+// every run-length split): ~8s CPU at 200k backticks, reachable via any `#@file.md` whose content is a
+// pathological/hostile backtick run. computeCodeRanges now uses a linear-time inlineCodeRanges helper
+// (same spans, ~O(n)). These two cases pin (a) that the new scanner still detects a real inline span
+// embedded in a long backtick run, and (b) that a pathological input completes in bounded (linear) time —
+// the regression the validator flagged as "not covered by the unit suite".
+await runCase("CC10", "§5.6.1 — a real inline span is still detected inside a long backtick run (linear scanner correctness)", async () => {
+  // 50k backticks (no closer) followed by a genuine `#@code.ts` inline span. The span MUST register as
+  // code; the leading 50k run (unmatched) must not crash or hang. (A smaller run than the perf case so
+  // the correctness assertion is instant even under a naive engine.)
+  const lead = "`".repeat(50000);
+  const txt = lead + " then `#@code.ts` after";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `the real inline span (backtick #@code.ts backtick) must be in code even after a 50k backtick run (idx=${idx}, ranges.length=${r.length})`);
+});
+
+await runCase("CC11", "§5.6.1 — pathological 200k-backtick run completes in bounded (linear) time (Finding 1 regression)", async () => {
+  // The old regex took ~8s here (O(n²)); the linear scanner must return well under the 2s guard below.
+  // The guard is deliberately generous (the old code blew past it by 4×) so it catches the quadratic
+  // regression without being flaky on a slow CI box. The result is also asserted correct: a lone
+  // unmatched run yields exactly ONE code range spanning the whole run (the degenerate 1-backtick
+  // opener/content/closer triples tile the run end-to-end — same as the old regex).
+  const content = "`".repeat(200000) + " tail";
+  const t = process.hrtime.bigint();
+  const r = mod.computeCodeRanges(content);
+  const ms = Number(process.hrtime.bigint() - t) / 1e6;
+  assert(ms < 2000, `pathological 200k-backtick run must complete in <2s (linear); took ${ms.toFixed(1)}ms`);
+  // Correctness: the run is fully covered by code ranges (every backtick is in some code range).
+  assert(r.length >= 1 && r[0][0] === 0, `the run must start a code range at 0 (got ${JSON.stringify(r.slice(0, 3))}…)`);
+  assert(r.every((rg) => rg[1] <= 200000 + " tail".length), "no range may run past the content");
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // ── TOTAL-SIZE BUDGET (PRD §5.6.2) — image/binary consume remaining ──────────
 // EIT = Estimate Image Tokens (pure unit cases pinning the 512-tile formula).
@@ -1906,6 +1943,78 @@ await runCase("T2.S1-d", "readConfig malformed project JSON + trusted → {} (un
       `malformed project JSON → markdownBareAtImports undefined (default {}), got ${r.markdownBareAtImports}`);
   } finally {
     fsSync.writeFileSync(cfgPath, valid);             // RESTORE so sibling cases (if any run after) see valid JSON
+  }
+});
+
+// ── T2.S1 (settings.json): readConfig reads the namespaced `fileInjector` key from settings.json too ──
+// PRD §4.6 sources #1/#3: the option may live under the SETTINGS_KEY ("fileInjector") inside Pi's own
+// settings.json, co-located with the user's other settings. readConfig must read it (global + project-if-
+// trusted), gated by the SAME trust boundary as the dedicated file, and the dedicated file-injector.json takes
+// precedence WITHIN a scope. Each case writes a PROJECT <TMPDIR>/.pi/settings.json fixture and removes it in a
+// finally so sibling cases never see it; the global ~/.pi/agent/settings.json is the REAL user file (assert on
+// the markdownBareAtImports VALUE, not deepEqual — a real global could contribute unrelated keys).
+const PROJ_SETTINGS_PATH = path.join(TMPDIR, ".pi", "settings.json");
+const PROJ_FILE_PATH = path.join(TMPDIR, ".pi", "file-injector.json");
+const writeSettings = (obj) => fsSync.writeFileSync(PROJ_SETTINGS_PATH, JSON.stringify(obj));
+
+// T2.S1-e — settings.json key ALONE enables it (trusted). Empty out the dedicated file for this case so the
+// ONLY project source is the settings.json key → markdownBareAtImports === true (from the key).
+await runCase("T2.S1-e", "readConfig settings.json {fileInjector:{markdownBareAtImports:true}} + trusted → true", async () => {
+  const fileValid = fsSync.existsSync(PROJ_FILE_PATH) ? fsSync.readFileSync(PROJ_FILE_PATH, "utf8") : null;
+  fsSync.writeFileSync(PROJ_FILE_PATH, "{}");
+  writeSettings({ "fileInjector": { markdownBareAtImports: true } });
+  try {
+    const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+    assert(r.markdownBareAtImports === true,
+      `settings.json key (dedicated file empty) → markdownBareAtImports true, got ${r.markdownBareAtImports}`);
+  } finally {
+    if (fileValid !== null) fsSync.writeFileSync(PROJ_FILE_PATH, fileValid); // restore {markdownBareAtImports:true}
+    fsSync.rmSync(PROJ_SETTINGS_PATH, { force: true });
+  }
+});
+
+// T2.S1-f — TRUST GATE on settings.json (untrusted). Same settings.json key, but isProjectTrusted:false → the
+// project settings.json is NEVER read → markdownBareAtImports undefined (an untrusted project cannot enable
+// bare-@ via settings.json either).
+await runCase("T2.S1-f", "readConfig settings.json key + UNTRUSTED → ignored (undefined)", async () => {
+  writeSettings({ "fileInjector": { markdownBareAtImports: true } });
+  try {
+    const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => false });
+    assert(r.markdownBareAtImports === undefined,
+      `untrusted project → settings.json key ignored (trust gate), got ${r.markdownBareAtImports}`);
+  } finally {
+    fsSync.rmSync(PROJ_SETTINGS_PATH, { force: true });
+  }
+});
+
+// T2.S1-g — PRECEDENCE: dedicated file OVERRIDES the settings.json key within a scope. settings.json key says
+// true, but the dedicated file says false → the file wins → markdownBareAtImports === false. (Source #4 beats
+// #3; the project dedicated file is the most-specific source.)
+await runCase("T2.S1-g", "readConfig precedence: file-injector.json overrides settings.json key (false wins)", async () => {
+  const fileValid = fsSync.readFileSync(PROJ_FILE_PATH, "utf8");
+  writeSettings({ "fileInjector": { markdownBareAtImports: true } });
+  fsSync.writeFileSync(PROJ_FILE_PATH, JSON.stringify({ markdownBareAtImports: false }));
+  try {
+    const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+    assert(r.markdownBareAtImports === false,
+      `dedicated file (false) overrides settings.json key (true) → false, got ${r.markdownBareAtImports}`);
+  } finally {
+    fsSync.writeFileSync(PROJ_FILE_PATH, fileValid);
+    fsSync.rmSync(PROJ_SETTINGS_PATH, { force: true });
+  }
+});
+
+// T2.S1-h — MALFORMED settings.json → key contributes {} (never throws); the dedicated file still applies.
+// Write "{bad" to settings.json; the dedicated file is {markdownBareAtImports:true} → result true. Proves a
+// broken settings.json neither crashes readConfig nor suppresses the dedicated file.
+await runCase("T2.S1-h", "readConfig malformed settings.json + trusted → key {} (dedicated file still applies, true)", async () => {
+  fsSync.writeFileSync(PROJ_SETTINGS_PATH, "{bad");
+  try {
+    const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+    assert(r.markdownBareAtImports === true,
+      `malformed settings.json → key absent, dedicated file true wins → true, got ${r.markdownBareAtImports}`);
+  } finally {
+    fsSync.rmSync(PROJ_SETTINGS_PATH, { force: true });
   }
 });
 

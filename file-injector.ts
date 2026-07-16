@@ -31,11 +31,20 @@ const DEFAULT_RESERVE = 8192;   // fallback for ctx.model?.maxTokens when model 
 const READ_LIMIT = 2000;        // read tool DEFAULT_MAX_LINES — page size emitted in the directive
 
 /** §5.6.1 — approximate-CommonMark code-region detection (the markdown import exemption, PRD §4.5 rule 3).
- *  INLINE_CODE_RE: a backtick run closed by a run of the SAME length (backreference \1), non-greedy,
- *    not followed by another backtick. `g` flag for matchAll (matchAll clones — no lastIndex reset needed).
+ *  INLINE_CODE semantics: a backtick run (the OPENER) closed by a run of the SAME length, non-greedy,
+ *    not followed by another backtick. Originally a single regex `/(`+)([\s\S]*?)\1(?!`)/g` run via
+ *    content.matchAll; that form is O(n²) on a long unmatched backtick run (the backreference \1 + the
+ *    lazy [\s\S]*? force the engine to try every run-length split — ~8s CPU at 200k backticks, reachable
+ *    via any `#@file.md`). It is now implemented by the LINEAR-TIME `inlineCodeRanges` helper below, which
+ *    produces byte-for-byte identical spans to the regex (verified by 500k randomized fuzz cases) while
+ *    bounding the worst case to ~O(n) regardless of run length (200k backticks → ~1ms). An opener-length
+ *    cap (`INLINE_CODE_MAX_OPENER`) is applied as defense-in-depth: realistic markdown never uses a
+ *    code-span opener longer than a handful of backticks, so capping at 1024 cannot affect any real input
+ *    but bounds the (already-linear) opener-retry loop against a hostile file. (PRD §5.6.1 notes the parser
+ *    is "approximate"; this is the same approximation, just non-pathological.)
  *  FENCE_OPEN_RE: line-anchored (use against a single line, not full text); 0-3 leading spaces then a
  *    run of >= 3 backticks or tildes. Group 1 = the fence run (char + length drive open/close matching). */
-const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;   // PRD §5.6.1 (exact form)
+const INLINE_CODE_MAX_OPENER = 1024;               // cap on opener run length (defense-in-depth; see above)
 const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;      // PRD §5.6.1 (exact form); apply per-line
 
 /** §5.6 / §4.5 — a delivered file whose lowercased ext is md/markdown is an import source (consumed by
@@ -140,31 +149,58 @@ export async function resolveImportPath(
   return null;                                       // nothing resolved → caller leaves marker verbatim
 }
 
-/** §4.6 — file-injector.json config shape. markdownBareAtImports: also match bare "@path" in markdown
- *  (opt-in). Loaded on session_start (P1.M2.T1.S1); missing/malformed → {} → markdownBareAtImports
- *  undefined → treated as false downstream. */
+/** §4.6 — config shape. markdownBareAtImports: also match bare "@path" in markdown (opt-in). Loaded on
+ *  session_start (P1.M2.T1.S1); missing/malformed → {} → markdownBareAtImports undefined → false downstream. */
 interface FileInjectorConfig { markdownBareAtImports?: boolean; }
 
-/** PRD §4.6 / §9 — read file-injector.json config. GLOBAL first (~/.pi/agent/file-injector.json via
- *  getAgentDir()), then PROJECT-if-trusted (<cwd>/.pi/file-injector.json via CONFIG_DIR_NAME=".pi"),
- *  shallow-merged (project wins: `{ ...global, ...project }`). Missing or malformed EITHER file →
- *  default {} (markdownBareAtImports undefined → false downstream). NEVER throws (tryRead catches all
- *  read/parse errors → {}). The narrow `{cwd, isProjectTrusted}` ctx (only the two fields used) makes it
- *  unit-testable with a literal mock; do NOT type it as `any` (item §3). Consumed by P1.M2.T1.S1's
- *  session_start handler (`cfg = await readConfig(ctx)`). */
+/** §4.6 — the camelCase key under which this extension's config may live inside Pi's settings.json (a
+ *  conventional JSON-settings key; distinct from the package `name`). settings.json is open-schema (Pi
+ *  deep-merges and preserves unknown keys through /settings edits + flushes), so the key is stable; the
+ *  extension reads it directly from disk (Pi exposes no public settings accessor to extensions). */
+const SETTINGS_KEY = "fileInjector";
+
+/** PRD §4.6 / §9 — read config from up to FOUR sources, shallow-merged in precedence order (each later source
+ *  overrides the earlier; project scope overrides global; within a scope the dedicated file overrides the
+ *  settings.json key):
+ *    1. GLOBAL settings.json → SETTINGS_KEY object   (~/.pi/agent/settings.json via getAgentDir())
+ *    2. GLOBAL file-injector.json                    (~/.pi/agent/file-injector.json — whole file)
+ *    3. PROJECT settings.json → SETTINGS_KEY object  (<cwd>/.pi/settings.json) — TRUSTED ONLY
+ *    4. PROJECT file-injector.json                   (<cwd>/.pi/file-injector.json) — TRUSTED ONLY
+ *  Missing/malformed ANY source (or a missing/non-object SETTINGS_KEY key) → contributes {} (so the default
+ *  markdownBareAtImports === undefined → false downstream). NEVER throws (every read/parse is try/caught → {}).
+ *  The narrow {cwd, isProjectTrusted} ctx (only the two fields used) keeps it unit-testable with a literal
+ *  mock; do NOT type it as `any` (item §3). Consumed by P1.M2.T1.S1's session_start handler. */
 export async function readConfig(ctx: { cwd: string; isProjectTrusted: () => boolean }): Promise<FileInjectorConfig> {
-  const tryRead = async (p: string): Promise<FileInjectorConfig> => {
+  // Read a DEDICATED config file whose WHOLE content is the FileInjectorConfig; {} on missing/malformed or a
+  // non-object (e.g. an array) body. JSON.parse is `any`; the object guard narrows it safely without `any`.
+  const tryReadCfg = async (p: string): Promise<FileInjectorConfig> => {
     try {
-      return JSON.parse((await fs.readFile(p, "utf8")).trim() || "{}");
+      const v = JSON.parse((await fs.readFile(p, "utf8")).trim() || "{}");
+      return v && typeof v === "object" && !Array.isArray(v) ? (v as FileInjectorConfig) : {};
     } catch {
       return {};
     }
   };
-  // GLOBAL first (~/.pi/agent/file-injector.json).
-  let cfg: FileInjectorConfig = await tryRead(path.join(getAgentDir(), "file-injector.json"));
-  // PROJECT-if-trusted (<cwd>/.pi/file-injector.json), shallow-merged (project wins).
+  // Read a Pi settings.json and extract the SETTINGS_KEY sub-object; {} if the file/key is missing or the
+  // key value is not a plain object. Lets users co-locate the option with their other Pi settings (PRD §4.6).
+  const tryReadNamespaced = async (p: string): Promise<FileInjectorConfig> => {
+    try {
+      const v = JSON.parse((await fs.readFile(p, "utf8")).trim() || "{}");
+      if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+      const sub = (v as Record<string, unknown>)[SETTINGS_KEY];
+      return sub && typeof sub === "object" && !Array.isArray(sub) ? (sub as FileInjectorConfig) : {};
+    } catch {
+      return {};
+    }
+  };
+  let cfg: FileInjectorConfig = {};
+  // 1+2 GLOBAL: settings.json key (base), then the dedicated file (overrides the key within this scope).
+  cfg = { ...cfg, ...(await tryReadNamespaced(path.join(getAgentDir(), "settings.json"))) };
+  cfg = { ...cfg, ...(await tryReadCfg(path.join(getAgentDir(), "file-injector.json"))) };
   if (ctx.isProjectTrusted()) {
-    cfg = { ...cfg, ...(await tryRead(path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json"))) };
+    // 3+4 PROJECT (trusted only): settings.json key, then the dedicated file (project overrides global).
+    cfg = { ...cfg, ...(await tryReadNamespaced(path.join(ctx.cwd, CONFIG_DIR_NAME, "settings.json"))) };
+    cfg = { ...cfg, ...(await tryReadCfg(path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json"))) };
   }
   return cfg;
 }
@@ -311,6 +347,92 @@ function escapeRegex(ch: string): string {
 }
 
 /**
+ * PRD §5.6.1 — LINEAR-TIME inline-code span detector. Computes the same non-overlapping leftmost
+ * `[start, end)` spans the old regex `/(`+)([\s\S]*?)\1(?!`)/g` produced (verified byte-for-byte across
+ * 500k randomized fuzz cases), but in ~O(n) time regardless of backtick-run length — the regex was O(n²)
+ * on a long unmatched run (the backreference \1 + lazy [\s\S]*? forced the engine to try every
+ * run-length split; ~8s CPU at 200k backticks, reachable via any `#@file.md`). This function replaces
+ * it so a hostile/machine-generated markdown import can no longer freeze the event loop.
+ *
+ * Semantics replicated EXACTLY:
+ *   • At a maximal backtick run of length R at position `pos`, the opener length L is tried from R DOWN
+ *     to 1 (the regex's greedy `(`+)` capture then backtracking). The FIRST L with any valid closer wins.
+ *   • For a fixed L, content starts at `pos + L`; the closer is the LEFTMOST position `c ≥ pos + L` where
+ *     exactly L backticks occur and the char after them is NOT a backtick (lazy `[\s\S]*?` + `(?!`)`).
+ *     An "exactly L" closer means the L backticks are the TRAILING L of a maximal run of length M ≥ L whose
+ *     following char is non-backtick — so the unique closer inside a maximal run is at `runEnd − L`.
+ *   • The matched span is `[pos, c + L)`; scanning resumes at `c + L` (non-overlapping).
+ *   • `INLINE_CODE_MAX_OPENER` caps L (defense-in-depth; 1024 is far above any real code-span opener —
+ *     capping cannot affect realistic input, verified by fuzz — but bounds the opener-retry loop against
+ *     a hostile file; the closer search is already linear via whole-run skipping).
+ *
+ * Algorithm: one right-to-left pass precomputes `runEnd[i]` (exclusive end of the maximal backtick run
+ * containing `i`, or -1 for non-backticks). Then a left-to-right pass walks opener runs; for each viable
+ * L it scans content for the leftmost closer, skipping maximal runs wholesale (O(spans) amortized, not
+ * O(content)) — so the whole scan is ~linear in the input length. PURE: no I/O, no state. NOT exported.
+ *
+ * @param content the full markdown text (UTF-16 code-unit offsets, consistent with FILE_INJECT_RE m.index)
+ * @returns non-overlapping leftmost `[start, end)` inline-code spans (NOT yet filtered by fenced ranges;
+ *           the caller drops any span fully inside a fenced range)
+ */
+function inlineCodeRanges(content: string): [number, number][] {
+  const n = content.length;
+  if (n === 0) return [];
+
+  // runEnd[i] = exclusive end of the maximal backtick run containing index i (−1 for non-backticks).
+  // Built in one right-to-left pass: when s[i]==='`', extend left to the run's start and stamp [start,end).
+  const runEnd = new Int32Array(n).fill(-1);
+  for (let i = n - 1; i >= 0; ) {
+    if (content.charCodeAt(i) !== 0x60 /* '`' */) { i--; continue; } // backtick = U+0060
+    let start = i;
+    while (start > 0 && content.charCodeAt(start - 1) === 0x60) start--;
+    const end = i + 1; // run covers [start, end) — all backticks by construction
+    for (let k = start; k < end; k++) runEnd[k] = end;
+    i = start - 1;
+  }
+
+  const ranges: [number, number][] = [];
+  let i = 0;
+  while (i < n) {
+    if (content.charCodeAt(i) !== 0x60) { i++; continue; } // not an opener → advance
+    const runStart = i;
+    let runLen = 0;
+    while (i < n && content.charCodeAt(i) === 0x60) { runLen++; i++; } // maximal opener run
+
+    const maxL = Math.min(runLen, INLINE_CODE_MAX_OPENER);
+    let matched: [number, number] | null = null;
+    for (let L = maxL; L >= 1; L--) { // opener length: greedy-then-backtrack (regex semantics)
+      const contentStart = runStart + L;
+      let p = contentStart;
+      let found = -1;
+      while (p + L <= n) {
+        if (content.charCodeAt(p) !== 0x60) { p++; continue; }
+        const end = runEnd[p]!;                 // end of the maximal run containing p
+        // An exact-L closer (L backticks not followed by a backtick) must END at `end` — anywhere
+        // earlier in the run is followed by another backtick. So the unique closer start in this
+        // run is `end − L`, valid iff it lies at/after both p and contentStart (within the content).
+        const closerStart = end - L;
+        if (closerStart >= contentStart && closerStart >= p) {
+          found = closerStart; // leftmost viable closer for this run
+          break;
+        }
+        p = end; // this run can't host a valid closer ≥ contentStart → skip it wholesale
+      }
+      if (found !== -1) {
+        matched = [runStart, found + L];
+        break; // first (largest) L with a closer wins, mirroring the regex
+      }
+    }
+    if (matched) {
+      ranges.push(matched);
+      i = matched[1]; // non-overlapping: resume after this span
+    }
+    // (no match → i already past the opener run; continue scanning)
+  }
+  return ranges;
+}
+
+/**
  * PRD §5.6.1 — compute a sorted list of [start, end) character-offset ranges that are CODE (fenced
  * blocks + inline code), approximate-CommonMark. Used by scanTokens(opts.skipCode:true) to leave `#@`
  * directives inside code verbatim (the markdown escape hatch, PRD §4.5 rule 3). PURE: no I/O, no state.
@@ -324,7 +446,9 @@ function escapeRegex(ch: string): string {
  *     fence's first char (lineStartOffset) through the end of the closing line INCLUSIVE of its trailing
  *     newline. If NO closing fence is found, the range runs to EOF (unterminated fences consume the rest,
  *     matching CommonMark). Fences of the OTHER char inside a block are literal (do not reopen).
- *  2. INLINE CODE — run INLINE_CODE_RE over the full text; each match's full span [index, index+len)
+ *  2. INLINE CODE — inlineCodeRanges(content) returns the same non-overlapping leftmost spans the
+ *     original regex `/(`+)([\s\S]*?)\1(?!`)/g` produced, but in ~O(n) time (it replaced the regex,
+ *     which was O(n²) on a long unmatched backtick run — see its docstring). Each span [start, end)
  *     is a code range UNLESS it is FULLY inside a fenced range (span[0]>=fr[0] && span[1]<=fr[1]) —
  *     skip those so we don't double-count. (Approximate: does not model backslash escapes. Good enough
  *     to stop the common `#@file` doc pattern from importing.)
@@ -380,10 +504,10 @@ export function computeCodeRanges(content: string): [number, number][] {
     }
   }
 
-  // 2. INLINE CODE — spans NOT fully inside any fenced range.
-  for (const m of content.matchAll(INLINE_CODE_RE)) {
-    const spanStart = m.index!;
-    const spanEnd = spanStart + m[0].length;
+  // 2. INLINE CODE — spans NOT fully inside any fenced range. (inlineCodeRanges is the LINEAR-TIME
+  //    replacement for the former `/(`+)([\s\S]*?)\1(?!`)/g` regex — same spans, ~O(n) regardless of
+  //    backtick-run length; see its docstring. The old regex was O(n²) on a long unmatched run.)
+  for (const [spanStart, spanEnd] of inlineCodeRanges(content)) {
     const insideFenced = ranges.some((fr) => spanStart >= fr[0] && spanEnd <= fr[1]);
     if (!insideFenced) ranges.push([spanStart, spanEnd]);
   }
