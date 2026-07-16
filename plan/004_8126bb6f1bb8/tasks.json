@@ -1,0 +1,96 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "Markdown Import Extension Shorthand",
+      "status": "Researching",
+      "description": "DELTA on the already-shipped `#@file` extension (plan/003 = Markdown Transitive Imports = Complete). Add one focused feature: a `#@<path>` directive INSIDE an injected markdown file may omit its `.md`/`.markdown` extension — `#@PRD` resolves to `PRD.md` (then `PRD.markdown`) when no bare `PRD` exists. This is MARKDOWN-IMPORT-ONLY; top-level user-prompt `#@` tokens stay EXACT-MATCH. Exact-match always wins; dedup keys on the resolved absolute path. Baseline before this phase: 77/77 tests green, typecheck 0 errors. Research is stored in plan/004_8126bb6f1bb8/architecture/ (system_context.md, codebase_insertion_points.md, delta_analysis.md, external_deps.md). No new Pi APIs, no new npm deps, no structural refactor — reuses the shared-State markdown-import recursion from plan/003 verbatim.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Implement, validate & document extension shorthand",
+          "status": "Planned",
+          "description": "Land the shorthand resolution core (two new stat-based helpers + an async scanTokens that threads tryMdExt through both call sites), expand the PRD §11 acceptance matrix (cases 21–24) and §10 edge cases (EDG-1..4), keep the existing 77-case suite byte-for-byte green, typecheck clean, then sync the one changeset-level README bullet. Single milestone because the change is localized (~4 SP total) and the blast radius is exactly two async call sites + two new helpers.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Extension shorthand resolution core",
+              "status": "Planned",
+              "description": "Make markdown-import resolution stat-aware and extension-shorthand-capable: add `resolveImportPath` + `isRegularFile`, promote `scanTokens` to async with a `tryMdExt` option, thread it through `processTokenStream`, and wire `tryMdExt:false` at the top level (exact-match preserved) and `tryMdExt:true` in `injectMarkdown` (shorthand on). Export the two new helpers and add them to the test module-surface sanity list. JSDoc (Mode A) rides with the work. The async promotion is the riskiest part; it touches exactly 2 runtime scan call sites (both already inside async functions) — see codebase_insertion_points.md.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "resolveImportPath + isRegularFile, async scanTokens, tryMdExt wiring, exports, module-surface sync",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "prd_selectors": [
+                    "h2.3",
+                    "h3.12",
+                    "h3.13",
+                    "h2.4",
+                    "h3.19",
+                    "h4.1",
+                    "h2.6",
+                    "h2.7",
+                    "h2.8",
+                    "h2.11",
+                    "code.20"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: `scanTokens` is currently SYNC at file-injector.ts L389–413 with opts `{ allowAbsTilde: boolean; skipCode: boolean }` (NO `tryMdExt`), resolving via `expandTildeAndResolve(token, baseDir)` at L406 (pure string math: `~`/`~/` expand + `path.resolve(baseDir, …)` — NO stat). It has EXACTLY 2 runtime call sites: `processTokenStream` L431 (already `async`) and `injectMarkdown` L600 (already `async`). `processTokenStream` (L424–449) is called once, at `injectFiles` L699, already `await`ed. `resolveImportPath` and `isRegularFile` DO NOT EXIST yet (grep-confirmed). `expandTildeAndResolve` (L84–94) is UNCHANGED by this delta and still called directly by test L659 — do NOT modify it. The test module-surface sanity list is file-injector.test.mjs L113–128; `typeof mod.scanTokens === \"function\"` stays TRUE after going async (typeof asyncFunction === \"function\"), but the two NEW exports MUST be added there or the suite errors at load. The test suite calls ONLY `mod.injectFiles(...)` for cases — it never calls `scanTokens` directly, so NO test call site needs await. See plan/004_8126bb6f1bb8/architecture/codebase_insertion_points.md (§1–6, call-site audit, Step-3.5 interaction) and external_deps.md (all Pi facts CONFIRMED against pi-coding-agent@0.80.8; delta adds NO Pi APIs).\n2. INPUT: the already-`cleanToken`-ed `token` string (§4.3 trailing-punct already trimmed), the `baseDir` string, and a new `opts.tryMdExt: boolean` (markdown=true / top-level=false). `path.extname` runs on the CLEANED token: `path.extname(\"PRD\")===\"\"` (shorthand applies), `path.extname(\"sub/notes\")===\"\"` (applies with path prefix), `path.extname(\"PRD.md\")===\".md\"` (exact-only, never PRD.md.md). NOTE `path.extname(\"README.\")===\".\"` but cleanToken strips the trailing `.` first so resolveImportPath sees `README` → extname `\"\"` → shorthand applies (no special handling).\n3. LOGIC:\n   (a) Add `export async function isRegularFile(p): Promise<boolean>` near `expandTildeAndResolve` (after L94): `try { return (await fs.stat(p)).isFile(); } catch { return false; }` (mirrors the already-shipped idiom in injectFile L458–461).\n   (b) Add `export async function resolveImportPath(token, baseDir, tryMdExt): Promise<string | null>`: `const abs = expandTildeAndResolve(token, baseDir);` → `if (await isRegularFile(abs)) return abs;` (EXACT-MATCH ALWAYS WINS) → `if (tryMdExt && path.extname(token) === \"\") { if (await isRegularFile(abs + \".md\")) return abs + \".md\"; if (await isRegularFile(abs + \".markdown\")) return abs + \".markdown\"; }` → `return null;`. Follow PRD §4.5 rule 3 LITERALLY (`path.extname(token) === \"\"`); do NOT add a dotfile exclusion — exact-match-wins already makes `.env`/`.bashrc` safe (external_deps.md Note B).\n   (c) Promote `scanTokens` to `async`: opts type → `{ allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean }`; return type → `Promise<{ index: number; abs: string }[]>`. At L406 replace `const abs = expandTildeAndResolve(token, baseDir);` with `const abs = await resolveImportPath(token, baseDir, opts.tryMdExt);` and ADD `if (!abs) continue;` (nothing resolved → leave verbatim). The dedup `state.injectedSet.has(abs) || localSeen.has(abs)` now keys on the RESOLVED abs (possibly with `.md` appended) so `#@PRD` + `#@PRD.md` in one file collapse to one injection.\n   (d) Thread `tryMdExt` through `processTokenStream` (L424) opts type; change L431 `const records = scanTokens(text, baseDir, opts, state);` → `const records = await scanTokens(text, baseDir, opts, state);` (opts already carries tryMdExt through).\n   (e) Wire the two call sites: top-level `injectFiles` L699 → `{ allowAbsTilde: true, skipCode: false, tryMdExt: false }` (EXACT-MATCH preserved — behavior-identical to today since tryMdExt:false makes resolveImportPath exact-only); `injectMarkdown` L600 → `{ allowAbsTilde: false, skipCode: true, tryMdExt: true }` + prefix `await`.\n   (f) Leave `injectMarkdown` Step-3.5 existence pre-check (L606–622) UNCHANGED — it becomes redundant-but-harmless (resolveImportPath now guarantees each record is an existing regular file), kept as defense-in-depth for the §10 verbatim-on-missing invariant. Do NOT delete it.\n   (g) `export` both new helpers (`export async function`).\n4. OUTPUT: `resolveImportPath`/`isRegularFile` exported and added to the sanity list; `scanTokens` is async with `tryMdExt`; top-level stays exact-only (`tryMdExt:false`); markdown gets shorthand (`tryMdExt:true`). Consumed by P1.M1.T1.S2 (the new acceptance cases exercise this).\n5. MOCKING: none — real `node:fs`/`node:path`; unit tests use the existing TMPDIR fixture pattern (file-injector.test.mjs L174+). No external services.\n6. TDD (Definition of Done): write failing unit tests FIRST for resolveImportPath (exact-wins over .md; .md fallback when exact missing; .markdown fallback when only .markdown exists; no-match→null; dotfile `.env` exact-wins and does NOT try .env.md in the success path) and confirm `scanTokens` now returns a Promise. THEN implement. GATES: (1) the FULL existing suite (cases 1–20 + MD1/MD2 + all edges/guards/F1–F5/U1/PD*/CC*/EIT*/BG*) stays BYTE-FOR-BYTE GREEN — the only top-level behavior delta is that scan stats during scan instead of injectFile during injection, which is observably identical for existing cases; (2) `npm run typecheck` → 0 errors under --strict (the async signature change must satisfy the compiler); (3) add `resolveImportPath` + `isRegularFile` to test L113–128 sanity list (REQUIRED or the suite errors at load — the gate fails if a newly-exported helper isn't asserted).\n7. DOCS: [Mode A] JSDoc on `resolveImportPath` (exact-first; `.md`/`.markdown` fallback ONLY for extensionless markdown-import tokens; markdown-only via `tryMdExt`; exact-wins), on `isRegularFile` (stat + isFile + try/catch→false); update `scanTokens` JSDoc (now async BECAUSE resolution stats candidate paths; `opts.tryMdExt` = markdown `true` / top-level `false`; dedup keys on the RESOLVED abs so `#@PRD`+`#@PRD.md` collapse); update `processTokenStream` opts JSDoc + `injectMarkdown` Step-3 comment (`tryMdExt` threading; shorthand is markdown-only). This rides WITH the work — no separate docs subtask."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S2",
+                  "title": "PRD §11 acceptance cases 21–24 + §10 edge cases EDG-1..4 + fixtures",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": [
+                    "h2.4",
+                    "h3.19",
+                    "h2.9",
+                    "h2.10",
+                    "h3.22",
+                    "h3.13",
+                    "h3.12"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: tests use `runCase(n, name, fn)` (file-injector.test.mjs L89 — prints ✓/✗ + records a matrix row), `countFileBlocks(text, abs)` (L293), and `const FIX = { cwd: TMPDIR }` (L271 — NO budget → `remaining=null` → emitText injects whole → `injected===count, paged===0`). Markdown fixtures are written at module scope (L210–233, real `fsSync.writeFileSync` into `TMPDIR = fsSync.mkdtempSync(os.tmpdir()/\"saf-\")` at L174); markdown path constants live ~L260–281. Markdown cases 15–20 + MD1/MD2 (L1333–1402) are the EXACT TEMPLATE — each does `const r = await mod.injectFiles(\"Review #@notes.md\", [], FIX);` then asserts `r.injected`, block presence via `r.text.indexOf('<file name=\"' + PATH + '\">')`, pre-order order (parent block before import block), and marker stripped-to-path vs left-`#@`-verbatim. See plan/004_8126bb6f1bb8/architecture/codebase_insertion_points.md (test patterns table) and delta_analysis.md (decision matrix + fixture list).\n2. INPUT: the exported `resolveImportPath`/`isRegularFile` + async `scanTokens` with `tryMdExt` from P1.M1.T1.S1 (file-injector.ts). New test fixtures are REAL files in TMPDIR (same `fsSync.writeFileSync`/`mkdirSync({recursive:true})` pattern). No mocking.\n3. LOGIC — add fixtures (module scope near L210–233) AND runCases (after the markdown block ~L1402):\n   - Case 21 (.md shorthand): reuse existing top-level `api.md` (L211) — create `notesShorthand.md` containing `Imports #@api here.`; assert `#@notesShorthand.md` → `api.md` block present, marker inside notesShorthand.md stripped to `api` (NOT `#@api`), `injected===2`.\n   - Case 22 (exact-beats-shorthand): create BOTH a bare `readme` (NO extension) AND `readme.md`; create `notesExactWins.md` importing `#@readme`; assert bare `readme` block injected, `readme.md` NOT injected, `injected===2`.\n   - Case 23 (.markdown-only): create a DEDICATED dir `sub/ext/` with `sub/ext/api.markdown` (ONLY — no `.md`, to avoid colliding with top-level `api.md`) + `sub/ext/notes.md` importing `#@api`; assert resolves to `sub/ext/api.markdown`, block present, `injected===2`.\n   - Case 24 (top-level exact-only): top-level `#@PRD` with only `PRD.md` present (NO bare `PRD`); assert left VERBATIM, `injected===0`, text byte-for-byte unchanged (mirror case 5's `r.text === \"Fix #@nope.ts\"` style).\n   - EDG-1 (no-match): a markdown importing `#@ghost` where NO `ghost`/`ghost.md`/`ghost.markdown` exists → `#@ghost` left verbatim in the markdown block.\n   - EDG-2 (already-extended, missing): a markdown importing `#@PRD.md` where `PRD.md` is missing → exact-only (never `PRD.md.md`), `#@PRD.md` verbatim.\n   - EDG-3 (dedup across shorthand): a markdown importing BOTH `#@PRD` and `#@PRD.md` (PRD.md exists) → injected ONCE (dedup on resolved abs), second marker verbatim. Use `countFileBlocks` === 1.\n   - EDG-4 (shorthand with path prefix): a markdown importing `#@sub/notes` where `sub/notes.md` already exists (L216) → resolves to `sub/notes.md`, injected.\n   Add path constants for new fixtures alongside the existing markdown constants (~L260–281). NOTE: EDG cases may reuse `runCase(\"EDG-1\", ...)` string ids (the suite already uses string ids like MD1/MD2/F1/BG1/CC1/EIT1).\n4. OUTPUT: PRD §11 cases 21–24 + §10 edges EDG-1..4 all PASS; the suite reports (77 baseline + new) all green; no uncaught errors.\n5. MOCKING: none — `FIX` ctx (no budget) + real TMPDIR fixtures (the same `fsSync` pattern). The shorthand resolution does real `fs.stat` via isRegularFile.\n6. TDD: write the 4 acceptance + 4 edge runCases (they encode the PRD §11/§10 shorthand contract). Against P1.M1.T1.S1's implementation they must PASS; if any fails, the bug is in S1's resolution (not here). Confirm the EXISTING markdown cases 15–20 + MD1/MD2 are byte-for-byte unchanged (regression: shorthand must not have altered relative-only/code-exempt/dedup/missing-import behavior).\n7. DOCS: none — no user-facing/config/API surface change beyond S1's JSDoc (these are internal acceptance tests). The README bullet is handled by P1.M1.T2 (Mode B)."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "Sync changeset-level documentation",
+              "status": "Planned",
+              "description": "Mode B (final) changeset-level doc task: surface the new markdown-import extension-shorthand capability in README.md. Per-file/touched JSDoc already rode with P1.M1.T1.S1 (Mode A). This task covers the whole-feature/overview doc that only makes sense once the feature + its acceptance matrix are in place. Declares dependencies on every implementing subtask it summarizes so it runs last. No code change.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "README.md — add Extension shorthand bullet to the Markdown imports subsection",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1", "P1.M1.T1.S2"],
+                  "prd_selectors": [
+                    "h2.3",
+                    "h3.13",
+                    "h3.29",
+                    "h3.33",
+                    "h2.1"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: README.md documents the extension for users. The Markdown-imports coverage currently has four bullets/points (relative-only resolution / code-is-the-escape-hatch / each-file-injected-once / shared-context-budget) plus the `#@`-versus-`@` and Limits sections — all of which MUST stay unchanged. The feature is shipped by P1.M1.T1.S1 (resolution) and validated by P1.M1.T1.S2 (acceptance). See plan/004_8126bb6f1bb8/architecture/delta_analysis.md (decision matrix) and external_deps.md. This is the ONLY changeset-level doc touched by the delta.\n2. INPUT: the completed, validated shorthand feature (depends P1.M1.T1.S1 + P1.M1.T1.S2). Exact-match-wins and markdown-only/top-level-exact semantics are settled.\n3. LOGIC: Add ONE bullet to README.md's Markdown-imports subsection (the area describing how `#@spec.md` pulls in everything `spec.md` references): \"Extension shorthand. An import may omit the `.md`/`.markdown` extension: `#@PRD` resolves to `PRD.md` (then `PRD.markdown`) when no bare `PRD` exists. Exact match wins (a bare `readme` beats `readme.md`); this is a markdown-import convenience only — at the prompt you type the full name.\" Keep tone/formatting consistent with the existing bullets. Do NOT edit the four existing import bullets, the `#@`-vs-`@` note, the Limits section, the install/usage sections, or the file-type table.\n4. OUTPUT: README.md updated with the one shorthand bullet; behavior description matches the shipped implementation (exact-wins, markdown-only, top-level exact). No code change.\n5. MOCKING: N/A (documentation only).\n6. TDD/VERIFICATION: re-read the surrounding README subsection to confirm the bullet reads coherently in context and does not contradict the existing import bullets (relative-only, each-file-once). Optionally verify the example (`#@PRD` → `PRD.md`) matches a real fixture from P1.M1.T1.S2 case 21.\n7. DOCS: this subtask IS the Mode B changeset-level documentation sync. (Per-file JSDoc Mode A was completed in P1.M1.T1.S1.)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
