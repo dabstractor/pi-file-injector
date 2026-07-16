@@ -247,6 +247,23 @@ function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "only.markdown"), "# Only\n"); // NO bare `only`/`only.md`
   fsSync.writeFileSync(path.join(TMPDIR, ".env"), "KEY=val\n"); // dotfile exact-wins fixture
 
+  // ── Extension-shorthand fixtures (PRD §4.5 rule 3 — T1.S2 cases 21–24 + EDG-1..4). SELF-CONTAINED names
+  //    that do NOT collide with S1's README/README.md/PRD.md/only.markdown/.env or the existing markdown
+  //    fixtures. Case 21 reuses the existing top-level api.md (no bare api). Case 24 + EDG-3 share specdoc.md
+  //    (NO bare specdoc → top-level exact-only). EDG-4 reuses the existing sub/notes.md. ──
+  fsSync.writeFileSync(path.join(TMPDIR, "notesShorthand.md"), "Imports #@api here.\n");      // case 21: imports #@api → api.md
+  fsSync.writeFileSync(path.join(TMPDIR, "guide"), "bare guide\n");                           // case 22: bare (exact-wins)
+  fsSync.writeFileSync(path.join(TMPDIR, "guide.md"), "# Guide\n");                           // case 22: .md (must NOT win)
+  fsSync.writeFileSync(path.join(TMPDIR, "notesExactWins.md"), "Refs #@guide here.\n");       // case 22: imports #@guide
+  fsSync.mkdirSync(path.join(TMPDIR, "sub", "ext"), { recursive: true });                     // case 23: dedicated dir
+  fsSync.writeFileSync(path.join(TMPDIR, "sub", "ext", "notes.md"), "See #@api here.\n");     // case 23: imports #@api
+  fsSync.writeFileSync(path.join(TMPDIR, "sub", "ext", "api.markdown"), "# Markdown API\n");  // case 23: ONLY .markdown (no .md)
+  fsSync.writeFileSync(path.join(TMPDIR, "specdoc.md"), "# Spec\n");                          // case 24 + EDG-3 (NO bare specdoc)
+  fsSync.writeFileSync(path.join(TMPDIR, "notesGhost.md"), "Refs #@ghost here.\n");           // EDG-1: no-match (ghost never created)
+  fsSync.writeFileSync(path.join(TMPDIR, "notesAbsent.md"), "Refs #@absent.md here.\n");      // EDG-2: already-extended missing (absent.md never created)
+  fsSync.writeFileSync(path.join(TMPDIR, "notesDedup.md"), "Imports: #@specdoc and #@specdoc.md\n"); // EDG-3: dedup across shorthand forms
+  fsSync.writeFileSync(path.join(TMPDIR, "notesSubPrefix.md"), "See #@sub/notes here.\n");    // EDG-4: shorthand w/ path prefix → sub/notes.md
+
   // ~2 MB huge.log: many repeated lines. Exact byte-equality vs. the fixture proves "entire file,
   // no truncation" without bloating the repo. Computed once so case #2 can compare block content
   // byte-for-byte against THIS exact buffer.
@@ -308,6 +325,20 @@ const README_MD = path.join(TMPDIR, "README.md");    // sibling that must NOT wi
 const PRD_MD = path.join(TMPDIR, "PRD.md");          // shorthand fallback target (no bare PRD)
 const ONLY_MARKDOWN = path.join(TMPDIR, "only.markdown"); // second-tier fallback (.markdown)
 const DOTENV = path.join(TMPDIR, ".env");            // dotfile exact-wins (no .env.md tried in success path)
+
+// Extension-shorthand path constants (PRD §4.5 rule 3 — T1.S2 cases 21–24 + EDG-1..4).
+// Self-contained, non-colliding names. Reuses the existing API (top-level api.md) and SUB_NOTES (sub/notes.md).
+const NOTES_SHORTHAND = path.join(TMPDIR, "notesShorthand.md");
+const GUIDE_BARE = path.join(TMPDIR, "guide");
+const GUIDE_MD = path.join(TMPDIR, "guide.md");
+const NOTES_EXACT_WINS = path.join(TMPDIR, "notesExactWins.md");
+const EXT_NOTES = path.join(TMPDIR, "sub", "ext", "notes.md");
+const EXT_API_MARKDOWN = path.join(TMPDIR, "sub", "ext", "api.markdown");
+const SPECDOC_MD = path.join(TMPDIR, "specdoc.md");
+const NOTES_GHOST = path.join(TMPDIR, "notesGhost.md");
+const NOTES_ABSENT = path.join(TMPDIR, "notesAbsent.md");
+const NOTES_DEDUP = path.join(TMPDIR, "notesDedup.md");
+const NOTES_SUB_PREFIX = path.join(TMPDIR, "notesSubPrefix.md");
 
 // countFileBlocks — counts <file name="ABS"> block-openers for `abs` in `text`. Dedupes the inline
 // regex-count pattern (escape-special-chars + match length) used across F1/F1c/DUP1/etc.
@@ -1568,6 +1599,135 @@ await runCase("T1.S1-7", "scanTokens is async: returns a Promise<array> after th
   assert(p instanceof Promise, `scanTokens must return a Promise after going async, got ${Object.prototype.toString.call(p)}`);
   const arr = await p;
   assert(Array.isArray(arr), `awaited scanTokens must resolve to an array, got ${Object.prototype.toString.call(arr)}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── EXTENSION SHORTHAND (PRD §4.5 rule 3) — cases 21–24 + EDG-1..4 ──
+// A markdown import whose cleaned token is EXTENSIONLESS (path.extname(token)==="") resolves to <exact>.md
+// then <exact>.markdown when the exact path is not an existing regular file (tryMdExt:true, markdown-only).
+// Exact-match always wins; tokens already carrying any extension are exact-only (never <name>.md.md). Dedup
+// keys on the RESOLVED abs. Top-level user tokens stay EXACT-ONLY (tryMdExt:false — case 24). FIX = no budget.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Case 21 — §11: .md SHORTHAND. notesShorthand.md imports "#@api" (extensionless); top-level api.md exists
+// (no bare api) → resolves to api.md. The import marker is stripped to bare "api".
+await runCase(21, "md ext-shorthand: #@api (no bare api) → api.md; marker→api; injected=2", async () => {
+  const r = await mod.injectFiles("Review #@notesShorthand.md", [], FIX);
+  assert(r.injected === 2, `notesShorthand.md + api.md injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notesShorthand.md"), "top-level #@notesShorthand.md marker stripped to notesShorthand.md");
+  const iNotes = r.text.indexOf('<file name="' + NOTES_SHORTHAND + '">');
+  const iApi = r.text.indexOf('<file name="' + API + '">');   // reuses the existing top-level api.md
+  assert(iNotes !== -1 && iApi !== -1, "both notesShorthand.md and api.md blocks must be present");
+  assert(iNotes < iApi, "notesShorthand.md block must appear BEFORE api.md block (pre-order depth-first)");
+  assert(r.text.includes("Imports api here."), "notesShorthand.md block: extensionless import marker stripped to api");
+  assert(!r.text.includes("Imports #@api here."), "the resolved extensionless import marker must NOT retain #@");
+});
+
+// Case 22 — §11: EXACT BEATS SHORTHAND. notesExactWins.md imports "#@guide"; BOTH a bare "guide" AND
+// "guide.md" exist → the bare "guide" (exact) wins; guide.md is NOT imported.
+await runCase(22, "md ext exact-wins: #@guide (bare guide + guide.md) → bare guide; guide.md NOT imported; injected=2", async () => {
+  const r = await mod.injectFiles("Review #@notesExactWins.md", [], FIX);
+  assert(r.injected === 2, `notesExactWins.md + bare guide injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notesExactWins.md"), "top-level #@notesExactWins.md marker stripped to notesExactWins.md");
+  const iNotes = r.text.indexOf('<file name="' + NOTES_EXACT_WINS + '">');
+  const iGuide = r.text.indexOf('<file name="' + GUIDE_BARE + '">');
+  assert(iNotes !== -1 && iGuide !== -1, "both notesExactWins.md and bare guide blocks must be present");
+  assert(iNotes < iGuide, "notesExactWins.md block before bare guide block (pre-order)");
+  // CRITICAL: exact-match wins — the bare "guide" is injected; guide.md is NOT.
+  assert(r.text.includes("bare guide"), "the bare guide's content is present (exact match injected)");
+  assert(countFileBlocks(r.text, GUIDE_MD) === 0, `guide.md must have ZERO blocks (exact-match wins over shorthand), got ${countFileBlocks(r.text, GUIDE_MD)}`);
+  assert(r.text.includes("Refs guide here."), "notesExactWins.md block: import marker stripped to guide");
+  assert(!r.text.includes("Refs #@guide here."), "the resolved import marker must NOT retain #@");
+});
+
+// Case 23 — §11: .markdown FALLBACK. sub/ext/notes.md imports "#@api"; in sub/ext/ ONLY api.markdown exists
+// (no api, no api.md — dedicated dir avoids colliding with the top-level api.md) → resolves to api.markdown.
+await runCase(23, "md ext .markdown: #@api (only api.markdown) → api.markdown; injected=2", async () => {
+  const r = await mod.injectFiles("Read #@sub/ext/notes.md", [], FIX);
+  assert(r.injected === 2, `sub/ext/notes.md + sub/ext/api.markdown injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Read sub/ext/notes.md"), "top-level #@sub/ext/notes.md marker stripped to sub/ext/notes.md");
+  const iNotes = r.text.indexOf('<file name="' + EXT_NOTES + '">');
+  const iApi = r.text.indexOf('<file name="' + EXT_API_MARKDOWN + '">');
+  assert(iNotes !== -1 && iApi !== -1, "both sub/ext/notes.md and sub/ext/api.markdown blocks must be present");
+  assert(iNotes < iApi, "sub/ext/notes.md block before sub/ext/api.markdown block (pre-order)");
+  assert(r.text.includes("Markdown API"), "sub/ext/api.markdown's DISTINCT content present (proves .markdown fallback)");
+  assert(r.text.includes("See api here."), "sub/ext/notes.md block: import marker stripped to api");
+  assert(!r.text.includes("See #@api here."), "the resolved import marker must NOT retain #@");
+});
+
+// Case 24 — §11: TOP-LEVEL EXACT-ONLY. Top-level "#@specdoc" with ONLY specdoc.md present (NO bare specdoc)
+// → left VERBATIM (top-level is exact-match; NO .md fallback at the prompt — PRD §4.4).
+await runCase(24, "top-level no-fallback: #@specdoc (only specdoc.md) → verbatim, injected=0", async () => {
+  const r = await mod.injectFiles("See #@specdoc", [], FIX);
+  assert(r.injected === 0, `nothing injected (top-level exact-only), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging, got paged=${r.paged}`);
+  // byte-for-byte unchanged — mirrors case 5's "r.text === input" style (PRD §4.4: top-level is exact-only)
+  assert(r.text === "See #@specdoc", `top-level prompt must be byte-for-byte UNCHANGED (no .md fallback at the prompt), got ${JSON.stringify(r.text)}`);
+});
+
+// EDG-1 — §10: NO MATCH. notesGhost.md imports "#@ghost"; NO ghost/ghost.md/ghost.markdown exists → the
+// extensionless shorthand finds nothing → marker left VERBATIM.
+await runCase("EDG-1", "§10 md edge: #@ghost (no ghost/.md/.markdown) → verbatim in markdown block, injected=1", async () => {
+  const r = await mod.injectFiles("Review #@notesGhost.md", [], FIX);
+  assert(r.injected === 1, `only notesGhost.md injected (ghost has no match), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notesGhost.md"), "top-level #@notesGhost.md marker stripped to notesGhost.md");
+  assert(r.text.includes('<file name="' + NOTES_GHOST + '">'), "notesGhost.md block present");
+  assert(r.text.includes("Refs #@ghost here."), "the no-match import marker #@ghost must be left VERBATIM (§10)");
+  assert(!r.text.includes("Refs ghost here."), "the no-match import marker must NOT be stripped");
+  assert(r.text.indexOf('<file name="' + path.join(TMPDIR, "ghost.md") + '">') === -1, "ghost.md must NOT be injected (no match)");
+});
+
+// EDG-2 — §10: ALREADY-EXTENDED, MISSING. notesAbsent.md imports "#@absent.md"; absent.md is MISSING → the
+// token already carries ".md" → exact-only (path.extname !== "") → NEVER tries absent.md.md → verbatim.
+await runCase("EDG-2", "§10 md edge: #@absent.md (missing) → exact-only (never .md.md), verbatim, injected=1", async () => {
+  const r = await mod.injectFiles("Review #@notesAbsent.md", [], FIX);
+  assert(r.injected === 1, `only notesAbsent.md injected (absent.md missing), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notesAbsent.md"), "top-level #@notesAbsent.md marker stripped to notesAbsent.md");
+  assert(r.text.includes('<file name="' + NOTES_ABSENT + '">'), "notesAbsent.md block present");
+  assert(r.text.includes("Refs #@absent.md here."), "the missing already-extended marker #@absent.md must be left VERBATIM (exact-only, never .md.md)");
+  assert(!r.text.includes("Refs absent.md here."), "the missing import marker must NOT be stripped");
+  assert(r.text.indexOf('<file name="' + path.join(TMPDIR, "absent.md") + '">') === -1, "absent.md must NOT be injected (missing)");
+});
+
+// EDG-3 — §10: DEDUP ACROSS SHORTHAND. notesDedup.md imports BOTH "#@specdoc" and "#@specdoc.md"; specdoc.md
+// exists → BOTH resolve to the SAME abs → injected ONCE (dedup on the resolved abs). First marker (encountered
+// first) is stripped; the second is left verbatim.
+await runCase("EDG-3", "§10 md edge: #@specdoc + #@specdoc.md (specdoc.md exists) → injected ONCE (dedup), injected=2", async () => {
+  const r = await mod.injectFiles("Review #@notesDedup.md", [], FIX);
+  assert(r.injected === 2, `notesDedup.md + specdoc.md (deduped) injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notesDedup.md"), "top-level #@notesDedup.md marker stripped to notesDedup.md");
+  // specdoc.md injected EXACTLY ONCE (dedup on the resolved abs — both #@specdoc and #@specdoc.md collapse)
+  assert(countFileBlocks(r.text, SPECDOC_MD) === 1, `specdoc.md must appear exactly ONCE (dedup across shorthand forms), got ${countFileBlocks(r.text, SPECDOC_MD)}`);
+  // first marker #@specdoc stripped to "specdoc"; second #@specdoc.md left VERBATIM (deduped → not recorded → not stripped)
+  assert(r.text.includes("Imports: specdoc and #@specdoc.md"), "first marker #@specdoc stripped to specdoc; second #@specdoc.md left VERBATIM (deduped)");
+  assert(!r.text.includes("Imports: #@specdoc and"), "the first (dedup-winning) marker must NOT retain #@");
+});
+
+// EDG-4 — §10: SHORTHAND WITH PATH PREFIX. notesSubPrefix.md imports "#@sub/notes"; sub/notes.md already
+// exists (no bare sub/notes) → resolves to sub/notes.md (shorthand applies to prefixed paths too). NOTE:
+// sub/notes.md itself transitively imports "#@api.md" → sub/api.md (the existing case-19 fixture), so the
+// transitive chain is notesSubPrefix.md → sub/notes.md → sub/api.md = 3 injections. The PRP's core intent
+// (shorthand resolves a prefixed extensionless token to the .md sibling) is proven by the presence + pre-order
+// of sub/notes.md and the stripped marker; the transitive sub/api.md is incidental reuse, not under test here.
+await runCase("EDG-4", "§10 md edge: #@sub/notes (sub/notes.md exists) → sub/notes.md (+transitive sub/api.md), injected=3", async () => {
+  const r = await mod.injectFiles("Read #@notesSubPrefix.md", [], FIX);
+  assert(r.injected === 3, `notesSubPrefix.md + sub/notes.md + sub/api.md (transitive) injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Read notesSubPrefix.md"), "top-level #@notesSubPrefix.md marker stripped to notesSubPrefix.md");
+  const iNotes = r.text.indexOf('<file name="' + NOTES_SUB_PREFIX + '">');
+  const iSub = r.text.indexOf('<file name="' + SUB_NOTES + '">');   // reuses the existing sub/notes.md
+  const iSubApi = r.text.indexOf('<file name="' + SUB_API + '">');   // sub/notes.md's transitive #@api.md → sub/api.md
+  assert(iNotes !== -1 && iSub !== -1 && iSubApi !== -1, "notesSubPrefix.md + sub/notes.md + sub/api.md blocks all present");
+  assert(iNotes < iSub && iSub < iSubApi, "pre-order: notesSubPrefix.md before sub/notes.md before sub/api.md");
+  assert(r.text.includes("Sub Notes"), "sub/notes.md's DISTINCT content present (proves shorthand resolved the prefixed path)");
+  assert(r.text.includes("See sub/notes here."), "notesSubPrefix.md block: import marker stripped to sub/notes");
+  assert(!r.text.includes("See #@sub/notes here."), "the resolved import marker must NOT retain #@");
 });
 
 // 10. Summary + cleanup + exit.
