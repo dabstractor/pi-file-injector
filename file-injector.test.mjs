@@ -123,6 +123,8 @@ assert(typeof mod.scanTokens === "function", "mod.scanTokens must be a function 
 assert(typeof mod.injectFile === "function", "mod.injectFile must be a function (stat→claim→classify→count)");
 assert(typeof mod.emitText === "function", "mod.emitText must be a function (inline-vs-paged text decision)");
 assert(typeof mod.isAbsoluteOrTilde === "function", "mod.isAbsoluteOrTilde must be a function (§4.5 markdown relative-only guard)");
+assert(typeof mod.computeCodeRanges === "function", "mod.computeCodeRanges must be a function (§5.6.1 code-region detection)");
+assert(typeof mod.inCode === "function", "mod.inCode must be a function (binary search over code ranges)");
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. Mock pi/ctx factories + handler capture (verified pattern — drives guards/notify/transform).
@@ -1023,6 +1025,117 @@ await runCase("PN4", "§5.5 notify: headless (hasUI===false) + tight budget → 
   const out = await slot.cb({ text: "Summarize #@huge.log", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must still transform when headless, got '${out.action}'`);
   assert(rec.notify === undefined, "notify must NEVER fire when ctx.hasUI===false, even under paging");
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ── CODE-REGION DETECTION (PRD §5.6.1) — computeCodeRanges/inCode, approximate CommonMark ─
+// Pure functions: call mod.computeCodeRanges/mod.inCode DIRECTLY with literal strings (no fs fixtures).
+// Each expected `#@` index is DERIVED via the same FILE_INJECT_RE scanTokens uses, to avoid off-by-one.
+// `inCode(idx, ranges) === true` means a `#@` at that index WOULD be skipped by scanTokens(skipCode:true).
+const FILE_INJECT_RE_TEST = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
+function indexOfFirstHash(txt) {
+  const m = [...txt.matchAll(FILE_INJECT_RE_TEST)][0];
+  return m ? m.index : -1;
+}
+
+await runCase("CC1", "§5.6.1 — #@ inside a fenced block IS in code (skipped)", async () => {
+  const txt = "```\n#@fenced.ts\n```";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `#@ inside a fenced block must be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC2", "§5.6.1 — #@ inside an inline backtick span IS in code (skipped)", async () => {
+  const txt = "see `#@inline.ts` here";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `#@ inside an inline code span must be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC3", "§5.6.1 — #@ in plain prose is NOT in code (imported normally)", async () => {
+  const txt = "review #@prose.md please";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === false,
+    `#@ in prose must NOT be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC4", "§5.6.1 — unterminated fence → range to EOF; #@ after the open fence IS in code", async () => {
+  // The opening fence is never closed → it consumes the rest (CommonMark). The #@ lies inside.
+  const txt = "```\n#@unterminated.ts\nmore body";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(r.length === 1 && r[0][1] === txt.length,
+    `unterminated fence must run to EOF (ranges=${JSON.stringify(r)})`);
+  assert(mod.inCode(idx, r) === true,
+    `#@ after an unterminated open fence must be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC5", "§5.6.1 — tilde fence does NOT close a backtick fence (other char is literal)", async () => {
+  // ``` opens a backtick block; a ~~~ line is LITERAL (does not close). The real closer is the trailing ```.
+  // The #@ BEFORE the real closer is therefore INSIDE the block → in code.
+  const txt = "```\ncode\n~~~\n#@inside.ts\n```";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `tilde fence must not close a backtick fence; #@ before the real close is in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC6", "§5.6.1 — closing fence with trailing content (` ```foo `) does NOT close (strict CommonMark)", async () => {
+  // A ```foo line is an INFO-STRING line, NOT a closer. So the block is UNTERMINATED → the #@ is in code.
+  // (Pin: the only thing that must NOT happen is a closer being detected too early. Here the block never
+  // closes, so the #@ is correctly in code. The paired positive case — a ```foo line wrongly treated as a
+  // close followed by a #@ that should NOT be in code — is CC7.)
+  const txt = "```\ncode\n```foo\n#@stillinside.ts";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `a line with trailing content does not close; #@ stays in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC7", "§5.6.1 — info-string line closes nothing; a real closer AFTER it reopens/closes correctly", async () => {
+  // Block 1 opens with ```ruby. The ```ruby line is the OPENER (info strings allowed on open). A later
+  // plain ``` closes it. A #@ AFTER that real close is in PROSE → NOT in code. This proves a ```-plus-word
+  // line on OPEN is fine, while the STRICT close rule (CC6) only forbids trailing content on the CLOSER.
+  const txt = "```ruby\ncode\n```\n#@afterclose.md";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === false,
+    `#@ after a real close must NOT be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC8", "§5.6.1 — double-backtick span containing a single backtick is ONE range", async () => {
+  // `` `#@x` `` — the OUTER double-backtick span contains an inner single backtick; the whole span (incl.
+  // the inner backticks and the #@) is ONE code range → inCode(index of #@) === true.
+  const txt = "a `` `#@nested.ts` `` b";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `#@ inside a double-backtick span is in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC9", "§5.6.1 — inCode: index before first range, after last, and in a gap all return false", async () => {
+  // "prose `a` more ```\ncode\n``` tail" — index 0 is prose 'p'; the inline span + fenced block are
+  // the code ranges; the gap word "more" and the trailing "tail" are NOT in code.
+  const txt = "prose `a` more ```\ncode\n``` tail";
+  const r = mod.computeCodeRanges(txt);
+  // index 0 is plain prose ('p' of "prose") → not in any range.
+  assert(mod.inCode(0, r) === false, `index 0 is plain prose → not in code (ranges=${JSON.stringify(r)})`);
+  // An index well beyond EOF is not in any range.
+  assert(mod.inCode(txt.length + 1000, r) === false, "index past EOF is not in code");
+  // The literal substring " more " between the inline span and the fence is a prose gap.
+  const gapIdx = txt.indexOf("more");
+  assert(mod.inCode(gapIdx, r) === false, `index in a prose gap is not in code (gapIdx=${gapIdx}, ranges=${JSON.stringify(r)})`);
 });
 
 // 10. Summary + cleanup + exit.

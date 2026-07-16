@@ -24,6 +24,23 @@ const DEFAULT_WINDOW = 200000;  // fallback context window when ctx.model?.conte
 const DEFAULT_RESERVE = 8192;   // fallback for ctx.model?.maxTokens when model is absent
 const READ_LIMIT = 2000;        // read tool DEFAULT_MAX_LINES — page size emitted in the directive
 
+/** §5.6.1 — approximate-CommonMark code-region detection (the markdown import exemption, PRD §4.5 rule 3).
+ *  INLINE_CODE_RE: a backtick run closed by a run of the SAME length (backreference \1), non-greedy,
+ *    not followed by another backtick. `g` flag for matchAll (matchAll clones — no lastIndex reset needed).
+ *  FENCE_OPEN_RE: line-anchored (use against a single line, not full text); 0-3 leading spaces then a
+ *    run of >= 3 backticks or tildes. Group 1 = the fence run (char + length drive open/close matching). */
+const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;   // PRD §5.6.1 (exact form)
+const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;      // PRD §5.6.1 (exact form); apply per-line
+
+/** §5.6 / §4.5 — a delivered file whose lowercased ext is md/markdown is an import source (consumed by
+ *  the markdown branch T2.S3 adds to injectFile). Defined here so T2.S3 does not re-declare. */
+const MD_EXTS = new Set(["md", "markdown"]);
+
+/** §5.6.2 — flat fallback image token cost when resized dimensions are unavailable (raw base64 path).
+ *  Derived from the 2000×2000 resize cap worst case: max(1,⌈2000/512⌉)·max(1,⌈2000/512⌉)·170 + 85 =
+ *  4·4·170 + 85 = 2805. Consumed by estimateImageTokens (T2.S2). Defined here per the constants cluster. */
+const IMAGE_FALLBACK_TOKENS = 2805;
+
 /** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
  *  bytes match the declared image type before attaching. A mislabeled file (text body named
  *  `.png`) fails the sniff → falls through to the text/binary path instead of attaching
@@ -208,6 +225,116 @@ export function isAbsoluteOrTilde(p: string): boolean {
   return p.startsWith("/") || p.startsWith("~");
 }
 
+/** Escape a char for safe interpolation into a RegExp body (fenceChar is "`" or "~"). Used by
+ *  computeCodeRanges' constructed close-line regex. NOT exported (internal helper). */
+function escapeRegex(ch: string): string {
+  return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * PRD §5.6.1 — compute a sorted list of [start, end) character-offset ranges that are CODE (fenced
+ * blocks + inline code), approximate-CommonMark. Used by scanTokens(opts.skipCode:true) to leave `#@`
+ * directives inside code verbatim (the markdown escape hatch, PRD §4.5 rule 3). PURE: no I/O, no state.
+ *
+ * Algorithm:
+ *  1. FENCED BLOCKS — walk lines with a running char offset. A line matching FENCE_OPEN_RE opens a block
+ *     (fenceChar = run[0], fenceLen = run.length). From the next line, scan for a CLOSING line: after
+ *     dropping 0-3 leading spaces, it must START with >= fenceLen of the SAME fenceChar AND the remainder
+ *     must be whitespace-only (/^[ \t]*$/) — this is the strict-CommonMark rule (a ` ```foo ` line does
+ *     NOT close; only the OPENING fence may carry an info string). The range runs from the opening
+ *     fence's first char (lineStartOffset) through the end of the closing line INCLUSIVE of its trailing
+ *     newline. If NO closing fence is found, the range runs to EOF (unterminated fences consume the rest,
+ *     matching CommonMark). Fences of the OTHER char inside a block are literal (do not reopen).
+ *  2. INLINE CODE — run INLINE_CODE_RE over the full text; each match's full span [index, index+len)
+ *     is a code range UNLESS it is FULLY inside a fenced range (span[0]>=fr[0] && span[1]<=fr[1]) —
+ *     skip those so we don't double-count. (Approximate: does not model backslash escapes. Good enough
+ *     to stop the common `#@file` doc pattern from importing.)
+ *  3. Sort by start. Ranges are disjoint + sorted (fenced ranges don't overlap; inline spans don't
+ *     overlap each other; inside-fenced spans are filtered) — so inCode can binary-search them.
+ *
+ * @param content the full markdown text (UTF-16 code-unit offsets, consistent with FILE_INJECT_RE m.index)
+ * @returns sorted [start, end) code ranges
+ */
+export function computeCodeRanges(content: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  const lines = content.split("\n");
+
+  // Precompute the char offset of the START of each line (line i starts at sum of len(lines[k])+1 for k<i).
+  // The +1 accounts for the "\n" that split() removed. The final line has no trailing "\n" if content
+  // doesn't end in one — content.length is the safe cap for any end offset.
+  const lineStart: number[] = new Array(lines.length);
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    lineStart[i] = acc;
+    acc += lines[i].length + 1; // +1 for the "\n"
+  }
+
+  // 1. FENCED BLOCKS — state machine over lines.
+  let i = 0;
+  while (i < lines.length) {
+    const open = lines[i].match(FENCE_OPEN_RE);
+    if (!open) { i++; continue; }            // not a fence opener → skip
+    const run = open[1];
+    const fenceChar = run[0];                  // "`" or "~"
+    const fenceLen = run.length;
+    const openStart = lineStart[i];            // first char of the opening fence line (PRD §5.6.1)
+    // strict-CommonMark close: 0-3 leading spaces, then >= fenceLen of fenceChar, then whitespace-only.
+    const closeRe = new RegExp("^ {0,3}" + escapeRegex(fenceChar) + "{" + fenceLen + ",}[ \\t]*$");
+
+    // scan forward from the NEXT line for the closing fence
+    let j = i + 1;
+    let closedEnd: number | null = null;
+    while (j < lines.length) {
+      if (closeRe.test(lines[j])) {
+        // end of closing line incl. its trailing newline (cap at content.length for the final line)
+        closedEnd = Math.min(lineStart[j] + lines[j].length + 1, content.length);
+        break;
+      }
+      j++;
+    }
+    if (closedEnd !== null) {
+      ranges.push([openStart, closedEnd]);
+      i = j + 1;                              // resume AFTER the closing line
+    } else {
+      ranges.push([openStart, content.length]); // unterminated → EOF (CommonMark)
+      break;                                  // nothing left to scan
+    }
+  }
+
+  // 2. INLINE CODE — spans NOT fully inside any fenced range.
+  for (const m of content.matchAll(INLINE_CODE_RE)) {
+    const spanStart = m.index!;
+    const spanEnd = spanStart + m[0].length;
+    const insideFenced = ranges.some((fr) => spanStart >= fr[0] && spanEnd <= fr[1]);
+    if (!insideFenced) ranges.push([spanStart, spanEnd]);
+  }
+
+  // 3. sort by start (ranges are already disjoint by construction; sort for inCode's binary search).
+  ranges.sort((a, b) => a[0] - b[0]);
+  return ranges;
+}
+
+/**
+ * PRD §5.6.1 — true iff `index` lies inside any code range `[start, end)` (i.e. start <= index < end).
+ * Binary search over the sorted disjoint ranges from computeCodeRanges. `ranges` MUST be sorted by start
+ * and disjoint (computeCodeRanges guarantees both). O(log ranges.length).
+ *
+ * @param index the char offset to test (e.g. a FILE_INJECT_RE m.index — the position of `#`)
+ * @param ranges sorted [start, end) code ranges from computeCodeRanges
+ */
+export function inCode(index: number, ranges: [number, number][]): boolean {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [s, e] = ranges[mid];
+    if (index < s) hi = mid - 1;
+    else if (index >= e) lo = mid + 1;
+    else return true; // s <= index < e
+  }
+  return false;
+}
+
 /** Shared ctx type for injectFiles / processTokenStream / injectFile (DRY; jiti erases at runtime). */
 type Ctx = {
   cwd: string;
@@ -222,10 +349,10 @@ type Ctx = {
  * via localSeen; global state.injectedSet check skips already-claimed paths (prior <file> blocks OR files
  * injected earlier this run / in a parent recursion). Returns { index; abs }[] in text order.
  *
- * opts.skipCode: T1.S2 STUB — top-level scan passes skipCode:false, so NO code check runs. T2.S1 will
- *   add `const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;` and, inside the loop,
- *   `if (codeRanges && inCode(m.index!, codeRanges)) continue;` (PRD §5.6.1). Do NOT reference those
- *   names here — they do not exist yet.
+ * opts.skipCode: when true, scanTokens precomputes code regions once and skips any `#@` match whose
+ *   start index lies inside a fenced block or inline code span (PRD §5.6.1). null codeRanges when false →
+ *   inCode is never called → top-level (user-prompt) behavior is unchanged. Markdown imports (T2.S3)
+ *   pass skipCode:true.
  * opts.allowAbsTilde: when false, tokens starting with / or ~ are dropped (markdown relative-only, §4.5).
  */
 export function scanTokens(
@@ -236,8 +363,12 @@ export function scanTokens(
 ): { index: number; abs: string }[] {
   const localSeen = new Set<string>();
   const out: { index: number; abs: string }[] = [];
+  // §5.6.1 — when scanning markdown content, precompute code regions once and skip `#@` matches whose
+  // start index lies inside a fenced block or inline code span (the markdown escape hatch, §4.5 rule 3).
+  // null when skipCode:false (top-level user-prompt scan) → inCode is never called → no behavior change.
+  const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;
   for (const m of text.matchAll(FILE_INJECT_RE)) {
-    // (T2.S1 inserts the code-region exemption here when skipCode:true lands.)
+    if (codeRanges && inCode(m.index!, codeRanges)) continue; // §5.6.1 — skip #@ inside code
     const token = cleanToken(m[2]); // trim trailing punctuation (§4.3)
     if (!token) continue; // empty after trim => skip, leave verbatim
     if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue; // §4.5 — markdown: relative only
