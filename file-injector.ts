@@ -560,15 +560,24 @@ export function emitText(abs: string, content: string, state: State): void {
  * Six steps (PRD §5.6):
  *   2. Claim self (idempotent: injectFile pre-claimed abs; included for contract self-containedness).
  *   3. scanTokens(content, dirname(abs), { allowAbsTilde:false, skipCode:true }) → resolved import records.
- *   4. Strip '#@' from each resolved marker (high→low, leaving the path) → `stripped` = block content.
- *      Unresolved/deduped/absolute/inside-code markers keep '#@' verbatim (never in records).
+ *   3.5. EXISTENCE PRE-CHECK (PRD §10 / §5.4): scanTokens records a token as soon as it RESOLVES (it does
+ *      NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
+ *      '#@' marker stripped (Step 4) even though injectFile later returns false and nothing is injected for
+ *      it. PRD §10 requires such markers be left VERBATIM. Pre-order (Step 6) emits THIS file's block BEFORE
+ *      recursing, so the strip decision must be made NOW — unlike the top-level path (processTokenStream),
+ *      which can inject-then-strip because the user prompt is not a pre-order block. Stat each import; keep
+ *      only those that stat-succeed AND are regular files (isFile also rejects directories, matching §5.4
+ *      and injectFile's own check). injectFile re-stats harmlessly on recursion. `injectable ⊆ records`.
+ *   4. Strip '#@' from each INJECTABLE marker (high→low, leaving the path) → `stripped` = block content.
+ *      Missing/dir imports keep '#@' verbatim. Unresolved/deduped/absolute/inside-code markers were never in
+ *      records and keep '#@' verbatim.
  *   5. emitText(abs, stripped, state) — the paged decision runs on the STRIPPED content (so directive text
  *      the model won't see does not bias the budget). emitText owns the subtract + paged bump (NOT count).
- *   6. Recurse into imports in ENCOUNTER order: if not already claimed, await injectFile(abs) (which claims,
- *      classifies, bumps count, and recurses again if the import is itself markdown).
+ *   6. Recurse into INJECTABLE imports in ENCOUNTER order: if not already claimed, await injectFile(abs)
+ *      (which claims, classifies, bumps count, and recurses again if the import is itself markdown).
  *
- * PRIVATE — exercised indirectly via injectFiles (PRD §11 cases 15-19). Does NOT bump count (injectFile
- * owns the single count++ per claimed file; imports bump count in their own injectFile).
+ * PRIVATE — exercised indirectly via injectFiles (PRD §11 cases 15-19 + 20/MD1/MD2). Does NOT bump count
+ * (injectFile owns the single count++ per claimed file; imports bump count in their own injectFile).
  *
  * @param abs     the importing markdown's absolute path (already claimed by injectFile; resolution base = dirname)
  * @param content the markdown's decoded UTF-8 content (buf.toString("utf8") from injectFile)
@@ -584,19 +593,38 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
   // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true).
   const records = scanTokens(content, dir, { allowAbsTilde: false, skipCode: true }, state);
 
-  // Step 4 — strip '#@' from each resolved import marker (high→low so earlier offsets stay valid), leaving
-  // the path. `stripped` becomes THIS file's block content.
+  // Step 3.5 — EXISTENCE PRE-CHECK (PRD §10 / §5.4). scanTokens records a token as soon as it RESOLVES (it
+  // does NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
+  // '#@' marker stripped (Step 4) even though injectFile later returns false and nothing is injected for it.
+  // PRD §10 requires such markers be left VERBATIM. Pre-order (§5.6 step 6) emits THIS file's block BEFORE
+  // recursing, so the strip decision must be made NOW (the top-level path can inject-then-strip because the
+  // user prompt is not a pre-order block; the markdown path cannot). Stat each import; keep only those that
+  // stat-succeed AND are regular files (isFile also rejects directories, matching injectFile's own check and
+  // §5.4: directory → verbatim). injectFile re-stats harmlessly on recursion.
+  const injectable: { index: number; abs: string }[] = [];
+  for (const r of records) {
+    try {
+      const st = await fs.stat(r.abs);
+      if (st.isFile()) injectable.push(r);
+    } catch {
+      /* missing/unreadable → leave verbatim (not stripped, not injected) */
+    }
+  }
+
+  // Step 4 — strip '#@' from each INJECTABLE import marker (high→low so earlier offsets stay valid), leaving
+  // the path. `stripped` becomes THIS file's block content. Missing/dir imports keep '#@' verbatim.
   let stripped = content;
-  for (const r of [...records].sort((a, b) => b.index - a.index)) {
+  for (const r of [...injectable].sort((a, b) => b.index - a.index)) {
     stripped = stripped.slice(0, r.index) + stripped.slice(r.index + 2); // m.index is the '#' (lookbehind is zero-width)
   }
 
   // Step 5 — emit THIS file's block. The paged decision runs on the STRIPPED content (§5.6 step 5).
   emitText(abs, stripped, state); // emitText owns formatTextFileBlock + subtract + the paged head/directive + state.paged++
 
-  // Step 6 — recurse into imports, depth-first, ENCOUNTER ORDER (pre-order). Each record.abs already passed
-  // dedup at scan time; the injectedSet re-check is belt-and-suspenders (cross-file dedup since the scan).
-  for (const r of records) {
+  // Step 6 — recurse into INJECTABLE imports, depth-first, ENCOUNTER ORDER (pre-order). Missing/dir imports
+  // are absent here (they would no-op in injectFile anyway). The injectedSet re-check is belt-and-suspenders
+  // (cross-subtree dedup since the scan).
+  for (const r of injectable) {
     if (state.injectedSet.has(r.abs)) continue; // already claimed (e.g. by a sibling subtree meanwhile)
     await injectFile(r.abs, state, ctx); // claims abs, classifies, bumps count, recurses again if markdown
   }

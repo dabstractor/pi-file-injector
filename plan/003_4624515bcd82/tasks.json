@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Markdown Transitive Imports (PRD §5.6)",
-      "status": "Planned",
+      "status": "Ready",
       "description": "Add markdown transitive imports to the existing, fully-implemented `#@file` extension: a delivered `.md`/`.markdown` file is scanned for further `#@<path>` directives, each resolved import is delivered (and recursed if markdown), bounded by a single global dedup set and a single shared context budget that accounts for the total filesize of all files (text + image + binary + imports). Requires a structural refactor of the linear `injectFiles` core into shared mutable `State` + recursive helpers (MI-1) before the recursion (MI-2) can be added, then a README sync (MI-3). Single-file extension; no new dependencies; no new Pi API surface.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Implement & Validate Markdown Imports",
-          "status": "Planned",
+          "status": "Ready",
           "description": "Three tasks: (T1) refactor the linear core to shared `State` + recursive helpers with ZERO behavior change (regression gate = the existing 1044-line test suite green); (T2) add the markdown transitive-import feature + total-size budget accounting (cases 15-20 + fixtures); (T3) sync README for the new capability (Mode B).",
           "tasks": [
             {
@@ -69,7 +69,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Markdown transitive imports + total-size budget accounting",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add the markdown import feature (§5.6 + §4.5 + §5.6.1) and the per-type budget accounting (§5.6.2). New constants (MD_EXTS, code-region regexes, IMAGE_FALLBACK_TOKENS), new helpers (isAbsoluteOrTilde, computeCodeRanges, inCode, estimateImageTokens, injectMarkdown), wire the markdown branch into injectFile, and make images + binary notes consume the shared budget. Adds PRD §11 cases 15-20 + markdown fixtures.",
               "subtasks": [
                 {
@@ -144,7 +144,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S4",
                   "title": "Shared-budget case 20 + edge cases + module-surface sync",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S3"
@@ -167,14 +167,14 @@
               "type": "Task",
               "id": "P1.M1.T3",
               "title": "Sync changeset-level documentation (README markdown imports)",
-              "status": "Planned",
+              "status": "Ready",
               "description": "Mode B cross-cutting doc sync (SOW §5). The README is paged-delivery-current but has no markdown-import content. Depends on ALL implementing subtasks so it runs last and summarizes the whole changeset coherently.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T3.S1",
                   "title": "Add markdown transitive imports to README (Why/Usage/Table/Syntax/Limits)",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

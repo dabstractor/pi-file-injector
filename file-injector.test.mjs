@@ -127,6 +127,28 @@ assert(typeof mod.computeCodeRanges === "function", "mod.computeCodeRanges must 
 assert(typeof mod.inCode === "function", "mod.inCode must be a function (binary search over code ranges)");
 assert(typeof mod.estimateImageTokens === "function", "mod.estimateImageTokens must be a function (§5.6.2 image token estimate)");
 
+// ── MODULE-SURFACE COMPLETENESS (S4 sync) ── The 16 asserts above name the MEANINGFUL exports. This guard
+// enforces the FULL contract: every function the module SHIPS is either (a) asserted by name above, or (b) a
+// known pure helper tested indirectly. It catches a future export added without a sanity assert, AND catches
+// injectMarkdown (the PRIVATE recursion driver) being accidentally exported. (PRD §11 "the gate must assert
+// the real shipped module surface"; item LOGIC (c).)
+const ASSERTED_EXPORTS = new Set([
+  "default", "injectFiles", "cleanToken", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
+  "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
+  "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
+]);
+const PURE_HELPERS_NOT_ASSERTED = new Set(["expandTildeAndResolve", "extOf", "isBinary"]); // tested indirectly via injectFiles
+{
+  const shippedFunctions = new Set(Object.keys(mod).filter((k) => typeof mod[k] === "function"));
+  const unexpected = [...shippedFunctions].filter((k) => !ASSERTED_EXPORTS.has(k) && !PURE_HELPERS_NOT_ASSERTED.has(k));
+  assert(unexpected.length === 0,
+    `module ships functions not in the sanity list: ${unexpected.join(", ")} ` +
+      `(add a typeof-assert above, or — if it is injectMarkdown — keep it PRIVATE and exercise via injectFiles)`);
+  // injectMarkdown is the PRIVATE recursion driver (exercised via injectFiles). Assert it is NOT exported.
+  assert(typeof mod.injectMarkdown === "undefined",
+    "injectMarkdown must NOT be exported — it is a PRIVATE recursion driver (exercised via injectFiles; PRD §5.6)");
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. Mock pi/ctx factories + handler capture (verified pattern — drives guards/notify/transform).
 // ──────────────────────────────────────────────────────────────────────────────
@@ -194,6 +216,23 @@ function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "sub", "notes.md"), "# Sub Notes\n\nSee #@api.md.\n");
   fsSync.writeFileSync(path.join(TMPDIR, "sub", "api.md"), "# Sub API\n\nSibling API in sub/.\n");
 
+  // Markdown shared-budget + §10 edge fixtures (PRD §5.6.2 / §10 — cases 20 / MD1 / MD2). bigdoc.md imports
+  // 3 small parts + the existing huge.log (case 20: under PAGED_FIX the accumulator spans the recursion →
+  // 3 parts whole, huge.log paged). notesMissing.md imports a MISSING ghost.md (MD1: §10 → marker verbatim,
+  // requires the injectMarkdown §10 fix). sub/outsider.md imports #@../shared/api.md (MD2: outside-cwd but
+  // inside the markdown's parent → allowed; pure regression test). ghost.md is INTENTIONALLY NOT created.
+  fsSync.writeFileSync(path.join(TMPDIR, "bigdoc.md"),
+    "# Bigdoc\n\n- One: #@part1.txt\n- Two: #@part2.txt\n- Three: #@part3.txt\n- Logs: #@huge.log\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "part1.txt"), "Part one content.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "part2.txt"), "Part two content.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "part3.txt"), "Part three content.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "notesMissing.md"), "# Notes\n\nRefs #@ghost.md here.\n");
+  // sub/ already created above (fsSync.mkdirSync(path.join(TMPDIR, "sub"), { recursive: true }));
+  fsSync.writeFileSync(path.join(TMPDIR, "sub", "outsider.md"), "# Sub\n\nSee #@../shared/api.md here.\n");
+  fsSync.mkdirSync(path.join(TMPDIR, "shared"), { recursive: true });   // OUTSIDE cwd-relative-to-subdir
+  fsSync.writeFileSync(path.join(TMPDIR, "shared", "api.md"), "# Shared API\n\nOutside cwd.\n");
+  // ghost.md is INTENTIONALLY NOT created — it is the missing import for MD1.
+
   // ~2 MB huge.log: many repeated lines. Exact byte-equality vs. the fixture proves "entire file,
   // no truncation" without bloating the repo. Computed once so case #2 can compare block content
   // byte-for-byte against THIS exact buffer.
@@ -239,6 +278,15 @@ const B_MD = path.join(TMPDIR, "b.md");
 const NOTES_ABS = path.join(TMPDIR, "notesAbs.md");
 const SUB_NOTES = path.join(TMPDIR, "sub", "notes.md");
 const SUB_API = path.join(TMPDIR, "sub", "api.md");
+
+// Markdown shared-budget + §10 edge path constants (PRD §5.6.2 / §10 — cases 20 / MD1 / MD2).
+const BIGDOC = path.join(TMPDIR, "bigdoc.md");
+const PART1 = path.join(TMPDIR, "part1.txt");
+const PART2 = path.join(TMPDIR, "part2.txt");
+const PART3 = path.join(TMPDIR, "part3.txt");
+const NOTES_MISSING = path.join(TMPDIR, "notesMissing.md");
+const OUTSIDER = path.join(TMPDIR, "sub", "outsider.md");
+const SHARED_API = path.join(TMPDIR, "shared", "api.md");
 
 // countFileBlocks — counts <file name="ABS"> block-openers for `abs` in `text`. Dedupes the inline
 // regex-count pattern (escape-special-chars + match length) used across F1/F1c/DUP1/etc.
@@ -1312,6 +1360,84 @@ await runCase(19, "md relative base: sub/notes.md's #@api.md → sub/api.md (md'
   // sub/notes.md's #@api.md marker stripped to api.md
   assert(r.text.includes("See api.md."), "sub/notes.md's import marker stripped to api.md");
   assert(!r.text.includes("See #@api.md."), "the resolved import marker must NOT retain #@");
+});
+
+// ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── SHARED BUDGET (§5.6.2) + MARKDOWN EDGES (§10) — case 20 + MD1 + MD2 ──
+// Case 20 proves the shared-budget accumulator spans the markdown recursion (bigdoc.md + 3 parts whole,
+// huge.log paged under PAGED_FIX; notify counts ALL 5 files). MD1 exercises the injectMarkdown §10 fix
+// (a markdown importing a MISSING file leaves the import marker VERBATIM). MD2 is a pure regression test
+// (a markdown import resolving OUTSIDE cwd via ../ is allowed — relative to the md's dir, not cwd).
+// ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// Case 20 — §5.6.2 SHARED BUDGET across the markdown recursion. bigdoc.md imports 3 parts + huge.log;
+// under PAGED_FIX the accumulator spans the recursion: bigdoc + 3 parts whole, huge.log paged. notify counts
+// ALL 5 files. (Two sub-calls: direct injectFiles for the counts/blocks; merged-ctx handler for the notify.)
+await runCase(20, "§5.6.2 shared budget: bigdoc.md + 3 imports whole, huge.log paged; notify counts all 5", async () => {
+  // (1) DIRECT — injectFiles(PAGED_FIX): structural counts + blocks + order + marker stripping.
+  //     remaining=23616; bigdoc(≈19)+part1(≈5)+part2(≈5)+part3(≈5) whole; huge.log(524288≫14170) paged.
+  const r = await mod.injectFiles("Read #@bigdoc.md", [], PAGED_FIX);
+  assert(r.injected === 5, `bigdoc + 3 parts + huge.log delivered, got injected=${r.injected}`);
+  assert(r.paged === 1, `exactly huge.log paged, got paged=${r.paged}`);
+  assert(r.injected - r.paged === 4, `4 whole (bigdoc + 3 parts), got whole=${r.injected - r.paged}`);
+  // Pre-order DFS block order: bigdoc.md < part1 < part2 < part3 < huge.log(head).
+  const iB = r.text.indexOf('<file name="' + BIGDOC + '">');
+  const i1 = r.text.indexOf('<file name="' + PART1 + '">');
+  const i2 = r.text.indexOf('<file name="' + PART2 + '">');
+  const i3 = r.text.indexOf('<file name="' + PART3 + '">');
+  const iH = r.text.indexOf('<file name="' + HUGE + '">\n'); // head block (content follows the '>\n')
+  assert(iB !== -1 && i1 !== -1 && i2 !== -1 && i3 !== -1 && iH !== -1, "all 5 files have blocks");
+  assert(iB < i1 && i1 < i2 && i2 < i3 && i3 < iH,
+    `pre-order DFS: bigdoc<part1<part2<part3<huge.log, got iB=${iB},i1=${i1},i2=${i2},i3=${i3},iH=${iH}`);
+  // huge.log PAGED: a head block + a directive block (2 occurrences of its <file name> tag). The directive
+  // uses the REAL format '<large file — ... Use the read tool ...>' (NOT '<paged:>'; see file-injector.ts L180).
+  const hugeTags = (r.text.match(new RegExp('<file name="' + HUGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(hugeTags === 2, `huge.log must have a HEAD block + a DIRECTIVE block (2 tags), got ${hugeTags}`);
+  assert(r.text.includes("Use the read tool"), "huge.log paged directive present (real format; §5.5)");
+  // bigdoc.md's import markers are STRIPPED (all 4 imports resolved+exist → injectable → stripped).
+  assert(r.text.slice(iB, i1).includes("Logs: huge.log"), "bigdoc.md block: the #@huge.log marker stripped to huge.log");
+  assert(!r.text.slice(iB, i1).includes("#@"), "bigdoc.md block must contain NO '#@' markers (all imports resolved+stripped)");
+
+  // (2) NOTIFY — merged ctx (makeMockCtx ui + PAGED_FIX budget) via the handler. Counts come from the message.
+  const { ctx: base, rec } = makeMockCtx(TMPDIR);
+  const ctx = { ...base, getContextUsage: PAGED_FIX.getContextUsage, model: PAGED_FIX.model };
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "Read #@bigdoc.md", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform, got '${out.action}'`);
+  assert(rec.notify && rec.notify.m === "#@ injected 4 whole, 1 paged",
+    `notify must count EVERY delivered file across the recursion (4 whole + 1 paged), got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+});
+
+// MD1 — §10 EDGE: a markdown importing a MISSING file leaves the import marker VERBATIM (not stripped).
+// Exercises the injectMarkdown §10 fix (Task 1). FIX = no budget → notesMissing.md whole.
+await runCase("MD1", "§10 md edge: notesMissing.md imports missing ghost.md → marker VERBATIM, injected=1", async () => {
+  const r = await mod.injectFiles("Review #@notesMissing.md", [], FIX);
+  assert(r.injected === 1, `only notesMissing.md injected (ghost.md is missing), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Review notesMissing.md"), "top-level #@notesMissing.md marker stripped to notesMissing.md");
+  assert(r.text.includes('<file name="' + NOTES_MISSING + '">'), "notesMissing.md block present");
+  // THE §10 FIX: the missing import marker is LEFT VERBATIM (not stripped) — nothing was injected for it.
+  assert(r.text.includes("Refs #@ghost.md here."), "the MISSING import marker #@ghost.md must be left VERBATIM (§10)");
+  assert(!r.text.includes("Refs ghost.md here."), "the missing import marker must NOT be stripped (no bare 'ghost.md' reference)");
+  assert(!r.text.includes('<file name="' + path.join(TMPDIR, "ghost.md") + '">'), "ghost.md must NOT be injected (it does not exist)");
+});
+
+// MD2 — §10 EDGE: a markdown import resolving OUTSIDE cwd (via ../) is ALLOWED (relative to the md's dir).
+// Pure regression test — this ALREADY works (imports resolve from dirname(abs), not cwd). FIX = no budget.
+await runCase("MD2", "§10 md edge: sub/outsider.md imports #@../shared/api.md → allowed (md's dir, outside cwd), injected=2", async () => {
+  const r = await mod.injectFiles("Read #@sub/outsider.md", [], FIX);
+  assert(r.injected === 2, `sub/outsider.md + shared/api.md injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Read sub/outsider.md"), "top-level #@sub/outsider.md marker stripped to sub/outsider.md");
+  assert(r.text.includes('<file name="' + OUTSIDER + '">'), "sub/outsider.md block present");
+  assert(r.text.includes('<file name="' + SHARED_API + '">'), "shared/api.md block present (resolved via ../, outside cwd)");
+  // shared/api.md is OUTSIDE cwd (TMPDIR) but INSIDE the markdown's parent — explicitly ALLOWED (§10).
+  assert(path.relative(TMPDIR, SHARED_API) === path.join("shared", "api.md"),
+    `shared/api.md resolves under TMPDIR/shared (the md's parent's sibling), got rel=${path.relative(TMPDIR, SHARED_API)}`);
+  assert(r.text.includes("Outside cwd."), "shared/api.md's DISTINCT content present (proves the outside-cwd file was injected)");
+  // the import marker is STRIPPED (the import resolved + exists → injectable → stripped).
+  assert(r.text.includes("See ../shared/api.md here."), "sub/outsider.md block: the #@../shared/api.md marker stripped to ../shared/api.md");
+  assert(!r.text.includes("#@../shared/api.md"), "the resolved outside-cwd import marker must NOT retain #@");
 });
 
 // 10. Summary + cleanup + exit.
