@@ -1,0 +1,208 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "Markdown Transitive Imports (PRD §5.6)",
+      "status": "Researching",
+      "description": "Add markdown transitive imports to the existing, fully-implemented `#@file` extension: a delivered `.md`/`.markdown` file is scanned for further `#@<path>` directives, each resolved import is delivered (and recursed if markdown), bounded by a single global dedup set and a single shared context budget that accounts for the total filesize of all files (text + image + binary + imports). Requires a structural refactor of the linear `injectFiles` core into shared mutable `State` + recursive helpers (MI-1) before the recursion (MI-2) can be added, then a README sync (MI-3). Single-file extension; no new dependencies; no new Pi API surface.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Implement & Validate Markdown Imports",
+          "status": "Planned",
+          "description": "Three tasks: (T1) refactor the linear core to shared `State` + recursive helpers with ZERO behavior change (regression gate = the existing 1044-line test suite green); (T2) add the markdown transitive-import feature + total-size budget accounting (cases 15-20 + fixtures); (T3) sync README for the new capability (Mode B).",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Refactor core to shared mutable State (no behavior change)",
+              "status": "Planned",
+              "description": "Introduce a shared `State` object carried across the whole prompt, consolidate the two dedup sets into `state.injectedSet`, and restructure the single linear `injectFiles` loop into recursion-ready helpers (scanTokens / processTokenStream / injectFile / emitText / subtract). MI-1: text/image/binary only — NO markdown yet. The hard acceptance gate is byte-for-byte preservation of all existing behavior.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Introduce shared State + consolidate dedup + subtract helper",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "prd_selectors": [
+                    "h2.4",
+                    "h3.14",
+                    "h3.18",
+                    "h2.5",
+                    "h3.21",
+                    "h2.8",
+                    "h2.11",
+                    "h2.7"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/003_4624515bcd82/architecture/codebase_insertion_points.md §\"MI-1\". The current injectFiles (file-injector.ts ~L179-355) is a single linear `for (const m of text.matchAll(FILE_INJECT_RE))` loop using scattered locals: `blocks`, `images=[...imagesIn]`, `let count`, `let paged`, `let remainingBudget`, `const priorPaths` (seeded from /<file name=\"([^\"]+)\">/g in text), `const injectedThisRun`, `const injectedIndexes`. This subtask introduces the shared State object and consolidates dedup WITHOUT changing the loop shape or any behavior (recursion is T1.S2).\n2. INPUT: The current committed file-injector.ts injectFiles body (PRD §9 pseudocode shows the TARGET shape). No prior subtask output to consume.\n3. LOGIC:\n   (a) Add `interface State { blocks: string[]; images: ImageContent[]; injectedSet: Set<string>; remaining: number|null; count: number; paged: number; }` mirroring PRD §9.\n   (b) Rewrite injectFiles to allocate ONE `const state: State`. Store the budget result in `state.remaining` (was local `remainingBudget`; keep the exact budget math: getContextUsage undefined/null -> state.remaining=null (O-1 fallback), else Math.max(0, usage.contextWindow - usage.tokens - reserve - MARGIN), wrapped in try/catch -> null).\n   (c) CONSOLIDATE DEDUP: seed `state.injectedSet` with `priorPaths` (every <file name=\"...\"> already in text), then merge `injectedThisRun` INTO `state.injectedSet`. Each successful delivery does `state.injectedSet.add(abs)`. Per-token skip condition becomes `state.injectedSet.has(abs)`. This MUST preserve the F1/F1c invariants (a prior block for X blocks re-inject of X; a NEW path Y still injects).\n   (d) Add `function subtract(state: State, cost: number) { if (state.remaining !== null) state.remaining = Math.max(0, state.remaining - cost); }`.\n   (e) KEEP THE LINEAR matchAll LOOP for now, but read/write state.* and replace the two inline budget mutations (text whole: `if (remainingBudget!==null) remainingBudget=...`; text paged head: `remainingBudget=...`) with `subtract(state, ...)`. Images/binary/empty-image do NOT call subtract yet (that is T2.S2; preserving byte-for-byte behavior means budget stays text-only here).\n   (f) Preserve EVERYTHING else verbatim: Unicode FILE_INJECT_RE; F3 hasValidImageMagic gate; F5 formatEmptyImageBlock for 0-byte image; empty 0-byte text -> <file name=\"...\">\\n\\n</file>; the `count===0` -> `return { text, images: imagesIn, injected: 0, paged: 0 }` ORIGINAL-REF early return; strip #@ index-based high->low; finalText = `${stripped}\\n\\n---\\n\\n${state.blocks.join(\"\\n\\n\")}`; return { text: finalText, images: state.images, injected: state.count, paged: state.paged }.\n4. OUTPUT: injectFiles external signature + return shape `{ text, images, injected, paged }` UNCHANGED. Behavior byte-for-byte identical. State interface + subtract() now exist for T1.S2.\n5. MOCKING: None beyond the existing test harness. Run `node ./file-injector.test.mjs` — the WHOLE 1044-line suite (cases 1-14, E1-E4, G1-G3, H1, M1, F1-F5, F4, U1, A1, PD1-PD*, PN1-PN4) MUST pass unchanged. This is the regression gate.\n6. DOCS: [Mode A] Update the injectFiles JSDoc (file-injector.ts ~L168-177) to state that internal state is now carried in a shared State object (blocks/images/injectedSet/remaining/count/paged) and forward-reference that the budget will span the whole prompt including markdown imports (PRD §5.6.2). No README change here (Mode B lands in T3.S1)."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S2",
+                  "title": "Extract scanTokens / processTokenStream / injectFile / emitText (recursion-ready)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [
+                    "P1.M1.T1.S1"
+                  ],
+                  "prd_selectors": [
+                    "h2.8",
+                    "h2.5",
+                    "h3.21",
+                    "h3.14",
+                    "h3.15",
+                    "h3.16",
+                    "h3.18",
+                    "h2.4",
+                    "h2.11",
+                    "h2.14"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See codebase_insertion_points.md §\"MI-1 refactor contract\". T1.S1 delivered a shared-State injectFiles that still uses a linear matchAll loop. This subtask extracts recursion-ready helpers and restructures the loop into scan-then-inject depth-first — STILL no markdown and STILL no behavior change. The target shape is PRD §9 (scanTokens / processTokenStream / injectFile / emitText).\n2. INPUT: The shared-State injectFiles from P1.M1.T1.S1 (state.remaining, state.injectedSet seeded with priorPaths, subtract()).\n3. LOGIC — extract these helpers:\n   (a) `scanTokens(text, baseDir, opts: { allowAbsTilde: boolean; skipCode: boolean }, state): { index: number; abs: string }[]` — run text.matchAll(FILE_INJECT_RE) WITHOUT injecting. For each match: if opts.skipCode is true, skip matches inside code regions (stub: codeRanges=null so skipCode is a NO-OP here — real detection lands in T2.S1); cleanToken(m capture group 2) -> empty skip; if !opts.allowAbsTilde && isAbsoluteOrTilde(token) skip; resolve via expandTildeAndResolve(token, baseDir); if state.injectedSet.has(abs) || localSeen.has(abs) skip; localSeen.add(abs); push { index: m.index, abs }. Return records.\n   (b) `async processTokenStream(text, baseDir, opts, state, ctx): Promise<number[]>` — const records = scanTokens(text, baseDir, opts, state); const resolved=[]; for each record: if state.injectedSet.has(record.abs) continue (cross-subtree dedup since scan); const ok = await injectFile(record.abs, state, ctx); if (ok) resolved.push(record.index). Return resolved (indices of markers that injected, for #@ stripping).\n   (c) `async injectFile(abs, state, ctx): Promise<boolean>` — try stat; if not found or !isFile return false; state.injectedSet.add(abs) (CLAIM — dedup incl. self-import); try readFile; CLASSIFY IN THIS ORDER (preserve F3/F5): (1) image ext && buf.length===0 -> state.blocks.push(formatEmptyImageBlock(abs)); (2) image ext && hasValidImageMagic(buf,mime) -> attach ImageContent (resizeImage fallback raw base64) + formatImageBlock; (3) isBinary(buf) -> formatBinaryBlock; (4) else -> emitText(abs, buf.toString(\"utf8\"), state). state.count++. return true. catch read/resize error -> return false (token verbatim). NO markdown branch yet.\n   (d) `emitText(abs, content, state)` — LIFT the existing inline-vs-paged decision VERBATIM: fileCost=Math.ceil(content.length/4); whole if state.remaining===null || fileCost<=PAGED_THRESHOLD*state.remaining; else if content.length<=HEAD_CHARS whole (sub-head guard); else head=headSlice(content) + formatTextFileBlock(abs,head) + formatPagedDirectiveBlock(abs,content.length,headStartLine(head),headCompleteLineCount(head)), state.paged++, subtract head cost. Whole path calls subtract(state,fileCost).\n   (e) Rewire injectFiles: build State (T1.S1), then `const resolvedIdx = await processTokenStream(text, ctx.cwd, { allowAbsTilde: true, skipCode: false }, state, ctx)`; if state.count===0 return original refs; strip #@ high->low over resolvedIdx; assemble finalText; return {...}.\n4. OUTPUT: injectFiles UNCHANGED externally. Internals now recursion-ready (processTokenStream calls injectFile which can later recurse). Full suite green.\n5. MOCKING: None. `node ./file-injector.test.mjs` MUST pass byte-for-byte (regression gate — no behavior change).\n6. DOCS: [Mode A] JSDoc each extracted helper (scanTokens: scan-only + localSeen/injectedSet dedup; processTokenStream: scan-then-inject depth-first; injectFile: stat->claim->classify->count, never throws; emitText: inline-vs-paged, calls subtract). Export scanTokens/emitText/injectFile as needed by tests; update the module-surface sanity list in file-injector.test.mjs (~L113-121) ONLY for helpers you actually export."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "Markdown transitive imports + total-size budget accounting",
+              "status": "Planned",
+              "description": "Add the markdown import feature (§5.6 + §4.5 + §5.6.1) and the per-type budget accounting (§5.6.2). New constants (MD_EXTS, code-region regexes, IMAGE_FALLBACK_TOKENS), new helpers (isAbsoluteOrTilde, computeCodeRanges, inCode, estimateImageTokens, injectMarkdown), wire the markdown branch into injectFile, and make images + binary notes consume the shared budget. Adds PRD §11 cases 15-20 + markdown fixtures.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "Markdown constants + code-region detection helpers",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M1.T1.S2"
+                  ],
+                  "prd_selectors": [
+                    "h3.19",
+                    "h4.0",
+                    "h3.13",
+                    "h3.9",
+                    "h3.10",
+                    "h3.11",
+                    "h2.9"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See codebase_insertion_points.md §\"MI-2 new constants/pure helpers\" and external_deps.md (no new deps). These are PURE functions, independently unit-testable. PRD §5.6.1 gives the exact regexes; §4.5 rule 1 gives isAbsoluteOrTilde.\n2. INPUT: The recursion-ready core from P1.M1.T1.S2 (constants cluster near top of file; helpers live alongside existing pure helpers like cleanToken/expandTildeAndResolve).\n3. LOGIC:\n   (a) Constants: `MD_EXTS = new Set([\"md\",\"markdown\"])`; `IMAGE_FALLBACK_TOKENS = 2805` (2000x2000 resized worst case = 4x4 tiles); `INLINE_CODE_RE = /(`+)([\\s\\S]*?)\\1(?!`)/g`; `FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/` (exact forms PRD §5.6.1).\n   (b) `export function isAbsoluteOrTilde(p: string): boolean { return p.startsWith(\"/\") || p.startsWith(\"~\"); }`.\n   (c) `export function computeCodeRanges(content: string): [number, number][]` — approximate CommonMark (PRD §5.6.1): (1) FENCED BLOCKS — walk lines with a running char offset; a line matching FENCE_OPEN_RE opens a block (fenceChar=run[0], fenceLen=run.length); from next line scan for a closing line = ` {0,3}` + same fenceChar repeated >= fenceLen; range = [opening fence first char, end of closing line incl. its newline]; if NO closing fence found range runs to EOF (unterminated). Fences of the other char inside a block are literal (do not reopen). (2) INLINE CODE — run INLINE_CODE_RE over full text; each match's full span [index, index+m[0].length) is a range UNLESS it already lies inside a fenced range. Sort ranges by start.\n   (d) `export function inCode(index: number, ranges: [number,number][]): boolean` — binary search over sorted ranges; true if index>=range[0] && index<range[1] for some range.\n4. OUTPUT: exported pure helpers (computeCodeRanges/inCode/isAbsoluteOrTilde) so the test harness can assert them. Used by injectMarkdown (T2.S3) via scanTokens(opts.skipCode=true).\n5. MOCKING: None. Pure functions — add direct unit assertions (e.g. a fenced ``` block with `#@x` inside -> that index is in code; an inline `#@x` backtick span -> in code; `#@x` in prose -> not in code; unterminated fence -> to EOF).\n6. DOCS: [Mode A] JSDoc computeCodeRanges (approximate-CommonMark, fenced+inline, unterminated->EOF) and inCode (binary search). Add these new exports to the module-surface sanity list in file-injector.test.mjs (~L113-121)."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S2",
+                  "title": "estimateImageTokens + total-size budget for image/binary",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M1.T2.S1"
+                  ],
+                  "prd_selectors": [
+                    "h4.1",
+                    "h3.15",
+                    "h3.16",
+                    "h3.18",
+                    "h2.6",
+                    "h2.10",
+                    "h3.22"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See system_context.md §6 and codebase_insertion_points.md §\"Total-size budget\". PRD §5.6.2 cost table: image = estimateImageTokens(resized); binary note = ceil(noteString.length/4). Today only text subtracts (via emitText). This subtask makes images + binary notes + empty-image notes consume the shared budget. Images are NEVER paged (resized+attached).\n2. INPUT: P1.M1.T2.S1 (IMAGE_FALLBACK_TOKENS constant) and the shared-State injectFile from T1.S2.\n3. LOGIC:\n   (a) `export function estimateImageTokens(resized: ResizedImage | null): number` — if resized has numeric width/height: `Math.max(1, Math.ceil(resized.width/512)) * Math.max(1, Math.ceil(resized.height/512)) * 170 + 85`; else `IMAGE_FALLBACK_TOKENS`. (ResizedImage.width/height are VERIFIED required numbers — external_deps.md §2.)\n   (b) In injectFile, after a successful image attach: `subtract(state, estimateImageTokens(resized))`. (Note: the tiny 1x1 PNG fixture makes resizeImage return null deterministically -> uses IMAGE_FALLBACK_TOKENS path in tests; that is fine.)\n   (c) After a binary note: `subtract(state, Math.ceil(formatBinaryBlock(abs).length / 4))`.\n   (d) After an empty-image note (F5): `subtract(state, Math.ceil(formatEmptyImageBlock(abs).length / 4))`.\n   (e) Text already subtracts via emitText (T1.S2) — do not double-count.\n4. OUTPUT: all three file types (text/image/binary) now subtract from state.remaining. This is what makes the total filesize of all files accounted for once recursion (T2.S3) shares remaining.\n5. MOCKING: PAGED_FIX budget mock (remaining=23616). Add an assertion that a prompt with an image + a large text file under a tight budget pages the text file (image consumed budget) — reuses the merged-ctx pattern `{...makeMockCtx(TMPDIR).ctx, getContextUsage: PAGED_FIX.getContextUsage, model: PAGED_FIX.model}`.\n6. DOCS: [Mode A] JSDoc estimateImageTokens (tile estimate, fallback constant). Export + add to module-surface sanity list."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S3",
+                  "title": "injectMarkdown (6-step) + wire markdown into injectFile + cases 15-19",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [
+                    "P1.M1.T2.S1",
+                    "P1.M1.T2.S2"
+                  ],
+                  "prd_selectors": [
+                    "h3.19",
+                    "h4.0",
+                    "h3.13",
+                    "h3.9",
+                    "h3.10",
+                    "h3.11",
+                    "h3.14",
+                    "h3.16",
+                    "h3.17",
+                    "h2.9",
+                    "h2.10",
+                    "h3.22",
+                    "h2.8",
+                    "h2.11"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See codebase_insertion_points.md §\"New recursion driver\" and system_context.md §5 (dedup keys on abs path in the scan — paged multi-block coexists with dedup; recursion bounded by dedup NOT depth). PRD §5.6 is the six-step algorithm; §4.5 narrows markdown-import rules; §5.6.1 code-exemption.\n2. INPUT: P1.M1.T2.S1 (MD_EXTS, computeCodeRanges, inCode, isAbsoluteOrTilde); P1.M1.T2.S2 (estimateImageTokens, budget for all types); P1.M1.T1.S2 (scanTokens/injectFile/emitText/subtract + shared State).\n3. LOGIC:\n   (a) `async function injectMarkdown(abs, content, state, ctx): Promise<void>` — PRD §5.6 six steps: (1) read/decode already done by caller. (2) CLAIM SELF: state.injectedSet.add(abs) BEFORE scanning (self-import dedups to verbatim -> no infinite recursion). (3) const records = scanTokens(content, path.dirname(abs), { allowAbsTilde: false, skipCode: true }, state) — relative-only (isAbsoluteOrTilde skip), outside code (inCode skip). (4) STRIP #@ from each resolved import marker high->low (slice(0,idx)+slice(idx+2), leave the path) -> `stripped` is this file's block content. (5) emitText(abs, stripped, state) — paged decision on the STRIPPED content (directive text the model won't see must not bias the budget). (6) RECURSE depth-first in encounter order: for each record, if !state.injectedSet.has(record.abs) await injectFile(record.abs, state, ctx). Pre-order: this file's block, then each import's subtree.\n   (b) WIRE into injectFile: in the classify cascade, AFTER image (incl. empty-image F5 + F3 magic) and BEFORE isBinary, add `else if (MD_EXTS.has(ext)) { await injectMarkdown(abs, buf.toString(\"utf8\"), state, ctx); }`. Markdown BYPASSES the NUL/binary routing (always treated as text so import scanning runs). state.count++ exactly once per claimed file (unchanged).\n   (c) Fixtures (real fs in TMPDIR via buildFixtures): notes.md containing `#@api.md`; api.md; a.md <-> b.md cycle; sub/notes.md importing `#@api.md` (sibling); a fenced ``` #@example.ts ``` inside notes.md for the code-exempt case.\n   (d) TEST CASES (TDD — write failing test, implement, pass): #15 notes.md imports api.md -> both blocks, notes.md marker stripped to api.md, injected===2, no read calls; #16 `#@example.ts` inside a fenced block left verbatim, only the real import delivered; #17 a.md<->b.md cycle -> each injected once, b.md's #@a.md verbatim, NO loop, injected===2; #18 `#@/etc/hosts` inside notes.md -> ignored (relative-only), verbatim, only notes.md injected; #19 sub/notes.md imports api.md -> api.md resolved as sub/api.md (relative to the md's dir).\n4. OUTPUT: `#@spec.md` now pulls in everything spec.md references with the same #@ directive; recursion is dedup-bounded, relative-only, code-exempt.\n5. MOCKING: FIX={cwd:TMPDIR} (no budget -> all whole) for cases 15-19. The tests call mod.injectFiles(...) and assert block order, marker stripping, injected count, verbatim-unresolved markers.\n6. DOCS: [Mode A] JSDoc injectMarkdown (recursion contract: relative-only, code-exempt, dedup-bounded, pre-order depth-first). Keep injectMarkdown private if not unit-tested directly (it is exercised via injectFiles)."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S4",
+                  "title": "Shared-budget case 20 + edge cases + module-surface sync",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M1.T2.S3"
+                  ],
+                  "prd_selectors": [
+                    "h4.1",
+                    "h3.19",
+                    "h3.18",
+                    "h2.10",
+                    "h3.22",
+                    "h2.9",
+                    "h2.5",
+                    "h3.21"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See system_context.md §6 (PAGED_FIX budget math: remaining=23616, PAGED_THRESHOLD*remaining=14170). PRD §5.6.2 requires the budget to be a single shared accumulator across top-level tokens AND every transitive import; §11 case 20 validates it. PRD §10 edge cases: missing import left verbatim; import outside cwd (`../`) allowed.\n2. INPUT: P1.M1.T2.S3 (injectMarkdown + recursion + budget for all types). The full markdown feature is now functional.\n3. LOGIC:\n   (a) TEST CASE #20 (shared budget): a markdown file (e.g. bigdoc.md) importing 3 files + `#@big.log` (reuse huge.log), prompt `#@bigdoc.md` under PAGED_FIX. Assert: imports share the budget with the top-level token; big.log (or a large import) PAGES when the running total exceeds remaining; notify counts EVERY delivered file (whole + paged). Use the merged-ctx pattern.\n   (b) EDGE CASES: (1) `#@notes.md` where notes.md imports a MISSING api.md -> notes.md injected (marker stripped), `#@api.md` left verbatim in notes.md content, injected===1; (2) markdown import resolving outside cwd (`#@../shared/api.md` inside notes.md) -> allowed (relative to md dir), injected.\n   (c) MODULE-SURFACE SYNC: finalize the file-injector.test.mjs sanity list (~L113-121) to include ALL newly-exported helpers from T2.S1-T2.S3 (isAbsoluteOrTilde, computeCodeRanges, inCode, estimateImageTokens, and any of scanTokens/emitText exported in T1.S2). The gate must assert the real shipped module surface.\n4. OUTPUT: total-size budget validated across recursion; the whole suite (existing + cases 15-20 + edges) green; module surface sanity list finalized.\n5. MOCKING: PAGED_FIX + merged ctx for case 20; FIX for the no-budget edges.\n6. DOCS: [Mode A] this subtask's doc work is the test-surface sync (assertion list). No README here (Mode B = T3.S1)."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T3",
+              "title": "Sync changeset-level documentation (README markdown imports)",
+              "status": "Planned",
+              "description": "Mode B cross-cutting doc sync (SOW §5). The README is paged-delivery-current but has no markdown-import content. Depends on ALL implementing subtasks so it runs last and summarizes the whole changeset coherently.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T3.S1",
+                  "title": "Add markdown transitive imports to README (Why/Usage/Table/Syntax/Limits)",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M1.T1.S1",
+                    "P1.M1.T1.S2",
+                    "P1.M1.T2.S1",
+                    "P1.M1.T2.S2",
+                    "P1.M1.T2.S3",
+                    "P1.M1.T2.S4"
+                  ],
+                  "prd_selectors": [
+                    "h3.1",
+                    "h3.2",
+                    "h3.4",
+                    "h3.19",
+                    "h3.13",
+                    "h4.0",
+                    "h4.1",
+                    "h3.33",
+                    "h3.29",
+                    "h3.5"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See codebase_insertion_points.md §\"MI-3 README\". The current README.md is ALREADY paged-delivery-current (plan 002) but has ZERO markdown-import content. This is the cross-cutting Mode B sync (SOW §5 Mode B) — it depends on every implementing subtask and runs last.\n2. INPUT: The fully-implemented markdown-import feature from P1.M1.T2.S1-S4 is landed and green. Read the current README.md sections to edit them in place (do not rewrite unrelated sections).\n3. LOGIC — update these README sections coherently (leave paged-delivery, image/binary/missing rows, and `#@`-versus-`@` section as-is unless directly touched):\n   (a) WHY: add one line — `#@spec.md` pulls in everything spec.md references with the SAME `#@` directive (spec-and-its-dependencies in one token, loop-safe via dedup).\n   (b) USAGE: add a markdown-import example (a prompt `#@spec.md` where spec.md contains `#@api.md`).\n   (c) WHAT GETS INJECTED table: note that a delivered `.md`/`.markdown` file is ALSO scanned for relative `#@` imports (each delivered as its own block, recursed if markdown).\n   (d) SYNTAX: add a *Markdown imports* subsection stating the contract — relative paths only (resolved from the markdown file's own directory; absolute/`~` ignored and left verbatim); `#@` inside fenced or inline code is NOT an import (escape hatch for documenting `#@`); each file is injected at most once across the whole prompt (cycles and shared deps dedup); imports share the single context budget and page when the running total is exceeded.\n   (e) LIMITS: add bullets — markdown imports are relative-only; `#@` inside non-markdown files is inert (only .md/.markdown are scanned); there is no autocomplete for in-file import directives (the provider is top-level-prompt-only, PRD §14.4).\n4. OUTPUT: README accurately and coherently describes markdown transitive imports; no stale \"no size limit\" / \"entire contents no truncation\" contradictions (those were already fixed in plan 002 — verify they remain consistent).\n5. MOCKING: none (documentation only).\n6. DOCS: this subtask IS the documentation work (Mode B). It must declare dependencies on ALL implementing subtasks so it runs last."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
