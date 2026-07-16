@@ -834,24 +834,37 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
   // is not run → records are byte-for-byte identical to today (all prefixLen 2).
   const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
 
-  // Step 3.5 — EXISTENCE PRE-CHECK (PRD §10 / §5.4). scanTokens records a token as soon as it RESOLVES (it
-  // does NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
-  // '#@' marker stripped (Step 4) even though injectFile later returns false and nothing is injected for it.
-  // PRD §10 requires such markers be left VERBATIM. Pre-order (§5.6 step 6) emits THIS file's block BEFORE
-  // recursing, so the strip decision must be made NOW (the top-level path can inject-then-strip because the
-  // user prompt is not a pre-order block; the markdown path cannot). Stat each import; keep only those that
-  // stat-succeed AND are regular files (isFile also rejects directories, matching injectFile's own check and
-  // §5.4: directory → verbatim). injectFile re-stats harmlessly on recursion.
+  // Step 3.5 — READABILITY PRE-CHECK (PRD §5.4 / §10 / §12.5). scanTokens records a token as soon as it
+  // RESOLVES (it does NOT stat), so a markdown import resolving to a MISSING file, DIRECTORY, or a file
+  // that EXISTS but is UNREADABLE would otherwise have its '#@' marker stripped (Step 4) even though
+  // injectFile later returns false and nothing is injected for it. PRD §5.4/§12.5/§10 require such markers
+  // be left VERBATIM. Pre-order (§5.6 step 6) emits THIS file's block BEFORE recursing, so the strip
+  // decision must be made NOW (the top-level path can inject-then-strip because the user prompt is not a
+  // pre-order block; the markdown path cannot). Stat each import; keep only those that stat-succeed AND are
+  // regular files (isFile also rejects directories, matching injectFile's own check and §5.4: directory →
+  // verbatim), AND additionally gate on readability via fs.access(R_OK) so a marker is stripped ONLY when
+  // delivery will truly succeed for the text/markdown/binary case that dominates (PRD §5.4/§12.5: on any
+  // error leave the token verbatim). injectFile re-stats harmlessly on recursion.
+  // ACCEPTED NARROW RESIDUAL: the R_OK gate predicts readability, NOT resize success — a READABLE image
+  // whose resizeImage THROWS (rather than returning null) still gets stripped, because we cannot predict
+  // a resize failure without running the resize (expensive, duplicative). That is out of scope here; the
+  // full closure is the structural "strip only markers whose injectFile returned true" approach (PRD calls
+  // it "more invasive"). It is backstopped by injectFile's own try/catch (no crash, no block appended).
+  // TOCTOU: a file could become unreadable between this access and injectFile's readFile, but that races
+  // the top-level path too and is acceptable (injectFile's readFile try/catch is the final safety net).
   // TYPE-ONLY widening: records carry prefixLen (scanTokens P1.M1.T1.S1); widening the declared element type
   // lets Step 4 read r.prefixLen. The filter body (injectable.push(r)) forwards the WHOLE record unchanged —
   // do NOT build a new object literal here (that would DROP prefixLen, the codebase_delta §8.2 anti-pattern).
+  // No new import: fs.constants.R_OK (=== 4) is reachable via the existing `import { promises as fs }`.
   const injectable: { index: number; prefixLen: number; abs: string }[] = [];
   for (const r of records) {
     try {
       const st = await fs.stat(r.abs);
-      if (st.isFile()) injectable.push(r);
+      if (!st.isFile()) continue; // directory/socket/etc → verbatim (§5.4) — unchanged
+      await fs.access(r.abs, fs.constants.R_OK); // gate strip on READABILITY (PRD §5.4 / §12.5)
+      injectable.push(r);
     } catch {
-      /* missing/unreadable → leave verbatim (not stripped, not injected) */
+      /* missing / directory / unreadable → leave verbatim (not stripped, not injected) */
     }
   }
 

@@ -615,6 +615,35 @@ await runCase("E4", "read error (chmod 000) → token verbatim, no throw", async
   }
 });
 
+await runCase("E5", "markdown import of unreadable file → marker verbatim", async () => {
+  if (process.getuid() === 0) {
+    // chmod is ineffective when running as root — skip with a note (same caveat as E4).
+    console.log("      (skipped: running as root — chmod 000 is ineffective)");
+    return;
+  }
+  // CRITICAL: use UNIQUE fixture names (perm_api.md / perm_notes.md) — NOT api.md/notes.md.
+  // buildFixtures writes SHARED notes.md + api.md that later markdown cases (15/16/MD1/17-20) depend on;
+  // overwriting them mid-suite breaks those cases even with chmod restored.
+  const api = path.join(TMPDIR, "perm_api.md");
+  const notes = path.join(TMPDIR, "perm_notes.md");
+  fsSync.writeFileSync(api, "API secret\n");
+  fsSync.writeFileSync(notes, "Notes intro.\n#@perm_api.md\nNotes end.\n");
+  fsSync.chmodSync(api, 0o000);
+  try {
+    const r = await mod.injectFiles("Read #@perm_notes.md", [], FIX);
+    // (a) only the PARENT markdown (perm_notes.md) counts as injected.
+    assert(r.injected === 1, `expected injected===1 (parent only), got ${r.injected}`);
+    // (b) the unreadable import's marker must be LEFT VERBATIM in the parent's emitted block (PRD §5.4/§12.5).
+    assert(r.text.includes("#@perm_api.md") === true, "unreadable markdown-import marker must be left verbatim");
+    // (c) no block may be appended for the unreadable import target.
+    assert(!r.text.includes('<file name="' + api + '">'), "no block must be appended for the unreadable import");
+    // (d) the parent's own block IS delivered.
+    assert(r.text.includes('<file name="' + notes + '">'), "parent markdown block must be delivered");
+  } finally {
+    fsSync.chmodSync(api, 0o644); // restore so cleanup can remove it
+  }
+});
+
 await runCase("G1", "guard: source==='extension' → continue (loop prevention)", async () => {
   const { ctx, rec } = makeMockCtx(TMPDIR);
   const slot = captureHandler();
@@ -1900,14 +1929,20 @@ await runCase("T1.S1-13", "scanTokens bare-@ code-exempt: fenced '@api.md' (skip
 // here; the global→project merge PRECEDENCE is structurally guaranteed by `{ ...cfg, ...project }` and is
 // covered end-to-end by P1.M2.T1.S1's session_start integration test.
 
-// T2.S1-a — NO project config effect on markdownBareAtImports. The global ~/.pi/agent/file-injector.json is
-// almost certainly absent in the test env, and there is no markdownBareAtImports key anywhere it matters →
-// the result has markdownBareAtImports === undefined. (Assert the VALUE, not deepEqual {} — a real global
-// config could add unrelated keys.)
-await runCase("T2.S1-a", "readConfig no-config → markdownBareAtImports undefined", async () => {
+// readConfig reads the REAL global sources at runtime (~/.pi/agent/settings.json[fileInjector] +
+// ~/.pi/agent/file-injector.json via getAgentDir()). The dev's real global settings.json may set the key
+// (dogfooding), so cases below assert project-source behavior RELATIVE to a captured GLOBAL_BASELINE rather
+// than assuming the global is empty. The global→project merge precedence is structurally guaranteed by the
+// spread order and covered end-to-end by P1.M2.T1.S1's session_start integration test.
+const GLOBAL_BASELINE = await mod.readConfig({ cwd: path.join(os.tmpdir(), "nonexistent-saf-dir"), isProjectTrusted: () => false });
+
+// T2.S1-a — NO project config is a no-op relative to global. A nonexistent project cwd (trusted) reads the
+// (absent) project sources → {} → the result equals the global baseline (whatever it is), proving no spurious
+// project contribution and no crash.
+await runCase("T2.S1-a", "readConfig no project config → result equals global baseline", async () => {
   const r = await mod.readConfig({ cwd: path.join(os.tmpdir(), "nonexistent-saf-dir"), isProjectTrusted: () => true });
-  assert(r.markdownBareAtImports === undefined,
-    `no config files → markdownBareAtImports undefined, got ${r.markdownBareAtImports}`);
+  assert(r.markdownBareAtImports === GLOBAL_BASELINE.markdownBareAtImports,
+    `no project config → result equals global baseline (${GLOBAL_BASELINE.markdownBareAtImports}), got ${r.markdownBareAtImports}`);
 });
 
 // T2.S1-b — PROJECT WINS (trusted). <TMPDIR>/.pi/file-injector.json = {"markdownBareAtImports":true}; with
@@ -1920,27 +1955,40 @@ await runCase("T2.S1-b", "readConfig project {markdownBareAtImports:true} + trus
     `trusted project config → markdownBareAtImports true (project wins), got ${r.markdownBareAtImports}`);
 });
 
-// T2.S1-c — TRUST GATE (untrusted). Same project config as (b), but isProjectTrusted:false → the project file
-// is NEVER read (the §4.6 trust gate). Its markdownBareAtImports key never lands → undefined. An untrusted
-// project MUST NOT be able to enable bare-@ (security boundary).
-await runCase("T2.S1-c", "readConfig project config + UNTRUSTED → ignored (undefined)", async () => {
-  const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => false });
-  assert(r.markdownBareAtImports === undefined,
-    `untrusted project → config ignored (trust gate), markdownBareAtImports undefined, got ${r.markdownBareAtImports}`);
+// T2.S1-c — TRUST GATE (untrusted). Write a project config whose value is the NEGATION of the global
+// baseline (guaranteed distinguishable), then assert: TRUSTED → project value (project wins); UNTRUSTED →
+// baseline (project IGNORED — the trust gate). The two differing proves the gate regardless of what the real
+// global env sets. Restores the valid fixture in finally.
+await runCase("T2.S1-c", "readConfig project config + UNTRUSTED → ignored (baseline); trusted → project wins", async () => {
+  const flip = GLOBAL_BASELINE.markdownBareAtImports === true ? false : true; // guaranteed ≠ baseline
+  const cfgPath = path.join(TMPDIR, ".pi", "file-injector.json");
+  const valid = fsSync.existsSync(cfgPath) ? fsSync.readFileSync(cfgPath, "utf8") : null;
+  fsSync.writeFileSync(cfgPath, JSON.stringify({ markdownBareAtImports: flip }));
+  try {
+    const trusted = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+    const untrusted = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => false });
+    assert(trusted.markdownBareAtImports === flip,
+      `trusted reads project config → ${flip}, got ${trusted.markdownBareAtImports}`);
+    assert(untrusted.markdownBareAtImports === GLOBAL_BASELINE.markdownBareAtImports,
+      `untrusted ignores project config → baseline (${GLOBAL_BASELINE.markdownBareAtImports}), got ${untrusted.markdownBareAtImports}`);
+    assert(trusted.markdownBareAtImports !== untrusted.markdownBareAtImports,
+      `trust gate: trusted (${trusted.markdownBareAtImports}) must differ from untrusted (${untrusted.markdownBareAtImports})`);
+  } finally {
+    if (valid !== null) fsSync.writeFileSync(cfgPath, valid); // restore {markdownBareAtImports:true}
+  }
 });
 
-// T2.S1-d — MALFORMED JSON → {} (never throws). Overwrite the project config with "{bad" (malformed) for THIS
-// case only, then RESTORE the valid fixture in a finally so sibling cases see valid JSON. readConfig's tryRead
-// must catch the JSON.parse error → {} → markdownBareAtImports undefined. If readConfig threw, runCase's catch
-// → FAIL (the desired signal that the never-throws invariant is broken).
-await runCase("T2.S1-d", "readConfig malformed project JSON + trusted → {} (undefined), no throw", async () => {
+// T2.S1-d — MALFORMED project JSON → project contributes {} (never throws); the result equals the global
+// baseline (a broken project file neither crashes readConfig nor suppresses the global sources). Overwrite the
+// project config with "{bad" for THIS case only, then RESTORE the valid fixture in finally.
+await runCase("T2.S1-d", "readConfig malformed project JSON + trusted → {} (equals baseline), no throw", async () => {
   const cfgPath = path.join(TMPDIR, ".pi", "file-injector.json");
   const valid = fsSync.readFileSync(cfgPath, "utf8"); // save the valid content
   fsSync.writeFileSync(cfgPath, "{bad");              // malformed JSON for this case only
   try {
     const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
-    assert(r.markdownBareAtImports === undefined,
-      `malformed project JSON → markdownBareAtImports undefined (default {}), got ${r.markdownBareAtImports}`);
+    assert(r.markdownBareAtImports === GLOBAL_BASELINE.markdownBareAtImports,
+      `malformed project JSON → project {} (no throw) → equals baseline (${GLOBAL_BASELINE.markdownBareAtImports}), got ${r.markdownBareAtImports}`);
   } finally {
     fsSync.writeFileSync(cfgPath, valid);             // RESTORE so sibling cases (if any run after) see valid JSON
   }
@@ -1973,16 +2021,26 @@ await runCase("T2.S1-e", "readConfig settings.json {fileInjector:{markdownBareAt
   }
 });
 
-// T2.S1-f — TRUST GATE on settings.json (untrusted). Same settings.json key, but isProjectTrusted:false → the
-// project settings.json is NEVER read → markdownBareAtImports undefined (an untrusted project cannot enable
-// bare-@ via settings.json either).
-await runCase("T2.S1-f", "readConfig settings.json key + UNTRUSTED → ignored (undefined)", async () => {
-  writeSettings({ "fileInjector": { markdownBareAtImports: true } });
+// T2.S1-f — TRUST GATE on the settings.json key (untrusted). Write a project settings.json whose fileInjector
+// value is the NEGATION of the baseline AND neutralize the dedicated project file (which otherwise has higher
+// precedence and would mask the key); UNTRUSTED → baseline (key IGNORED), TRUSTED → project value. The two
+// differing proves the gate applies to the settings.json key too, regardless of the real global env.
+await runCase("T2.S1-f", "readConfig settings.json key + UNTRUSTED → ignored (baseline); trusted → project value", async () => {
+  const flip = GLOBAL_BASELINE.markdownBareAtImports === true ? false : true;
+  const fileValid = fsSync.existsSync(PROJ_FILE_PATH) ? fsSync.readFileSync(PROJ_FILE_PATH, "utf8") : null;
+  fsSync.writeFileSync(PROJ_FILE_PATH, "{}"); // neutralize the dedicated file so the settings.json KEY is the project source under test
+  writeSettings({ "fileInjector": { markdownBareAtImports: flip } });
   try {
-    const r = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => false });
-    assert(r.markdownBareAtImports === undefined,
-      `untrusted project → settings.json key ignored (trust gate), got ${r.markdownBareAtImports}`);
+    const untrusted = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => false });
+    const trusted = await mod.readConfig({ cwd: TMPDIR, isProjectTrusted: () => true });
+    assert(untrusted.markdownBareAtImports === GLOBAL_BASELINE.markdownBareAtImports,
+      `untrusted → settings.json key ignored → baseline (${GLOBAL_BASELINE.markdownBareAtImports}), got ${untrusted.markdownBareAtImports}`);
+    assert(trusted.markdownBareAtImports === flip,
+      `trusted → settings.json key value (${flip}), got ${trusted.markdownBareAtImports}`);
+    assert(trusted.markdownBareAtImports !== untrusted.markdownBareAtImports,
+      `trust gate: trusted (${trusted.markdownBareAtImports}) must differ from untrusted (${untrusted.markdownBareAtImports})`);
   } finally {
+    if (fileValid !== null) fsSync.writeFileSync(PROJ_FILE_PATH, fileValid); // restore {markdownBareAtImports:true}
     fsSync.rmSync(PROJ_SETTINGS_PATH, { force: true });
   }
 });
