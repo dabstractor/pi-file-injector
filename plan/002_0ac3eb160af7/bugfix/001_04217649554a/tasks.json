@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Correctness & Spec-Compliance Fixes for the #@file Injector",
-      "status": "Researching",
+      "status": "Complete",
       "description": "Fix the 4 bugs found by the creative end-to-end validation of the #@file injection extension (file-injector.ts): two Major correctness bugs in injectFiles assembly (within-prompt dedup gap = Issue 1; failed-token #@ stripping in mixed prompts = Issue 2) and two Minor spec-deviation bugs (notify wording vs PRD 5.5 = Issue 3; paged directive offset:0 re-reading the head = Issue 4). All work is confined to file-injector.ts (fixes) and file-injector.test.mjs (test updates + new regression cases). All four bugs were reproduced live against the real committed module; the existing model-free harness passes 43/43 and must stay green throughout. See plan/002_0ac3eb160af7/bugfix/001_04217649554a/architecture/ for the research that grounds every subtask.",
       "milestones": [
         {
@@ -118,21 +118,21 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Changeset-Level Documentation Sync",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Final catch-all sweep (SOW 5 Mode B) to prevent the coherent delta from shipping with a stale README. None of Issues 1-4 changes user-facing config, CLI flags, env vars, or exported type signatures (so there were no per-subtask Mode A doc updates), but the corrected behavior (failed #@ tokens stay verbatim; the paged directive no longer re-reads the head) should be reconciled against README.md behavior descriptions. This task runs LAST and depends on every implementing subtask.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Sync changeset-level documentation (README.md)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Review README.md and update only what this changeset actually touches: verify the trigger-stripping and paged-delivery descriptions still match the corrected behavior, and add a brief note that failed #@ tokens are left verbatim if it improves clarity. No fabricated features.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Review and update README.md to match the corrected #@file behavior",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
