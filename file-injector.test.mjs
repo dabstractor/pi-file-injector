@@ -156,19 +156,19 @@ const PURE_HELPERS_NOT_ASSERTED = new Set(["expandTildeAndResolve", "extOf", "is
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. Mock pi/ctx factories + handler capture (verified pattern — drives guards/notify/transform).
 // ──────────────────────────────────────────────────────────────────────────────
-function makeMockCtx(cwd, { hasUI = true } = {}) {
+function makeMockCtx(cwd, { hasUI = true, isProjectTrusted = () => true } = {}) {
   const rec = {};
   return {
-    ctx: { cwd, hasUI, ui: { notify: (m, t) => { rec.notify = { m, t }; } } },
+    ctx: { cwd, hasUI, isProjectTrusted, ui: { notify: (m, t) => { rec.notify = { m, t }; } } },
     rec,
   };
 }
 
 function captureHandler(event = "input") {
-  const slot = {};
-  const pi = { on: (ev, cb) => { if (ev === event) slot.cb = cb; } }; // capture by event name (factory registers both input + session_start)
-  mod.default(pi); // registers handlers; slot.cb holds the one for `event`
-  return slot;
+  const cbs = [];
+  const pi = { on: (ev, cb) => { if (ev === event) cbs.push(cb); } }; // capture by event name (factory registers both input + session_start)
+  mod.default(pi); // registers handlers; cbs holds EVERY handler for `event` (input: 1; session_start: 2 after §4.6 config)
+  return { cb: cbs[cbs.length - 1], all: cbs }; // .cb = LAST handler (backward compat for ~30 callers); .all = every handler for `event`
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1887,6 +1887,74 @@ await runCase("T2.S1-d", "readConfig malformed project JSON + trusted → {} (un
   } finally {
     fsSync.writeFileSync(cfgPath, valid);             // RESTORE so sibling cases (if any run after) see valid JSON
   }
+});
+
+// ── P1.M2.T1.S1: config→pipeline wiring (session_start load + top-level bareAt:false) ─────────────────────────
+// This subtask threads bareAt from the cached cfg through State via a 4th injectFiles param (Option A), adds a
+// MODULE-LEVEL cfg cache loaded on session_start, and hardcodes bareAt:false on the TOP-LEVEL scan call (§4.6:
+// bare-@ is markdown-ONLY — it must NEVER match in the user prompt where Pi's @file/@mention would collide).
+// The KEY observable invariant this task owns is TOP-LEVEL SAFETY (case c): a bare `@b.ts` at the top level is
+// NOT injected even when markdownBareAtImports:true is loaded. NOTE: literal markdown bare-@ end-to-end
+// (api.md injected / trust-gated) is P1.M2.T2.S1's integration tests — it owns the injectMarkdown wiring that
+// reads state.bareAt; this task only delivers the config-load plumbing + the state.bareAt seam.
+//
+// Flow under test: captureHandler("session_start").all[0] is the §4.6 config handler (registered first); driving
+// it sets the MODULE-LEVEL cfg. A subsequent captureHandler("input") reads cfg.markdownBareAtImports===true and
+// threads it into injectFiles. The .pi/file-injector.json fixture (T2.S1, {markdownBareAtImports:true}) is reused.
+
+// M2.T1.S1-a — session_start loads config (trusted) + input pipeline runs (regression). Drive the config
+// session_start handler with cwd=TMPDIR + trusted → cfg.markdownBareAtImports:true; then an input with #@a.ts
+// must transform and inject a.ts. Proves the config→handler→injectFiles wiring runs end-to-end without error.
+await runCase("M2.T1.S1-a", "session_start loads config (trusted) + input pipeline runs (regression)", async () => {
+  const sslot = captureHandler("session_start");
+  await sslot.all[0]({}, makeMockCtx(TMPDIR).ctx); // cfg = readConfig({cwd:TMPDIR, trusted}) → markdownBareAtImports:true
+  const islot = captureHandler("input");
+  const out = await islot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
+  assert(out.action === "transform", `#@a.ts must inject with config loaded; got ${JSON.stringify(out)}`);
+  assert(out.text.includes(`<file name="${A_TS}">`), "a.ts block present");
+});
+
+// M2.T1.S1-b — trust-gate path runs (untrusted) — smoke, no crash; #@ still injects. Driving the config
+// session_start handler with isProjectTrusted:()=>false skips the project config → cfg.markdownBareAtImports
+// undefined → bareAt false. But top-level #@ is unaffected (always bareAt:false anyway) → #@a.ts still injects.
+await runCase("M2.T1.S1-b", "trust-gate path runs (untrusted) — smoke, no crash; #@ still injects", async () => {
+  const sslot = captureHandler("session_start");
+  await sslot.all[0]({}, makeMockCtx(TMPDIR, { isProjectTrusted: () => false }).ctx); // project skipped → bareAt undefined
+  const islot = captureHandler("input");
+  const out = await islot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
+  assert(out.action === "transform", `#@a.ts must inject even when untrusted (top-level unaffected); got ${JSON.stringify(out)}`);
+});
+
+// M2.T1.S1-c — TOP-LEVEL SAFETY (KEY INVARIANT): bare @ NEVER injects at the top level, even with the bareAt
+// config on. With markdownBareAtImports:true (cfg loaded, bareAt derived true), a top-level `#@a.ts and @b.ts`
+// prompt must inject ONLY a.ts (the #@ token) — the bare @b.ts must NOT inject. Both files exist; if the top-level
+// scan wrongly passed bareAt:true, @b.ts WOULD inject → b.ts block present → FAIL. This pins the §4.6 invariant.
+await runCase("M2.T1.S1-c", "TOP-LEVEL SAFETY — bare @ NEVER injects at top level (even with bareAt config on)", async () => {
+  const sslot = captureHandler("session_start");
+  await sslot.all[0]({}, makeMockCtx(TMPDIR).ctx); // markdownBareAtImports:true → bareAt derived true
+  const islot = captureHandler("input");
+  const out = await islot.cb({ text: "Diff #@a.ts and @b.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
+  assert(out.action === "transform", `#@a.ts must inject; got ${JSON.stringify(out)}`);
+  assert(out.text.includes(`<file name="${A_TS}">`), "a.ts block present (the #@ token injected)");
+  assert(!out.text.includes(`<file name="${B_TS}">`),
+    `bare @b.ts must NOT inject at top level even with bareAt config on; b.ts block must be absent`);
+});
+
+// M2.T1.S1-d — direct injectFiles bareAt:true param does NOT break #@ (unit). Calling injectFiles directly with
+// the 4th param true sets state.bareAt=true but the top-level scan hardcodes bareAt:false, so #@a.ts still injects
+// (bareAt doesn't affect top-level #@ matching). Proves Option A: the param is harmless to existing direct calls.
+await runCase("M2.T1.S1-d", "direct injectFiles bareAt:true param does NOT break #@ (unit)", async () => {
+  const r = await mod.injectFiles("Review #@a.ts", [], FIX, true); // bareAt param true
+  assert(r.injected >= 1, `bareAt:true param must not break #@ injection; got injected=${r.injected}`);
+});
+
+// M2.T1.S1-e — direct injectFiles — top-level bareAt:false regardless of param (unit). With bareAt:true passed
+// directly, `Diff #@a.ts and @b.ts` must inject ONLY a.ts (injected===1); the bare @b.ts must NOT inject because
+// the top-level scan call hardcodes bareAt:false regardless of the param. The companion to case (c) via direct call.
+await runCase("M2.T1.S1-e", "direct injectFiles — top-level bareAt:false regardless of param (unit)", async () => {
+  const r = await mod.injectFiles("Diff #@a.ts and @b.ts", [], FIX, true); // bareAt param true, top-level scan hardcodes false
+  assert(r.injected === 1, `top-level bare @ must NOT inject even with bareAt:true param; expected injected===1, got ${r.injected}`);
+  assert(!r.text.includes(`<file name="${B_TS}">`), "bare @b.ts block must be absent");
 });
 
 // 10. Summary + cleanup + exit.

@@ -70,21 +70,21 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Integration Wiring (thread bareAt from config through the pipeline)",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Wire the M1 building blocks together: add bareAt to the shared State, load config on session_start into a module-level cfg, have the input handler derive bareAt and pass it into injectFiles, thread the bareAt opt through processTokenStream (top-level = false), and update injectMarkdown to pass bareAt:state.bareAt + carry prefixLen through its Step 3.5 existence pre-check and Step 4 marker stripping. Each subtask is TDD-complete with its integration tests. After this milestone the feature is functionally complete.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Thread bareAt through State, the factory, and the top-level pipeline + config-loading integration test",
-              "status": "Researching",
+              "status": "Complete",
               "description": "The integration hub: State gains a bareAt field; the factory gains a cfg var + a session_start config load (alongside the existing autocomplete registration); the input handler derives bareAt and injectFiles sets state.bareAt; processTokenStream gains the bareAt opt and the top-level scan call passes bareAt:false. Includes an integration test that drives session_start with a temp config and verifies bareAt reaches the pipeline.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "State.bareAt + cfg var + session_start config load + injectFiles state init + processTokenStream bareAt opt + top-level scan call (with config-loading integration test)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",
@@ -105,14 +105,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Wire bare-@ into the markdown import branch (injectMarkdown) + integration tests #25-28",
-              "status": "Planned",
+              "status": "Researching",
               "description": "injectMarkdown is the ONLY call site that passes bareAt:true (from state.bareAt). Update its scan call, carry prefixLen through the existing Step 3.5 existence pre-check, and make Step 4 marker stripping use prefixLen instead of the hardcoded 2. Includes the §11 manual-matrix integration tests (#25-28) as automated cases.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "injectMarkdown: pass bareAt:state.bareAt + carry prefixLen through Step 3.5 + strip with prefixLen in Step 4 (with integration tests §11 #25-28 + §10 bare-@ edges)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M2.T1.S1",

@@ -286,6 +286,7 @@ interface State {
   remaining: number | null; // single budget accumulator (§5.5 / §5.6.2)
   count: number;
   paged: number;
+  bareAt: boolean; // §4.6 — markdown bare-"@" imports enabled? (top-level scan ignores this; injectMarkdown reads it)
 }
 
 /** PRD §9 — subtract a cost from the shared budget, no-op when the budget is unknown (null).
@@ -523,7 +524,7 @@ export async function scanTokens(
 async function processTokenStream(
   text: string,
   baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt: boolean },
   state: State,
   ctx: Ctx,
 ): Promise<number[]> {
@@ -740,6 +741,7 @@ export async function injectFiles(
   text: string,
   imagesIn: ImageContent[],
   ctx: Ctx,
+  bareAt = false, // §4.6 — markdown bare-@ enabled? (derived from cfg in the input handler; default false for direct unit tests)
 ): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number }> {
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
@@ -787,6 +789,7 @@ export async function injectFiles(
     remaining,
     count: 0,
     paged: 0, // §5.5 paged-delivery counter — files delivered head+directive (subset of count)
+    bareAt, // §4.6 — from the param; the SEAM injectMarkdown (P1.M2.T2.S1) reads via `bareAt: state.bareAt`
   };
 
   // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping.
@@ -797,7 +800,7 @@ export async function injectFiles(
   // claimed is left verbatim); processTokenStream's belt-and-suspenders injectedSet re-check is a no-op
   // at top level in T1.S2 (each abs is already unique in records) but load-bearing for T2 recursion.
   const resolvedIdx = await processTokenStream(
-    text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false }, state, ctx);
+    text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
 
   if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
@@ -845,13 +848,27 @@ export async function injectFiles(
  * from an extension (loop prevention), is a mid-stream steering nudge (latency), or simply has no `#@`
  * token — and it never throws (injectFiles isolates each file in its own try/catch).
  */
+/** §4.6 — the cached file-injector.json config. MODULE-LEVEL (NOT a factory closure): the test harness's
+ *  captureHandler calls the factory (mod.default(pi)) fresh per capture, so a closure cfg would reset to {}
+ *  on each capture and the session_start→input flow could not share state. Module-level persists across
+ *  captures (and is identical in the real single-invocation runtime). Loaded once on session_start via
+ *  readConfig; read by the input handler to derive bareAt. */
+let cfg: FileInjectorConfig = {};
+
 export default function (pi: ExtensionAPI) {
+  // §4.6 — load file-injector.json config on session_start (provides ctx.cwd + ctx.isProjectTrusted()).
+  // Registered FIRST so captureHandler("session_start").all[0] is this handler. readConfig NEVER throws
+  // (tryRead → {}), so this can't break the session. A separate handler (not merged into autocomplete)
+  // so the autocomplete handler + its A1 test stay byte-for-byte (A1 invokes the autocomplete handler
+  // with a minimal ctx that lacks isProjectTrusted — merging would call readConfig there and throw).
+  pi.on("session_start", async (_e, ctx) => { cfg = await readConfig(ctx); });
+
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
     if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
 
-    const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx); // §5.5 — paged count drives the mode-aware notify below
+    const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered
 
     // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). Unified wording: always
