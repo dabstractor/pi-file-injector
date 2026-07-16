@@ -16,6 +16,13 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 const TRAILING_PUNCT = ".,;:!?\")]}>'";
 
+/** §5.5 — paged-delivery budget constants (defaults pinned by PRD §5.5 "Constants (defaults to pin)"). */
+const PAGED_THRESHOLD = 0.6;    // inject whole if fileCost <= PAGED_THRESHOLD * remaining
+const MARGIN = 8192;            // safety bytes subtracted from remaining context
+const HEAD_BYTES = 8192;        // head block size (~2000 lines, matches read tool DEFAULT_MAX_LINES=2000)
+const DEFAULT_WINDOW = 200000;  // fallback context window when ctx.model?.contextWindow is absent
+const DEFAULT_RESERVE = 8192;   // fallback for ctx.model?.maxTokens when model is absent
+
 /** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
  *  bytes match the declared image type before attaching. A mislabeled file (text body named
  *  `.png`) fails the sniff → falls through to the text/binary path instead of attaching
@@ -111,19 +118,37 @@ export function formatEmptyImageBlock(abs: string): string {
   return '<file name="' + abs + '"><empty image file \u2014 0 bytes; nothing to attach></file>';
 }
 
+/** PRD §5.5 — directive block for a paged (oversize) text file. Emits a <file name="abs"> note
+ *  giving the full path + estimated size and instructing the model to load the rest via the read
+ *  tool at offset:0, limit:2000 (the read tool's DEFAULT_MAX_LINES=2000), incrementing offset
+ *  until the whole file is read. Reuses the em dash (U+2014) from formatBinaryBlock/formatEmptyImageBlock.
+ *  The head block is NOT this helper — it is formatTextFileBlock(abs, content.slice(0, HEAD_BYTES)). */
+export function formatPagedDirectiveBlock(abs: string, totalBytes: number): string {
+  return '<file name="' + abs + '"><large file \u2014 estimated ' + totalBytes + ' bytes; first ' + HEAD_BYTES + ' bytes injected above. Use the read tool to load the rest: offset:0, limit:2000, incrementing offset until the entire file is read></file>';
+}
+
 /**
- * PRD §9 — core assembly. Iterate every `#@<path>` token in `text`, resolve+stat+classify+read each,
- * append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image), and return the
- * transformed prompt + merged images + count. NEVER throws (each file is isolated in try/catch);
- * tokens that miss/are directories/throw are left verbatim. The original prompt text is NOT modified —
- * blocks are appended after `\n\n---\n\n`, joined with `\n\n` (PRD §6.2). `injected` is a COUNT:
- * 0 => caller (T3.S2) returns {action:"continue"}; >0 => {action:"transform", text, images}.
+ * PRD §9 / §5.5 — core assembly. Iterate every `#@<path>` token in `text`, resolve+stat+classify+read
+ * each, and append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image). The
+ * whole file ALWAYS reaches the model: injected inline when it fits the remaining context budget,
+ * paged via the model's `read` tool when it does not (PRD §5.5). NEVER throws (each file is isolated
+ * in try/catch); tokens that miss/are directories/throw are left verbatim. The original prompt text is
+ * NOT modified — blocks are appended after `\n\n---\n\n`, joined with `\n\n` (PRD §6.2). `ctx` carries
+ * the budget inputs `getContextUsage()` (tokens used) and `model` (contextWindow/maxTokens); both
+ * optional so a cwd-only ctx is valid. `injected` counts whole-file injections; `paged` counts files
+ * delivered via the page path (PRD §5.5). Return `{injected:0, paged:0}` => caller returns
+ * {action:"continue"}; otherwise {action:"transform", text, images}.
  */
 export async function injectFiles(
   text: string,
   imagesIn: ImageContent[],
-  ctx: { cwd: string },
-): Promise<{ text: string; images: ImageContent[]; injected: number }> {
+  ctx: {
+    cwd: string;
+    getContextUsage?: () =>
+      { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+    model?: { contextWindow: number; maxTokens: number } | undefined;
+  },
+): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number }> {
   const blocks: string[] = [];
   const images = [...imagesIn]; // MERGE — runner REPLACES the array on transform; seed originals (item §3a)
   let count = 0;
@@ -206,7 +231,7 @@ export async function injectFiles(
     }
   }
 
-  if (count === 0) return { text, images: imagesIn, injected: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
+  if (count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
   // Strip the #@ trigger from each inline marker — the PATH stays put as a readable reference. The
   // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
@@ -214,7 +239,7 @@ export async function injectFiles(
   // above still returns the prompt byte-for-byte (missing/dir/error tokens keep their #@ verbatim).
   const strippedText = text.replace(FILE_INJECT_RE, (_m, _boundary, path) => path);
   const finalText = `${strippedText}\n\n---\n\n${blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
-  return { text: finalText, images, injected: count };
+  return { text: finalText, images, injected: count, paged: 0 };
 }
 
 /**

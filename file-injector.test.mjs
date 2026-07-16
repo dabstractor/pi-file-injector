@@ -117,6 +117,7 @@ assert(typeof mod.formatTextFileBlock === "function", "mod.formatTextFileBlock m
 assert(typeof mod.formatImageBlock === "function", "mod.formatImageBlock must be a function");
 assert(typeof mod.formatBinaryBlock === "function", "mod.formatBinaryBlock must be a function");
 assert(typeof mod.formatEmptyImageBlock === "function", "mod.formatEmptyImageBlock must be a function (F5)");
+assert(typeof mod.formatPagedDirectiveBlock === "function", "mod.formatPagedDirectiveBlock must be a function (§5.5 paged delivery)");
 assert(typeof mod.hasValidImageMagic === "function", "mod.hasValidImageMagic must be a function (F3)");
 
 // ──────────────────────────────────────────────────────────────────────────────
