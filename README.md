@@ -1,191 +1,83 @@
-# #@file
+# `#@file`
 
-> `#@file` — inject the whole file, every time, everywhere.
+A [Pi](https://github.com/earendil-works/pi) extension that injects a whole file into your prompt when you write `#@` before the path. The file reaches the model before it replies, with no size limit and no configuration.
 
-A [Pi](https://github.com/earendil-works/pi) extension that lets you attach an
-**entire** file to your prompt by writing `#@<path>` anywhere. The file lands in the model's
-context *before* it replies — no `read` tool round-trip, no size limit, no configuration.
+## Why
 
-## What it does
+Pi's built-in `@file` injects a file only when you pass it on the command line before a session starts. In the editor, `@` is path autocomplete, and the model has to call a tool to read the file itself.
 
-`#@<path>` is a dedicated, **unconditional** whole-file injection trigger. When you write it
-anywhere in a submitted prompt, the extension reads the **entire** referenced file and appends its
-contents to the prompt in Pi-native `<file name="…">…</file>` blocks, below a `---` separator.
-There is no size limit and no config: whatever file you name, the model gets all of it.
+`#@` always injects the entire file, in every context: the editor, a `pi -p` one-shot, and RPC. You write it, the file goes in.
 
-It works identically in **every** context — interactive TUI messages, the initial `pi -p` / CLI
-message, and RPC — because it hooks Pi's `input` event (which fires inside `AgentSession.prompt()`
-for *all* inputs), **not** argv parsing. Contrast: Pi's built-in `@file` only expands when passed as
-a CLI argument *before* the session starts; interactively, bare `@` is just path autocomplete.
-
-## Installation
+## Install
 
 ```bash
 pi install git:github.com/dabstractor/pi-file-injector
 ```
 
-## Quick start
+Restart Pi if a session is already open. To uninstall, run `pi remove git:github.com/dabstractor/pi-file-injector`.
+
+## Usage
+
+Write `#@` and a path anywhere in your prompt:
 
 ```text
 Review #@a.ts
 Describe #@pic.png
 Summarize #@~/notes.md
 Diff #@a.ts vs #@b.ts
-See #@a.ts.          # trailing punctuation is trimmed automatically
-Review @a.ts         # bare @ is UNCHANGED — no injection by this extension
+See #@a.ts.
 ```
 
-When you submit one of these, the file contents appear below a `---` rule in your message. The
-extension **appends** (it does not inline-replace) and strips the `#@` trigger from each reference,
-so `Review #@a.ts` reaches the model as `Review a.ts` — the path stays as a readable link to the
-appended block, and the 2-token `#@` syntax is dropped as noise. (Tokens that don't resolve —
-missing file, directory, read error — are left byte-for-byte verbatim, `#@` included.) These are the
-exact prompts the test harness exercises, so you can run `node ./file-injector.test.mjs` and watch
-them pass.
+On submit, the file contents appear below a `---` rule. The `#@` trigger is stripped from each reference, so `Review #@a.ts` reaches the model as `Review a.ts` with the file appended underneath.
 
-**Path completion:** in the TUI, `#@` autocompletes file paths — type `#@` and start the path, and
-the same gitignore-aware file list Pi uses for `@` pops up; Tab completes it as `#@<path>`. (The
-extension registers a completion provider that reuses Pi's `@` engine; TUI/RPC only — headless
-`pi -p` just takes the literal path.)
+Path completion works in the editor. Type `#@` and the same file list Pi shows for `@` appears; Tab completes it as `#@<path>`.
 
-## Behavior by file type
+Bare `@` is unchanged, so `Review @a.ts` behaves as before.
 
-| File type | What `#@path` does | Output appended to your prompt |
-|---|---|---|
-| **Text** (`.ts`, `.md`, `.json`, `.log`, …) | Entire file contents injected, no truncation | `<file name="/abs/path">`<br>`<entire contents>`<br>`</file>` |
-| **Image** (`.png` `.jpg`/`.jpeg` `.gif` `.webp` `.bmp`) | Attached as an image (auto-resized ≤2000×2000 so providers accept it) AND a reference tag — but only after its first bytes pass a magic-number sniff (see notes); a mislabeled file (text named `.png`) falls through to the **text/binary** row instead of attaching as garbage | `<file name="/abs/path"></file>` *(plus the image is attached)* |
-| **Empty image** (0-byte `.png`/`.jpg`/etc.) | Attaches **nothing** — an empty `ImageContent` would be rejected by providers, so a note block is emitted instead | `<file name="/abs/path"><empty image file — 0 bytes; nothing to attach></file>` |
-| **Other binary** (a NUL byte is detected, and it's not an image) | NOT decoded — a clear note instead of garbage | `<file name="/abs/path"><binary file — contents not injected; use the read tool if needed></file>` |
-| **Missing file** | Token left exactly as you wrote it | *(nothing appended)* |
-| **Directory** (`#@src/`) | Token left exactly as you wrote it | *(nothing appended)* |
-| **Read / permission error** | Token left exactly as you wrote it | *(nothing appended)* |
+## What gets injected
 
-For the text case, a single block looks like this (byte-identical to Pi's built-in `@file` block
-format — the `name` attribute is the resolved absolute path):
+| File | Result |
+|---|---|
+| Text (`.ts`, `.md`, `.json`, `.log`, etc.) | Entire contents injected, no truncation. |
+| Image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) | Attached as an image. |
+| Other binary | Not injected. A short note says it was skipped. |
+| Missing file, directory, or permission error | Left as written. Nothing is appended. |
+
+Text uses Pi's native block format, the same one `@file` uses:
 
 ```text
 <file name="/abs/path/to/file.ts">
-<entire file contents, no truncation, no offset/limit>
+<entire file contents>
 </file>
 ```
 
-Notes on the table:
-
-- The image row's `<file name="…"></file>` may carry dimension hints when the image is resized; on
-  tiny or undecodable images `resizeImage` returns `null` and the hints are empty (the raw image
-  bytes are still attached). The `—` in the binary note is an em dash (U+2014), not a hyphen.
-- A broken `#@` **never** breaks your prompt. Each file is isolated in its own `try`/`catch`, so a
-  missing file, a directory, a permission error, or an unreadable file just leaves the `#@token`
-  verbatim and processing continues with the rest.
-- **Images are validated by both extension *and* actual bytes (magic-number sniff).** A file is
-  attached as an image only if its extension is a recognized image type *and* its first bytes match
-  that type's signature (PNG/JPEG/GIF/WEBP/BMP; files under 12 bytes always fail). A mislabeled file
-  (e.g. a text body saved as `fake.png`) therefore falls through to the **text/binary** path and is
-  injected as text — it is **not** attached as decoded garbage labeled as an image. This is a
-  deliberate, safer improvement over routing by extension alone. *(Harness cases `F3a`, `F3b`.)*
-- **A 0-byte image file attaches nothing.** An empty `ImageContent` would be rejected by providers,
-  so instead of attaching an empty image the extension emits a note block —
-  `<file name="…"><empty image file — 0 bytes; nothing to attach></file>` (the `—` is the same em
-  dash, U+2014, used in the binary note) — and attaches no image, while still referencing the path.
-  Note the contrast: a 0-byte *text* file is unaffected and injects as `<file name="…">\n\n</file>`;
-  only 0-byte *images* get this special-case. This is a deliberate divergence, made to avoid a
-  provider-rejected empty image. *(Harness case `F5`.)*
+Images are matched by their real bytes, not just the extension. A text file renamed `fake.png` is injected as text, not attached as a broken image. An empty (0-byte) image attaches nothing.
 
 ## Syntax
 
-**Grammar:** `` `#@<path>` `` — the two-character trigger `#@` immediately followed by a path token,
-where `<path>` is a maximal run of non-whitespace characters.
+`#@<path>` is the trigger `#@` followed by a path. The path is a run of non-whitespace characters.
 
-**Where it matches:** at the start of the prompt, **or** immediately after a non-word character
-(space, `(`, `[`, `>`, etc.). It does **not** match mid-word — `foo#@bar` injects nothing. The word
-boundary is **Unicode-aware**: `#@` does not trigger after non-ASCII letters or numbers in any
-language either (e.g. `café#@x`, `Öster#@x`, or CJK like `日本語#@x` inject nothing), exactly as it
-does not trigger after ASCII letters/digits/underscore.
+**Where it matches:** at the start of the prompt, or right after a non-word character (a space, `(`, `[`, `>`, etc.). It does not match mid-word, so `foo#@bar` injects nothing. This holds in any language: `café#@x`, `Öster#@x`, and `日本語#@x` inject nothing.
 
-**Trailing punctuation is trimmed.** `` `#@a.ts.` `` resolves to `a.ts`; `` `(#@a.txt)` `` resolves
-to `a.txt`. The trimmed characters are exactly:
+**Trailing punctuation is trimmed.** `#@a.ts.` resolves to `a.ts`. `(#@a.txt)` resolves to `a.txt`. Trimmed characters:
 
 ```text
 . , ; : ! ? " ' ) ] } >
 ```
 
-**Paths:** relative (resolved against the current working directory), absolute
-(`#@/etc/hosts`), tilde (`#@~/notes.md`, `#@~`), and `../` are **all** allowed. There is no cwd
-restriction — you asked for the file, you get the file.
+**Paths:** relative (against your current directory), absolute (`#@/etc/hosts`), tilde (`#@~/notes.md`), and `../` all work.
 
-## Key design choices
+## Limits
 
-### Why a new `#@` symbol instead of reusing `@`
+- **No size gate.** `#@` on a 50 MB file injects 50 MB and can overflow the model's context. For large files, use Pi's `read` tool with `offset` and `limit`.
+- **No spaces in paths.** A space ends the path, so `#@my file.txt` injects a file named `my`. Use the `read` tool for files with spaces.
+- **No directories.** `#@src/` is left as-is. Use a `read` or `ls` tool.
+- **No globs.** `#@src/*.ts` is a literal path, not a pattern. It resolves only if a file named `*.ts` exists.
+- **A backtick right after `#@` blocks it.** Inside a code span like `` `#@a.ts` ``, nothing is injected. To suppress `#@` anywhere, write `# @` with a space.
 
-`@` is already overloaded in Pi: interactively it means path *autocomplete*, and at the CLI it means
-*inject a file* (parsed from argv before the session starts). Overloading it further would be
-ambiguous and would change existing behavior. `#@` is unambiguous and collision-free with Markdown
-`#` headings, issue references like `#1234`, and `user@host` email addresses — and the `#` reads as
-"force/sharp/inject." And `#@` is fully path-completable in the TUI: the extension registers a
-completion provider that reuses Pi's own gitignore-aware `@` engine, so `#@` lists and Tab-completes
-files exactly like `@` (details in PRD §14).
+## `#@` versus `@`
 
-### Why no size limit
+- `#@file` injects the whole file, always, everywhere.
+- `@file` is Pi's built-in autocomplete and command-line argument handling. This extension does not change it.
 
-The whole point. `#@` is the predictable "give the model **all** of this file" affordance; gating it
-would make it a worse `@`-with-config rather than a distinct tool. The tradeoff is honest: a careless
-`#@` on a huge file can blow the model's context window or trigger a provider error. That's accepted
-— it's your explicit, deliberate action (you typed a non-default symbol). For partial or large reads,
-use Pi's `read` tool with `offset`/`limit`.
-
-### Why no config
-
-Configuring this feature would defeat its purpose. The contract is "always, entirely." There are no
-env vars, no settings files, and no flags beyond `pi -e` (which is a Pi flag, not an extension
-setting). The one apparent knob — the 2000×2000 image resize — is a *correctness* requirement
-(providers reject oversized images), not a user-facing configuration. The whole image is still
-delivered, downscaled to fit.
-
-## Known limitations
-
-- **No size gate (by design).** `#@` on a 50 MB file injects 50 MB and may overflow the model's
-  context window. This is intended. For large files, use Pi's `read` tool with `offset`/`limit`.
-- **Paths with spaces can't be expressed.** A space ends the path token, so `#@my file.txt` injects
-  the file `my` (not `my file.txt`). Use the `read` tool for files with spaces in their names.
-- **`#@` immediately followed by a backtick does not inject.** Inside a fenced code block
-  (`` `#@a.ts` ``), the captured path token is `` a.ts` ``; the trailing backtick is **not** in the
-  trimmed-punctuation set above, so the path `` a.ts` `` does not resolve and nothing is injected
-  (the token is left verbatim). To reliably suppress `#@` anywhere in prose or code, write `# @`
-  (with a space). *(An early design note had assumed `#@` inside code blocks would still inject; the
-  shipped extension is safer — it does not. See
-  [`plan/001_5aa8724eb506/P1M2T4S1/validation_report.md`](plan/001_5aa8724eb506/P1M2T4S1/validation_report.md),
-  Finding F1.)*
-- **No directory reads.** `#@some/dir/` is left as a literal token. Use a `read` or `ls` tool.
-- **No globbing / multi-file expansion.** `#@src/*.ts` is treated as a single literal path token
-  (`src/*.ts`), not a glob. It will not resolve unless a file literally named `*.ts` exists.
-
-## Relationship to `@`
-
-- **`#@file`** → whole file, always, everywhere (this extension).
-- **`@file`** → Pi's built-in behavior (interactive path autocomplete / `@mention`; CLI argv inject).
-  **Unchanged** by this extension — the trigger regex only matches `#@` (hash-then-at), never bare
-  `@`.
-
-The two coexist: use `#@` when you know you want **all** of a file; use `@` (or the `read` tool)
-when you want partial or size-gated input. Confirmed by the acceptance harness (case #14):
-`Review @a.ts` is byte-for-byte unchanged.
-
-## Testing
-
-```bash
-node ./file-injector.test.mjs     # model-free; exits 0 iff all assertions pass
-```
-
-The harness imports the **real** `file-injector.ts` (via jiti, exactly like Pi's loader), runs all
-14 PRD §11 acceptance cases plus edge cases, the three handler guards, the headless/notify path,
-**co-load dedup** (a non-sentinel co-loaded copy must not double-inject a file), the
-**structural multi-file dedup** guard (a prior `<file>` block for one path must not suppress a
-different new file), the **mixed-pair co-load limit** (a dedup copy followed by a genuine
-non-dedup legacy copy — pins the documented one-directional dedup limit, F-NEW-1), the
-**sentinel-in-prompt** regression (a prompt containing the literal marker still injects its files),
-and **Unicode word-boundary** tests (`#@` does not fire mid-word in any language), and prints a
-pass/fail matrix. At last run: **34 passed, 0 failed.** No network, no model API key, and no Pi
-process are required. See
-[`plan/001_5aa8724eb506/P1M2T4S1/validation_report.md`](plan/001_5aa8724eb506/P1M2T4S1/validation_report.md)
-for the full recorded results, including the two live-`pi` integration confirmations (the `-p` path
-and the end-to-end format parity with `@file`).
+Use `#@` when you want all of a file. Use `@` or the `read` tool when you want part of a file or a size limit.
