@@ -1,0 +1,126 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "Correctness & Spec-Compliance Fixes for the #@file Injector",
+      "status": "Researching",
+      "description": "Fix the 4 bugs found by the creative end-to-end validation of the #@file injection extension (file-injector.ts): two Major correctness bugs in injectFiles assembly (within-prompt dedup gap = Issue 1; failed-token #@ stripping in mixed prompts = Issue 2) and two Minor spec-deviation bugs (notify wording vs PRD 5.5 = Issue 3; paged directive offset:0 re-reading the head = Issue 4). All work is confined to file-injector.ts (fixes) and file-injector.test.mjs (test updates + new regression cases). All four bugs were reproduced live against the real committed module; the existing model-free harness passes 43/43 and must stay green throughout. See plan/002_0ac3eb160af7/bugfix/001_04217649554a/architecture/ for the research that grounds every subtask.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Major Correctness Fixes in injectFiles Assembly (Issues 1 and 2)",
+          "status": "Planned",
+          "description": "Fix the two Major (Should Fix) bugs, both in the injectFiles(text, imagesIn, ctx) core. Issue 1: a file named by more than one #@ token in a single prompt is injected multiple times (the priorPaths dedup set is built once before the loop and never updated in-loop). Issue 2: in a mixed prompt (at least one success + at least one fail), failed #@ tokens are stripped of their #@ trigger by the blanket post-loop text.replace(FILE_INJECT_RE, ...) , violating PRD 6.2 (failed tokens must stay byte-for-byte verbatim, #@ included). Both fixes instrument the SAME per-token success-recording sites inside the loop, so they are sequenced (S2 depends on S1) and share an explicit handoff. Verified fix strategies and the exact code/test locations are in architecture/code_changes_analysis.md.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Fix Major Assembly Bugs: Within-Prompt Dedup + Failed-Token Stripping (Issues 1 and 2)",
+              "status": "Planned",
+              "description": "Resolve the two Major correctness bugs in injectFiles. Both touch the loop body's per-token success sites, so S1 (dedup) is applied first and S2 (stripping) lands its index recording at the same success sites S1 already instrumented. Issue 1 breaks zero existing tests; Issue 2 breaks exactly one (F2, which currently asserts the buggy stripping) and adds new mixed success/fail regression cases.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Add within-run dedup set to injectFiles so a same-path repeat in one prompt injects once (Issue 1)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "prd_selectors": ["h2.0", "h2.2", "h3.0", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 1 section) and architecture/system_context.md. CONFIRMED LIVE: the prompt 'Compare #@a.ts with #@a.ts' yields injected===2 (should be 1) and two <file> blocks; the image variant '#@p.png' twice yields images.length===2; the same file via two path forms ('#@a.ts' + '#@./a.ts') yields 2 blocks. Root cause: in injectFiles the priorPaths Set<string> is populated ONCE before the loop (from text.matchAll over the pattern matching '<file name=\"...\">') and the in-loop check 'if (priorPaths.has(abs)) continue;' reads it, but NOTHING adds to it after a successful injection. The fix must NOT break F1c (a prior <file> block for path X must not block a NEW path Y in the same prompt): use a SEPARATE set so the existing prior-in-input semantics are untouched.\n2. INPUT: injectFiles(text, imagesIn, ctx) where ctx.cwd resolves tokens. The existing priorPaths set (paths of <file> blocks already present in the input text) stays as-is. The loop 'for (const m of text.matchAll(FILE_INJECT_RE))' yields matches; for each, token = cleanToken(m[2]), abs = expandTildeAndResolve(token, ctx.cwd).\n3. LOGIC: (a) Declare a new Set<string> named injectedThisRun alongside priorPaths. (b) Combine the dedup guard at the TOP of the loop (before fs.stat, so a deduped token does no IO): skip the token when priorPaths.has(abs) OR injectedThisRun.has(abs). (c) After EVERY successful inject, call injectedThisRun.add(abs). There are exactly the success sites that do count++: (i) the empty-image branch (blocks.push(formatEmptyImageBlock(abs)); count++; continue;), and (ii) the single end-of-try count++ reached by the text-inline, paged, image, and binary branches. Add injectedThisRun.add(abs) immediately before EACH of those two count++ statements. Do NOT mutate priorPaths. Leave the count===0 early-return and all other behavior untouched. (Implicit TDD: first add the failing regression test, then implement, then pass.)\n4. OUTPUT: injectFiles returns { text, images, injected, paged } where for a same-path repeat in one prompt, injected counts the file ONCE and exactly ONE <file> block (or ONE image) is produced. NEW regression test cases in file-injector.test.mjs (reuse FIX = { cwd: TMPDIR } and the existing a.ts/b.ts/pic.png fixtures): (a) 'Compare #@a.ts with #@a.ts' -> injected===1 and exactly one <file name=...> block for A_TS; (b) '#@a.ts' + '#@./a.ts' (two path forms, same file) -> one block; (c) image dedup 'See #@pic.png and #@pic.png' -> images.length===1. The existing suite (including F1/F1b/F1c/F1d) must still pass 43+ green.\n5. DOCS: none - no user-facing/config/API surface change (the dedup is an internal correctness fix; README does not describe dedup). [Mode A: none.]"
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S2",
+                  "title": "Strip #@ only from actually-injected tokens via index-based splice, leaving failed tokens verbatim (Issue 2)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": ["h2.0", "h2.2", "h3.1", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 2 section) and architecture/external_deps.md section 2. CONFIRMED LIVE: 'Review #@a.ts and check #@missing.ts' -> the '#@missing.ts' becomes 'missing.ts' (text.includes('#@missing.ts')===false); a directory token '#@src/' likewise loses its #@. Root cause: the post-loop blanket replace 'text.replace(FILE_INJECT_RE, (_m,_boundary,path)=>path)' (reached only when count>0) strips #@ from EVERY #@ token, including failed ones; PRD 6.2/10 require failed tokens to stay byte-for-byte verbatim WITH #@. CRITICAL - the substring approach is FORBIDDEN: an empirically-verified collision shows that calling text.replace(m[0], m[0].slice(2)) per injected match corrupts tokens when one injected match is a prefix of another (e.g. '#@a.ts' is a substring of '#@a.ts.bak', so the failed longer token gets corrupted). USE THE INDEX-BASED SPLICE. Regex fact: group 1 (the start-or-non-word-lookbehind anchor) is ZERO-WIDTH, so m.index is exactly the index of the '#' and m[0] is exactly '#@' followed by the raw token; removing the 2 chars at m.index drops exactly '#@', leaving the raw token (matching the current 'path stays, raw form preserved' behavior).\n2. INPUT: The instrumented loop from dependency P1.M1.T1.S1, which now calls injectedThisRun.add(abs) at each success site. The count===0 early-return (returns ORIGINAL text + images ref) stays byte-for-byte unchanged - that path is already correct.\n3. LOGIC: (a) Declare a new array 'injectedIndexes: number[]' alongside the dedup set. (b) At the SAME two success sites where S1 added injectedThisRun.add(abs) (the empty-image 'count++; continue;' branch and the end-of-try 'count++'), also push the current m.index into injectedIndexes (m.index is valid: matchAll is non-destructive on the original text). (c) REPLACE the blanket strip line with an index-based splice that removes exactly the 2 chars '#@' at each recorded index, processing indices HIGH-to-LOW so earlier offsets stay valid. In words: start with strippedText = text; for each index i in injectedIndexes sorted descending, set strippedText = strippedText.slice(0, i) + strippedText.slice(i + 2). Then assemble finalText exactly as before: strippedText + the '\\n\\n---\\n\\n' separator + blocks joined with '\\n\\n'. A deduped 2nd token of the same file (skipped by S1's continue before any index push) therefore KEEPS its #@ - PRD-consistent (it did not inject). Do not change image/binary/paged handling.\n4. OUTPUT: injectFiles returns text where ONLY successfully-injected tokens lose their #@ (path stays); failed tokens (missing/dir/error) and deduped repeats keep #@ byte-for-byte. UPDATE existing test F2 (file-injector.test.mjs around line 614): its assertion currently 'r.text.startsWith(<!--file-injected--> Review a.ts)' enforces the BUG (the failed '#@file-injected-->' token lost its #@); change it so the stripped text starts with '<!--#@file-injected--> Review a.ts' (the failed sentinel token keeps its #@), and fix its now-inaccurate comment ('both #@ markers stripped' -> 'only the injected #@a.ts is stripped; the failed sentinel token keeps its #@'). ADD new regression cases: (a) mixed success+missing 'Review #@a.ts and check #@missing.ts' -> r.text.includes('#@missing.ts')===true AND r.text.startsWith('Review a.ts'); (b) mixed success+directory 'Review #@a.ts and list #@src/' -> '#@src/' kept verbatim; (c) Issue1xIssue2 interaction 'Compare #@a.ts with #@a.ts' -> result startsWith 'Compare a.ts with #@a.ts' (first stripped, deduped second keeps #@) with exactly one <file> block. The existing suite (now 43+ with S1's additions) must stay green.\n5. DOCS: none - no user-facing/config/API surface change. [Mode A: none.]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Milestone",
+          "id": "P1.M2",
+          "title": "Minor Spec-Compliance Fixes (Issues 3 and 4)",
+          "status": "Planned",
+          "description": "Fix the two Minor (Nice to Fix) spec-deviation bugs. Issue 3: the all-whole notify message says '#@ injected N file(s)' instead of PRD 5.5's '#@ injected N whole'. Issue 4: the paged-delivery directive says 'offset:0', but Pi's read tool offset is 1-indexed so offset:0 re-reads the already-injected head block (and offset:0 is identical to offset:1). These are independent single-location fixes (the notify block in the input handler; the formatPagedDirectiveBlock helper) and have no dependency on M1. Verified strategies and exact test impact are in architecture/code_changes_analysis.md.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M2.T1",
+              "title": "Unify the notify wording to PRD 5.5 (N whole / N whole, M paged) (Issue 3)",
+              "status": "Planned",
+              "description": "Change the all-whole notify branch to use the PRD 5.5 wording ('#@ injected N whole') so the message is consistent in both the all-whole and the paged cases. The paged>0 branch already uses whole/paged and is unchanged.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T1.S1",
+                  "title": "Update the handler notify message and the 4 test cases that pin the old wording",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [],
+                  "prd_selectors": ["h2.0", "h2.3", "h3.2", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 3 section). CONFIRMED LIVE: 'Review #@a.ts' -> notify '#@ injected 1 file'; PRD 5.5 Notify examples say '#@ injected N whole' versus '#@ injected N whole, M paged'. The current handler computes 'whole = injected - paged' and builds msg with a ternary: when paged>0 it emits '#@ injected <whole> whole, <paged> paged'; when paged===0 it emits '#@ injected <injected> file' or 'files'. The paged>0 branch is already correct; only the paged===0 branch deviates.\n2. INPUT: The 'input' handler in the default factory (registered via pi.on('input', ...)). injected and paged come from injectFiles. ctx.hasUI gates the notify; ctx.ui.notify(msg, 'info').\n3. LOGIC: Replace the branched msg with a single unified expression matching PRD 5.5: the message is the string '#@ injected ' followed by whole, followed by ' whole', and when paged>0 additionally ', ' + paged + ' paged'. In other words: when paged===0 the message is '#@ injected N whole'; when paged>0 it is '#@ injected N whole, M paged'. Keep the 'if (ctx.hasUI) ctx.ui.notify(msg, info)' guard and the 'return { action: transform, text, images }' unchanged. (Implicit TDD: update the assertions first so they fail, then apply the fix.)\n4. OUTPUT: notify reads '#@ injected N whole' for all-whole and '#@ injected N whole, M paged' when paging. UPDATE exactly these existing assertions (verified by grep - all mechanical 'file(s)' to 'whole'): Case 9 (around line 329) '#@ injected 2 files' -> '#@ injected 2 whole'; Case 12 (around line 361) '#@ injected 1 file' -> '#@ injected 1 whole'; F4 (around lines 661 and 665) '1 file'->'1 whole' and '2 files'->'2 whole'; PN1 (around line 823) '#@ injected 2 files' -> '#@ injected 2 whole' and refresh its name/comment ('existing plural style preserved' -> 'unified whole style'). PN2 (around line 836, '1 whole, 1 paged') and PN3 (around line 847, '0 whole, 1 paged') already match the paged branch - leave them. Full suite green.\n5. DOCS: none - the notify string is not quoted in README.md, so no doc surface changes. [Mode A: none.]"
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M2.T2",
+              "title": "Make the paged-delivery directive internally consistent so it does not re-read the injected head (Issue 4)",
+              "status": "Planned",
+              "description": "The formatPagedDirectiveBlock helper instructs the model to read at offset:0, limit:2000, but Pi's read tool offset is 1-indexed ('offset ? Math.max(0, offset-1) : 0'), so offset:0 (identical to offset:1) starts at line 1 and re-reads the ~2000 lines already delivered as the head block. Make the directive point the model past the head (Option A, recommended) so the head is not re-read, and add a hardcoded-string assertion to pin the corrected offset (existing PD1/PD2 only assert presence via the helper, not correctness).",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T2.S1",
+                  "title": "Update formatPagedDirectiveBlock to resume past the head + pin the offset with a hardcoded assertion",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [],
+                  "prd_selectors": ["h2.0", "h2.3", "h3.3", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 4 section) and architecture/external_deps.md section 1. CONFIRMED: Pi's read tool offset is 1-indexed with a 0-clamp - 'startLine = offset ? Math.max(0, offset-1) : 0' (dist/core/tools/read.js) - so offset:0 and offset:1 are IDENTICAL (both start at line 1), re-reading the already-injected head. The head block is content.slice(0, HEAD_BYTES) (8192 BYTES); the read window is line-based (limit:2000). An EXACT line offset to skip a byte head is impossible, BUT the PRD itself frames 'HEAD_BYTES = 8192 (about 2000 lines, matching the read tool default limit)', so an approximate line offset is consistent with the PRD own equivalence. Pick Option A (resume past the head, smallest diff, keeps the head+directive two-block structure). Also note: PD1/PD2 assert the directive via mod.formatPagedDirectiveBlock(...) (presence, not correctness) - they would pass even for an obviously wrong offset.\n2. INPUT: formatPagedDirectiveBlock(abs: string, totalBytes: number): string (exported pure helper) and the paged branch in injectFiles that calls blocks.push(formatPagedDirectiveBlock(abs, content.length)).\n3. LOGIC: Change ONLY the directive string in formatPagedDirectiveBlock to point the model past the ~2000-line head (keep HEAD_BYTES and the byte head block in injectFiles unchanged). Recommended wording: a note saying the large file has an estimated <totalBytes> bytes with the first ~2000 lines injected above, and instructing the model to read the rest with 'offset:2001, limit:2000', incrementing offset by 2000 until the entire file is read (offset:2001 = first line after the ~2000-line head; consistent with the PRD '8192 bytes ~= 2000 lines' framing). Keep the em dash (U+2014) convention. Do NOT change the head slice (content.slice(0, HEAD_BYTES)) or the HEAD_BYTES constant. (Implicit TDD: add the hardcoded assertion first, watch it fail on the old offset:0, then apply the string change.)\n4. OUTPUT: formatPagedDirectiveBlock emits a directive whose offset resumes AFTER the injected head. PD1/PD2 keep passing (they derive the expected string from the helper). ADD a hardcoded-string assertion to PD1 (and/or PD2) that pins the corrected offset, e.g. assert that r.text includes the substring 'offset:2001, limit:2000' with a message explaining the directive must resume past the injected head, not re-read it. Optionally add a short comment to PD1 noting the directive is now internally consistent with the read tool 1-indexed offset. Full suite green.\n5. DOCS: none - the directive string is model-facing and not quoted in README.md. [Mode A: none.]"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Milestone",
+          "id": "P1.M3",
+          "title": "Changeset-Level Documentation Sync",
+          "status": "Planned",
+          "description": "Final catch-all sweep (SOW 5 Mode B) to prevent the coherent delta from shipping with a stale README. None of Issues 1-4 changes user-facing config, CLI flags, env vars, or exported type signatures (so there were no per-subtask Mode A doc updates), but the corrected behavior (failed #@ tokens stay verbatim; the paged directive no longer re-reads the head) should be reconciled against README.md behavior descriptions. This task runs LAST and depends on every implementing subtask.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M3.T1",
+              "title": "Sync changeset-level documentation (README.md)",
+              "status": "Planned",
+              "description": "Review README.md and update only what this changeset actually touches: verify the trigger-stripping and paged-delivery descriptions still match the corrected behavior, and add a brief note that failed #@ tokens are left verbatim if it improves clarity. No fabricated features.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M3.T1.S1",
+                  "title": "Review and update README.md to match the corrected #@file behavior",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1", "P1.M1.T1.S2", "P1.M2.T1.S1", "P1.M2.T2.S1"],
+                  "prd_selectors": ["h2.0", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Cross-cutting: Documentation section). The four fixes are internal correctness/spec-compliance changes; none adds config, CLI flags, env vars, or exported types, so there were no per-subtask (Mode A) doc updates. README.md (~90 lines) describes behavior at a high level. Relevant lines: the trigger-stripping note (roughly 'The #@ trigger is stripped from each reference, so Review #@a.ts reaches the model as Review a.ts') and the paged-delivery paragraph (roughly 'Oversize files are delivered as a head block plus a paging directive - the model reads the rest via the read tool').\n2. INPUT: The corrected file-injector.ts from P1.M1.T1.S1/S2 + P1.M2.T1.S1/S2 (this subtask depends on all four). The final behavior: (a) only successfully-injected tokens lose #@; failed (missing/dir/error) and deduped tokens keep #@ verbatim; (b) the paged directive resumes past the injected head (no re-read).\n3. LOGIC: Read README.md and reconcile: (i) confirm the trigger-stripping sentence is still accurate for the SUCCESS case (it is - 'Review #@a.ts' still becomes 'Review a.ts'); optionally add one short clause that a token whose file is missing or is a directory is left untouched (only if it reads naturally, do not over-document); (ii) confirm the paged-delivery paragraph needs no change (it stays accurate - 'head block plus a paging directive'). Do NOT invent features, dedup details, notify wording, or internal mechanics the user cannot observe. If upon review README.md is already accurate, make the minimal/no edit and note that in the PRP. Keep README.md existing tone and structure.\n4. OUTPUT: README.md consistent with the shipped behavior (no stale claims). Verify the model-free harness still passes (the README sync must not touch source/tests).\n5. DOCS: this IS the documentation subtask (Mode B, changeset-level). It updates README.md only."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+h1.0 Bug Fix Requirements
+ h2.0 Overview
+ h2.1 Critical Issues (Must Fix)
+ h2.2 Major Issues (Should Fix)
+  h3.0 Issue 1: A file referenced by more than one #@ token in a single prompt is injected multiple times (dedup gap)
+  h3.1 Issue 2: In a mixed prompt, failed #@ tokens are stripped of their #@ trigger — violates PRD §6.2
+ h2.3 Minor Issues (Nice to Fix)
+  h3.2 Issue 3: Notify message wording diverges from the PRD §5.5 example for all-whole prompts
+  h3.3 Issue 4: Paged directive instructs offset:0, which re-reads the already-injected head block
+ h2.4 Testing Summary
+---
+code:6 para:16 list:3
