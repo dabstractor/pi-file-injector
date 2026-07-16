@@ -93,6 +93,46 @@ export function expandTildeAndResolve(p: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
+/** PRD §5.4 / §5.1 — stat the path and return true iff it exists as a regular file. Mirrors the
+ *  already-shipped `injectFile` stat+isFile idiom (L458-461): `await fs.stat(p)` rejects on ENOENT,
+ *  so the `try/catch → false` is the correct "missing/non-existent" detection. Never throws.
+ *  Used by `resolveImportPath` to test candidate paths during scan-time resolution (and, harmlessly,
+ *  re-tested by `injectFile`/the markdown Step-3.5 pre-check on the already-resolved abs). */
+export async function isRegularFile(p: string): Promise<boolean> {
+  try {
+    return (await fs.stat(p)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** PRD §4.5 rule 3 — resolve a `#@<token>` import path to an existing regular file's abs path, or null.
+ *  Resolution ladder (exact-match ALWAYS wins):
+ *    1. expand tilde + resolve(baseDir, token) → `abs` (the existing `expandTildeAndResolve`, NO stat);
+ *    2. if `abs` is an existing regular file → return `abs` (exact match wins, e.g. bare `PRD` beats `PRD.md`);
+ *    3. ONLY when `tryMdExt` is true AND the cleaned token is extensionless (`path.extname(token) === ""`):
+ *       try `abs + ".md"`, then `abs + ".markdown"` — first existing regular file wins (`#@PRD` → `PRD.md`);
+ *    4. otherwise → `null` (nothing resolved; the caller leaves the `#@` marker verbatim).
+ *  `tryMdExt` is `true` for markdown imports (§4.5 shorthand) and `false` for top-level user tokens
+ *  (§4.4 exact-only — top-level prompt behavior is byte-for-byte identical to today). Tokens already
+ *  ending in `.md`/`.markdown` or any extension are exact-only (`#@PRD.md` never becomes `PRD.md.md`).
+ *  Dotfiles: `path.extname(".env") === ""` technically qualifies for the fallback, BUT exact-match-wins
+ *  returns a bare `.env` before the `.md` fallback runs (follows PRD §4.5 literally — no dotfile exclusion).
+ *  Pure: only stats paths, never mutates `state` (preserves the scan-then-inject separation for dedup). */
+export async function resolveImportPath(
+  token: string,
+  baseDir: string,
+  tryMdExt: boolean,
+): Promise<string | null> {
+  const abs = expandTildeAndResolve(token, baseDir); // §4.4 — ~ expand + resolve(baseDir) — NO stat
+  if (await isRegularFile(abs)) return abs;          // §4.5 rule 3 — EXACT MATCH ALWAYS WINS
+  if (tryMdExt && path.extname(token) === "") {     // §4.5 rule 3 — extensionless shorthand ONLY
+    if (await isRegularFile(abs + ".md")) return abs + ".md";
+    if (await isRegularFile(abs + ".markdown")) return abs + ".markdown";
+  }
+  return null;                                       // nothing resolved → caller leaves marker verbatim
+}
+
 /** PRD §5.2 — lowercase extension for MIME_BY_EXT lookup, or "" for no-dot / hidden-file (dot at 0). */
 export function extOf(abs: string): string {
   const base = path.basename(abs);
@@ -385,13 +425,16 @@ type Ctx = {
  *   inCode is never called → top-level (user-prompt) behavior is unchanged. Markdown imports (T2.S3)
  *   pass skipCode:true.
  * opts.allowAbsTilde: when false, tokens starting with / or ~ are dropped (markdown relative-only, §4.5).
+ * opts.tryMdExt: when true, an extensionless token whose exact path is not a regular file falls back to
+ *   `<exact>.md` then `<exact>.markdown` (markdown-import shorthand, PRD §4.5 rule 3). Top-level user-prompt
+ *   scan passes `false` (§4.4 exact-only → top-level behavior is byte-for-byte identical to today).
  */
-export function scanTokens(
+export async function scanTokens(
   text: string,
   baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean },
   state: State,
-): { index: number; abs: string }[] {
+): Promise<{ index: number; abs: string }[]> {
   const localSeen = new Set<string>();
   const out: { index: number; abs: string }[] = [];
   // §5.6.1 — when scanning markdown content, precompute code regions once and skip `#@` matches whose
@@ -403,8 +446,9 @@ export function scanTokens(
     const token = cleanToken(m[2]); // trim trailing punctuation (§4.3)
     if (!token) continue; // empty after trim => skip, leave verbatim
     if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue; // §4.5 — markdown: relative only
-    const abs = expandTildeAndResolve(token, baseDir); // ~ expand + resolve(baseDir) (§4.4)
-    if (state.injectedSet.has(abs) || localSeen.has(abs)) continue; // dedup → leave verbatim
+    const abs = await resolveImportPath(token, baseDir, opts.tryMdExt); // §4.5 — exact, then .md/.markdown (stats)
+    if (!abs) continue; // nothing resolved → leave verbatim (missing/dir/non-regular)
+    if (state.injectedSet.has(abs) || localSeen.has(abs)) continue; // dedup on RESOLVED abs → leave verbatim
     localSeen.add(abs);
     out.push({ index: m.index!, abs });
   }
@@ -420,15 +464,18 @@ export function scanTokens(
  * The belt-and-suspenders `state.injectedSet.has(r.abs)` re-check is a NO-OP at top level in T1.S2
  * (scanTokens' localSeen already made each abs unique in records); it becomes load-bearing in T2 when
  * injectFile recurses into markdown imports.
+ *
+ * `opts.tryMdExt` is threaded straight through to scanTokens/resolveImportPath: the top-level user-prompt
+ * call site passes `false` (§4.4 exact-only), and the markdown-import path passes `true` (§4.5 shorthand).
  */
 async function processTokenStream(
   text: string,
   baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean },
   state: State,
   ctx: Ctx,
 ): Promise<number[]> {
-  const records = scanTokens(text, baseDir, opts, state); // scan once, before any injection
+  const records = await scanTokens(text, baseDir, opts, state); // scan once, before any injection (opts carries tryMdExt)
   const resolved: number[] = [];
   for (const r of records) {
     if (state.injectedSet.has(r.abs)) continue; // cross-subtree dedup since scan (no-op at top level in T1.S2)
@@ -596,8 +643,9 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
 
   const dir = path.dirname(abs); // §4.5 rule 2 — imports resolve relative to the markdown's directory, not cwd
 
-  // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true).
-  const records = scanTokens(content, dir, { allowAbsTilde: false, skipCode: true }, state);
+  // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true),
+  // markdown shorthand ON (tryMdExt:true → extensionless tokens try .md then .markdown, PRD §4.5 rule 3).
+  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true }, state);
 
   // Step 3.5 — EXISTENCE PRE-CHECK (PRD §10 / §5.4). scanTokens records a token as soon as it RESOLVES (it
   // does NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
@@ -697,7 +745,7 @@ export async function injectFiles(
   // claimed is left verbatim); processTokenStream's belt-and-suspenders injectedSet re-check is a no-op
   // at top level in T1.S2 (each abs is already unique in records) but load-bearing for T2 recursion.
   const resolvedIdx = await processTokenStream(
-    text, ctx.cwd, { allowAbsTilde: true, skipCode: false }, state, ctx);
+    text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false }, state, ctx);
 
   if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
