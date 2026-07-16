@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "markdownBareAtImports — Optional Bare-@ Markdown Imports (PRD §4.6)",
-      "status": "Researching",
+      "status": "Complete",
       "description": "Implements PRD §4.6 — the single opt-in config setting (markdownBareAtImports) that makes a delivered markdown file treat a bare @<path> (no leading #) as an import, with every rule that applies to #@ imports (relative-only resolution, extension shorthand, code-exempt, dedup, paging, budget). REALITY CHECK: the rest of the PRD (core #@ injection, text/image/binary classification, paged delivery, markdown transitive imports, extension shorthand, code-region detection, total-size budget accounting, and the #@ path autocomplete provider) is ALREADY implemented and passing in file-injector.ts (879 lines, 92 tests green, tsc --strict clean) — see plan/005_b7c78dbf73b1/architecture/system_context.md. This phase adds the config system + bare-@ matching, verifies the whole PRD, and syncs docs. The existing robustness improvements over the PRD §9 pseudocode (Unicode regex, magic-number image sniff, empty-image note, Step 3.5 existence pre-check, surrogate-safe headSlice) MUST be preserved, not reverted. Every implementation subtask follows implicit TDD: write the failing test into file-injector.test.mjs → implement → pass.",
       "milestones": [
         {
@@ -135,7 +135,7 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Verification Gate & Changeset-Level Documentation",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Final whole-changeset verification gate (run the complete suite + confirm clean typecheck — the Definition-of-Done confirmation, NOT test-writing, which rode with each implementation subtask) and the cross-cutting documentation sweep (Mode B: README feature overview). Depends on every implementing subtask so it runs last.",
           "tasks": [
             {
@@ -168,14 +168,14 @@
               "type": "Task",
               "id": "P1.M3.T2",
               "title": "Sync changeset-level documentation (README + overview)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Final Mode B doc sweep. Per-symbol JSDoc updates rode with their implementing subtasks (Mode A). This task updates the cross-cutting README overview to surface the new opt-in config capability so the delta ships with a coherent, non-stale feature description. Depends on every implementing subtask + the gate so it runs last.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T2.S1",
                   "title": "Add optional bare-@ markdown-imports subsection to README.md (Syntax + Limits)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S1",

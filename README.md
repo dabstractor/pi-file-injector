@@ -85,6 +85,25 @@ Images are matched by their real bytes, not just the extension. A text file rena
 - **Each file is injected at most once.** Across the whole prompt — top-level tokens, every import, and cycles — a given file appears in one block only. Shared dependencies dedup; cycles terminate.
 - **Shared budget.** Imports draw on the same context budget as the top-level prompt. When the running total exceeds the window, later files page (head block plus a `read`-tool directive) instead of overflow.
 
+### Optional: bare-`@` markdown imports
+
+Off by default — `#@` works with no config at all, and stays the only thing that ever triggers injection at the prompt. This is the one opt-in.
+
+If your docs already reference files as a bare `@file.md` (no `#`), you can make a delivered markdown file treat that the same way as `#@file.md`. Put this in `file-injector.json`:
+
+```json
+{ "markdownBareAtImports": true }
+```
+
+The file is read from two places — a project file overrides a global one:
+
+1. **Global:** `~/.pi/agent/file-injector.json`
+2. **Project:** `.pi/file-injector.json` in your current directory — honored **only in a trusted project**, so an untrusted checkout can't turn it on.
+
+When it's on, a bare `@api.md` inside a delivered markdown file imports exactly like `#@api.md`: relative-only paths, extension shorthand, code-exempt, deduped against everything else, and drawing on the same shared budget. `#@` keeps working unchanged and is never matched twice — a `#@api.md` is one import, not two. A missing or unreadable config file (or one that doesn't set the key) leaves everything at the default, so it never errors.
+
+It affects markdown content only — a bare `@path` you type in your prompt is never injected. See [Limits](#limits).
+
 ## Limits
 
 - **No size knob.** `#@` has no user-facing size setting. Oversize text files are delivered as a head block (first ~8 KB) plus a paging directive; the model reads the rest via the `read` tool. The model never holds a file larger than its context window all at once — that is a property of the medium, not of this extension.
@@ -94,6 +113,7 @@ Images are matched by their real bytes, not just the extension. A text file rena
 - **A backtick right after `#@` blocks it.** Inside a code span like `` `#@a.ts` ``, nothing is injected. To suppress `#@` anywhere, write `# @` with a space.
 - **Markdown imports are relative-only.** A `#@` inside a `.md`/`.markdown` file that points at an absolute or tilde path is ignored, never resolved.
 - **Only markdown is scanned.** A `#@` inside an injected `.ts`, `.json`, image, or any other non-markdown file is inert — only `.md`/`.markdown` pull in further files.
+- **Bare-`@` imports stay inside markdown.** Even with `markdownBareAtImports` on, a bare `@path` in your prompt is never injected — the setting only changes what a delivered markdown file pulls in. `#@` remains the sole prompt-level trigger.
 - **No autocomplete for in-file imports.** The `#@` path completer runs in the editor prompt only. Import directives live inside markdown files (written by hand), where your editor's normal file completion applies.
 
 ## `#@` versus `@`
