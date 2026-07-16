@@ -237,6 +237,18 @@ function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "shared", "api.md"), "# Shared API\n\nOutside cwd.\n");
   // ghost.md is INTENTIONALLY NOT created — it is the missing import for MD1.
 
+  // ── §4.6 bare-@ markdown-import fixtures (PRD §4.6 — P1.M2.T2.S1 cases #25-28 + §10 e/f/g). ──
+  //   notesBare.md: a bare `@api.md` (reuses the existing top-level api.md). notesEmail.md: a mid-word
+  //   `user@host.com` (excluded by BARE_AT_RE's word-char lookbehind). notesMention.md: a bare `@username`
+  //   (no username.md → not resolved). notesMixDedup.md: BOTH `#@api.md` and `@api.md` (same resolved abs →
+  //   dedup). other.md: a top-level bare-@ TARGET that must EXIST so #28's top-level-exclusion assertion is
+  //   meaningful (a wrong bareAt:true would inject it). global ~/.pi/agent/file-injector.json is NOT touched.
+  fsSync.writeFileSync(path.join(TMPDIR, "notesBare.md"), "# Bare Notes\n\nRefs @api.md here.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "notesEmail.md"), "# Email\n\nContact user@host.com.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "notesMention.md"), "# Mention\n\nPing @username now.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "notesMixDedup.md"), "Refs #@api.md and @api.md.\n");
+  fsSync.writeFileSync(path.join(TMPDIR, "other.md"), "# Other\n\nTop-level bare-@ target.\n");
+
   // Markdown extension-shorthand fixtures (PRD §4.5 rule 3 — T1.S1 resolveImportPath unit tests).
   // bare `README` (no ext) + `README.md` → exact-match-wins (bare beats .md). `PRD.md` exists but NOT bare
   // `PRD` → shorthand falls back to PRD.md. `only.markdown` exists but NOT bare `only`/`only.md` → fallback
@@ -348,6 +360,14 @@ const NOTES_GHOST = path.join(TMPDIR, "notesGhost.md");
 const NOTES_ABSENT = path.join(TMPDIR, "notesAbsent.md");
 const NOTES_DEDUP = path.join(TMPDIR, "notesDedup.md");
 const NOTES_SUB_PREFIX = path.join(TMPDIR, "notesSubPrefix.md");
+
+// §4.6 bare-@ markdown-import path constants (P1.M2.T2.S1 cases #25-28 + §10 e/f/g). Reuse EXISTING api.md
+// (#25/#26/#27/g) and notes.md (#27) — these 5 are the NEW self-contained fixtures (no duplication).
+const NOTES_BARE = path.join(TMPDIR, "notesBare.md");
+const NOTES_EMAIL = path.join(TMPDIR, "notesEmail.md");
+const NOTES_MENTION = path.join(TMPDIR, "notesMention.md");
+const NOTES_MIX_DEDUP = path.join(TMPDIR, "notesMixDedup.md");
+const OTHER_MD = path.join(TMPDIR, "other.md");
 
 // countFileBlocks — counts <file name="ABS"> block-openers for `abs` in `text`. Dedupes the inline
 // regex-count pattern (escape-special-chars + match length) used across F1/F1c/DUP1/etc.
@@ -1955,6 +1975,106 @@ await runCase("M2.T1.S1-e", "direct injectFiles — top-level bareAt:false regar
   const r = await mod.injectFiles("Diff #@a.ts and @b.ts", [], FIX, true); // bareAt param true, top-level scan hardcodes false
   assert(r.injected === 1, `top-level bare @ must NOT inject even with bareAt:true param; expected injected===1, got ${r.injected}`);
   assert(!r.text.includes(`<file name="${B_TS}">`), "bare @b.ts block must be absent");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── P1.M2.T2.S1: bare-@ wiring into injectMarkdown (PRD §4.6 — #25-28 + §10 e/f/g). ──
+// These exercise the FULL injection pipeline via injectFiles' bareAt param (Option A — the established
+// pattern for cases 15-24). injectMarkdown now scans with `bareAt: state.bareAt` (the P1.M2.T1.S1 seam),
+// carries `prefixLen` through Step 3.5 (type widening), and strips `r.index + r.prefixLen` in Step 4 (NOT +2).
+// With bareAt:false (default) behavior is byte-for-byte identical to today (#25). With bareAt:true a bare
+// `@api.md` inside a delivered markdown IS imported and stripped to `api.md` (prefixLen 1 — #26). Top-level
+// bare-@ is UNAFFECTED (#28 — top-level scan hardcodes bareAt:false). The config→session_start→input→injectFiles
+// path is covered by P1.M2.T1.S1's M2.T1.S1-a..c; this block isolates the injectMarkdown wiring.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// #25 — DEFAULT-OFF. bareAt defaults false (no 4th arg) → BARE_AT_RE not run in injectMarkdown → the bare
+// @api.md inside notesBare.md is NOT matched/injected/stripped → left VERBATIM. Only notesBare.md injects.
+await runCase(25, "§4.6 default-off: bare @api.md in notesBare.md NOT imported (verbatim), injected=1", async () => {
+  const r = await mod.injectFiles("Review #@notesBare.md", [], FIX); // bareAt defaults false
+  assert(r.injected === 1, `bareAt off → only notesBare.md injected (bare-@ not scanned), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  // the bare @api.md marker is left VERBATIM (bareAt:false → BARE_AT_RE not run → not a record → not stripped)
+  assert(r.text.includes("Refs @api.md here."), "the bare @api.md must be left VERBATIM (bareAt off, not scanned)");
+  assert(!r.text.includes('<file name="' + API + '">'), "api.md must NOT be injected (bare-@ not scanned when bareAt off)");
+  assert(countFileBlocks(r.text, API) === 0, `api.md must appear ZERO times, got ${countFileBlocks(r.text, API)}`);
+});
+
+// #26 — BARE-@ ON, prefixLen-1 STRIP (the smoking-gun +2-bug guard). bareAt:true → BARE_AT_RE runs in
+// injectMarkdown → the bare @api.md IS matched (prefixLen 1) → injected (notesBare.md + api.md) AND stripped
+// to `api.md` (1 char removed). The `+2` bug would strip `@a` leaving `pi.md`; the explicit guard below pins it.
+await runCase(26, "§4.6 on: bare @api.md imported + stripped to api.md (prefixLen 1); +2-bug fingerprint ABSENT", async () => {
+  const r = await mod.injectFiles("Review #@notesBare.md", [], FIX, true); // bareAt on
+  assert(r.injected === 2, `bareAt on → notesBare.md + api.md injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  const iNotes = r.text.indexOf('<file name="' + NOTES_BARE + '">');
+  const iApi = r.text.indexOf('<file name="' + API + '">');
+  assert(iNotes !== -1 && iApi !== -1, "both notesBare.md and api.md blocks must be present");
+  assert(iNotes < iApi, "notesBare.md block before api.md block (pre-order depth-first)");
+  // prefixLen-1 strip: the '@' is removed, leaving `api.md` (1 char stripped, NOT 2)
+  assert(r.text.includes("Refs api.md here."), "prefixLen-1 strip: bare @api.md → api.md (the '@' removed)");
+  assert(!r.text.includes("Refs @api.md here."), "the bare @api.md marker must NOT retain the '@' (stripped)");
+  // SMOKING-GUN +2-bug GUARD: a wrong +2 strip would remove '@a' leaving 'pi.md'. Assert the bug's fingerprint ABSENT.
+  assert(!r.text.includes("Refs pi.md here."), "SMOKING-GUN: '+2' bug would strip '@a' → 'pi.md'; must be ABSENT (prefixLen-1 strip works)");
+});
+
+// #27 — bareAt ON + existing #@notes.md (no double-match). The existing notes.md has `#@api.md` (prefixLen 2)
+// and a fenced `#@example.ts`. With bareAt on, the #@api.md is matched ONCE (BARE_AT_RE's lookbehind forbids a
+// preceding '#' → no double-match), stripped with prefixLen 2. The fenced #@example.ts stays verbatim (code-exempt).
+await runCase(27, "§4.6 on+#@: #@api.md matched ONCE (no double-match), injected=2; fenced code still verbatim", async () => {
+  const r = await mod.injectFiles("Review #@notes.md", [], FIX, true); // bareAt on; reuses EXISTING notes.md
+  assert(r.injected === 2, `notes.md + api.md injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  // api.md matched EXACTLY ONCE (BARE_AT_RE forbids preceding '#' → #@api.md never double-matched)
+  assert(countFileBlocks(r.text, API) === 1, `api.md must appear exactly ONCE (no double-match), got ${countFileBlocks(r.text, API)}`);
+  // prefixLen-2 strip for the #@ form (unchanged behavior; the +r.prefixLen edit == +2 here)
+  assert(r.text.includes("Imports api.md here."), "#@api.md stripped to api.md (prefixLen 2)");
+  assert(!r.text.includes("Imports #@api.md here."), "the #@api.md marker must NOT retain #@");
+  // the fenced #@example.ts is STILL verbatim (code-exempt even with bareAt on)
+  assert(r.text.includes("#@example.ts"), "fenced #@example.ts must be left VERBATIM (code-exempt, bareAt-independent)");
+});
+
+// #28 — TOP-LEVEL UNAFFECTED (the §4.6 markdown-only invariant). A top-level bare @other.md (other.md EXISTS)
+// must NOT inject even with bareAt:true passed directly — the top-level scan hardcodes bareAt:false (P1.M2.T1.S1).
+// injectFiles has NO !text.includes('#@') pre-check (that guard is in the input handler), so the full pipeline
+// runs → processTokenStream(bareAt:false) → no top-level bare-@ match → injected=0 → original text returned.
+await runCase(28, "§4.6 on+top-level: bare @other.md (exists) NOT injected (injected=0); top-level is #@-only", async () => {
+  const r = await mod.injectFiles("Read @other.md", [], FIX, true); // bareAt param true; top-level scan hardcodes false
+  assert(r.injected === 0, `top-level bare @ must NOT inject even with bareAt:true; expected injected===0, got ${r.injected}`);
+  assert(r.text === "Read @other.md", `count===0 returns the ORIGINAL text byte-for-byte; got ${JSON.stringify(r.text)}`);
+  assert(!r.text.includes('<file name="' + OTHER_MD + '">'), "other.md block must be absent (top-level is #@-only)");
+});
+
+// §10(e) — MID-WORD @ EXCLUDED. `user@host.com` in a markdown (bareAt on) is left VERBATIM: BARE_AT_RE forbids
+// a preceding word char (\p{L}\p{N}_) so the letter before @ excludes it. Only notesEmail.md injects.
+await runCase("M2.T2.S1-e", "§10 email: user@host.com in markdown (on) left VERBATIM (mid-word @ excluded)", async () => {
+  const r = await mod.injectFiles("Read #@notesEmail.md", [], FIX, true);
+  assert(r.injected === 1, `only notesEmail.md injected (mid-word @ not matched), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.includes("Contact user@host.com."), "user@host.com must be left VERBATIM (BARE_AT_RE word-char lookbehind excludes mid-word @)");
+});
+
+// §10(f) — UNRESOLVED @ MENTION. `@username` in prose (bareAt on, no username.md) is recorded by BARE_AT_RE
+// but Step 3.5's existence pre-check rejects it (no username.md) → left VERBATIM (not stripped, not injected).
+await runCase("M2.T2.S1-f", "§10 mention: @username (on, no username.md) left VERBATIM (not resolved)", async () => {
+  const r = await mod.injectFiles("Read #@notesMention.md", [], FIX, true);
+  assert(r.injected === 1, `only notesMention.md injected (no username.md → not resolved), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.includes("Ping @username now."), "@username must be left VERBATIM (Step 3.5 existence pre-check: no username.md → not stripped)");
+});
+
+// §10(g) — DEDUP on resolved abs. notesMixDedup.md has BOTH `#@api.md` (prefixLen 2) and `@api.md` (prefixLen 1)
+// — both resolve to the SAME api.md. Dedup keys on the resolved abs → api.md injected ONCE. The first marker
+// (#@, encountered first, lower index) wins → stripped to `api.md`; the second (@) is dropped (deduped) → VERBATIM.
+await runCase("M2.T2.S1-g", "§10 dedup: #@api.md + @api.md (on) → api.md ONCE; first stripped, second verbatim", async () => {
+  const r = await mod.injectFiles("Review #@notesMixDedup.md", [], FIX, true);
+  assert(r.injected === 2, `notesMixDedup.md + api.md (deduped) injected, got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  // api.md injected EXACTLY ONCE (dedup on resolved abs — both #@api.md and @api.md collapse)
+  assert(countFileBlocks(r.text, API) === 1, `api.md must appear exactly ONCE (dedup on resolved abs), got ${countFileBlocks(r.text, API)}`);
+  // first marker #@api.md stripped to api.md (prefixLen 2); second @api.md left VERBATIM (deduped → not a record → not stripped)
+  assert(r.text.includes("Refs api.md and @api.md."), "first #@api.md stripped to api.md; second @api.md left VERBATIM (deduped)");
+  assert(!r.text.includes("Refs #@api.md"), "the first (dedup-winning) marker must NOT retain #@");
 });
 
 // 10. Summary + cleanup + exit.

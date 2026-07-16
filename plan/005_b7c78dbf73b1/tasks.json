@@ -70,7 +70,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Integration Wiring (thread bareAt from config through the pipeline)",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Wire the M1 building blocks together: add bareAt to the shared State, load config on session_start into a module-level cfg, have the input handler derive bareAt and pass it into injectFiles, thread the bareAt opt through processTokenStream (top-level = false), and update injectMarkdown to pass bareAt:state.bareAt + carry prefixLen through its Step 3.5 existence pre-check and Step 4 marker stripping. Each subtask is TDD-complete with its integration tests. After this milestone the feature is functionally complete.",
           "tasks": [
             {
@@ -105,14 +105,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Wire bare-@ into the markdown import branch (injectMarkdown) + integration tests #25-28",
-              "status": "Researching",
+              "status": "Complete",
               "description": "injectMarkdown is the ONLY call site that passes bareAt:true (from state.bareAt). Update its scan call, carry prefixLen through the existing Step 3.5 existence pre-check, and make Step 4 marker stripping use prefixLen instead of the hardcoded 2. Includes the §11 manual-matrix integration tests (#25-28) as automated cases.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "injectMarkdown: pass bareAt:state.bareAt + carry prefixLen through Step 3.5 + strip with prefixLen in Step 4 (with integration tests §11 #25-28 + §10 bare-@ edges)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M2.T1.S1",
@@ -142,14 +142,14 @@
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Full regression + typecheck gate",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Run the entire suite (existing 92 + all new bare-@/config cases added in M1/M2) and confirm tsc --strict is clean. This is the Definition-of-Done gate for the implementation — tests were written per-subtask (implicit TDD); this confirms they all pass together and nothing regressed.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Run full suite + typecheck; confirm no regressions and injectMarkdown still private",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T2.S1"

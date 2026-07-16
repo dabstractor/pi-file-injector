@@ -665,7 +665,10 @@ export function emitText(abs: string, content: string, state: State): void {
  *
  * Six steps (PRD §5.6):
  *   2. Claim self (idempotent: injectFile pre-claimed abs; included for contract self-containedness).
- *   3. scanTokens(content, dirname(abs), { allowAbsTilde:false, skipCode:true }) → resolved import records.
+ *   3. scanTokens(content, dirname(abs), { allowAbsTilde:false, skipCode:true, bareAt:state.bareAt }) → resolved
+ *      import records. §4.6 markdown-only bare-@ opt-in: passes `bareAt: state.bareAt` (the seam P1.M2.T1.S1
+ *      created — state.bareAt is derived from cfg.markdownBareAtImports in injectFiles). bareAt:false (default)
+ *      → BARE_AT_RE not run → byte-for-byte identical to today (all records prefixLen 2).
  *   3.5. EXISTENCE PRE-CHECK (PRD §10 / §5.4): scanTokens records a token as soon as it RESOLVES (it does
  *      NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
  *      '#@' marker stripped (Step 4) even though injectFile later returns false and nothing is injected for
@@ -673,10 +676,14 @@ export function emitText(abs: string, content: string, state: State): void {
  *      recursing, so the strip decision must be made NOW — unlike the top-level path (processTokenStream),
  *      which can inject-then-strip because the user prompt is not a pre-order block. Stat each import; keep
  *      only those that stat-succeed AND are regular files (isFile also rejects directories, matching §5.4
- *      and injectFile's own check). injectFile re-stats harmlessly on recursion. `injectable ⊆ records`.
- *   4. Strip '#@' from each INJECTABLE marker (high→low, leaving the path) → `stripped` = block content.
- *      Missing/dir imports keep '#@' verbatim. Unresolved/deduped/absolute/inside-code markers were never in
- *      records and keep '#@' verbatim.
+ *      and injectFile's own check). injectFile re-stats harmlessly on recursion. `injectable ⊆ records`, and
+ *      `injectable` carries `prefixLen` (forwarded from records) so Step 4 can strip the correct marker width.
+ *   4. Strip the marker from each INJECTABLE record (high→low, leaving the path) by `r.index + r.prefixLen`
+ *      → `stripped` = block content. prefixLen is 2 for `#@` (r.index is the '#'), 1 for bare `@` (r.index is
+ *      the '@'); both regexes' lookbehinds are zero-width, so r.index is always the marker's first char.
+ *      Missing/dir imports keep the marker verbatim. Unresolved/deduped/absolute/inside-code markers were never
+ *      in records and keep the marker verbatim. (byte-for-byte default: every default record has prefixLen 2,
+ *      so `+ r.prefixLen` == the old `+ 2`.)
  *   5. emitText(abs, stripped, state) — the paged decision runs on the STRIPPED content (so directive text
  *      the model won't see does not bias the budget). emitText owns the subtract + paged bump (NOT count).
  *   6. Recurse into INJECTABLE imports in ENCOUNTER order: if not already claimed, await injectFile(abs)
@@ -698,7 +705,10 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
 
   // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true),
   // markdown shorthand ON (tryMdExt:true → extensionless tokens try .md then .markdown, PRD §4.5 rule 3).
-  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true }, state);
+  // §4.6 — thread state.bareAt (set from cfg in injectFiles — the P1.M2.T1.S1 seam) so a markdown author who
+  // opts into markdownBareAtImports can write a bare @api.md (prefixLen 1). bareAt:false (default) → BARE_AT_RE
+  // is not run → records are byte-for-byte identical to today (all prefixLen 2).
+  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
 
   // Step 3.5 — EXISTENCE PRE-CHECK (PRD §10 / §5.4). scanTokens records a token as soon as it RESOLVES (it
   // does NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
@@ -708,7 +718,10 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
   // user prompt is not a pre-order block; the markdown path cannot). Stat each import; keep only those that
   // stat-succeed AND are regular files (isFile also rejects directories, matching injectFile's own check and
   // §5.4: directory → verbatim). injectFile re-stats harmlessly on recursion.
-  const injectable: { index: number; abs: string }[] = [];
+  // TYPE-ONLY widening: records carry prefixLen (scanTokens P1.M1.T1.S1); widening the declared element type
+  // lets Step 4 read r.prefixLen. The filter body (injectable.push(r)) forwards the WHOLE record unchanged —
+  // do NOT build a new object literal here (that would DROP prefixLen, the codebase_delta §8.2 anti-pattern).
+  const injectable: { index: number; prefixLen: number; abs: string }[] = [];
   for (const r of records) {
     try {
       const st = await fs.stat(r.abs);
@@ -718,11 +731,13 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
     }
   }
 
-  // Step 4 — strip '#@' from each INJECTABLE import marker (high→low so earlier offsets stay valid), leaving
-  // the path. `stripped` becomes THIS file's block content. Missing/dir imports keep '#@' verbatim.
+  // Step 4 — strip the marker from each INJECTABLE import (high→low so earlier offsets stay valid), leaving
+  // the path. `stripped` becomes THIS file's block content. Missing/dir imports keep the marker verbatim.
+  // §4.6 — strip by the marker's width: prefixLen 2 for `#@` (r.index is the '#'), 1 for bare `@` (r.index is
+  // the '@'); both regexes' lookbehinds are zero-width, so r.index is always the marker's first char.
   let stripped = content;
   for (const r of [...injectable].sort((a, b) => b.index - a.index)) {
-    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + 2); // m.index is the '#' (lookbehind is zero-width)
+    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + r.prefixLen);
   }
 
   // Step 5 — emit THIS file's block. The paged decision runs on the STRIPPED content (§5.6 step 5).
