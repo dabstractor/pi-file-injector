@@ -11,14 +11,14 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Major Correctness Fixes in injectFiles Assembly (Issues 1 and 2)",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Fix the two Major (Should Fix) bugs, both in the injectFiles(text, imagesIn, ctx) core. Issue 1: a file named by more than one #@ token in a single prompt is injected multiple times (the priorPaths dedup set is built once before the loop and never updated in-loop). Issue 2: in a mixed prompt (at least one success + at least one fail), failed #@ tokens are stripped of their #@ trigger by the blanket post-loop text.replace(FILE_INJECT_RE, ...) , violating PRD 6.2 (failed tokens must stay byte-for-byte verbatim, #@ included). Both fixes instrument the SAME per-token success-recording sites inside the loop, so they are sequenced (S2 depends on S1) and share an explicit handoff. Verified fix strategies and the exact code/test locations are in architecture/code_changes_analysis.md.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Fix Major Assembly Bugs: Within-Prompt Dedup + Failed-Token Stripping (Issues 1 and 2)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Resolve the two Major correctness bugs in injectFiles. Both touch the loop body's per-token success sites, so S1 (dedup) is applied first and S2 (stripping) lands its index recording at the same success sites S1 already instrumented. Issue 1 breaks zero existing tests; Issue 2 breaks exactly one (F2, which currently asserts the buggy stripping) and adds new mixed success/fail regression cases.",
               "subtasks": [
                 {
@@ -40,7 +40,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Strip #@ only from actually-injected tokens via index-based splice, leaving failed tokens verbatim (Issue 2)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -68,14 +68,14 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Unify the notify wording to PRD 5.5 (N whole / N whole, M paged) (Issue 3)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Change the all-whole notify branch to use the PRD 5.5 wording ('#@ injected N whole') so the message is consistent in both the all-whole and the paged cases. The paged>0 branch already uses whole/paged and is unchanged.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Update the handler notify message and the 4 test cases that pin the old wording",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 3 section). CONFIRMED LIVE: 'Review #@a.ts' -> notify '#@ injected 1 file'; PRD 5.5 Notify examples say '#@ injected N whole' versus '#@ injected N whole, M paged'. The current handler computes 'whole = injected - paged' and builds msg with a ternary: when paged>0 it emits '#@ injected <whole> whole, <paged> paged'; when paged===0 it emits '#@ injected <injected> file' or 'files'. The paged>0 branch is already correct; only the paged===0 branch deviates.\n2. INPUT: The 'input' handler in the default factory (registered via pi.on('input', ...)). injected and paged come from injectFiles. ctx.hasUI gates the notify; ctx.ui.notify(msg, 'info').\n3. LOGIC: Replace the branched msg with a single unified expression matching PRD 5.5: the message is the string '#@ injected ' followed by whole, followed by ' whole', and when paged>0 additionally ', ' + paged + ' paged'. In other words: when paged===0 the message is '#@ injected N whole'; when paged>0 it is '#@ injected N whole, M paged'. Keep the 'if (ctx.hasUI) ctx.ui.notify(msg, info)' guard and the 'return { action: transform, text, images }' unchanged. (Implicit TDD: update the assertions first so they fail, then apply the fix.)\n4. OUTPUT: notify reads '#@ injected N whole' for all-whole and '#@ injected N whole, M paged' when paging. UPDATE exactly these existing assertions (verified by grep - all mechanical 'file(s)' to 'whole'): Case 9 (around line 329) '#@ injected 2 files' -> '#@ injected 2 whole'; Case 12 (around line 361) '#@ injected 1 file' -> '#@ injected 1 whole'; F4 (around lines 661 and 665) '1 file'->'1 whole' and '2 files'->'2 whole'; PN1 (around line 823) '#@ injected 2 files' -> '#@ injected 2 whole' and refresh its name/comment ('existing plural style preserved' -> 'unified whole style'). PN2 (around line 836, '1 whole, 1 paged') and PN3 (around line 847, '0 whole, 1 paged') already match the paged branch - leave them. Full suite green.\n5. DOCS: none - the notify string is not quoted in README.md, so no doc surface changes. [Mode A: none.]",

@@ -191,6 +191,12 @@ export async function injectFiles(
   // prior block for X must not block a NEW path Y). Populated after each successful inject below.
   const injectedThisRun = new Set<string>();
 
+  // Issue 2 — start indices of tokens that ACTUALLY injected (pushed at each success site below).
+  // Used after the loop to strip '#@' from EXACTLY those tokens (failed/dir/error and deduped
+  // repeats are never pushed → they keep '#@' verbatim, PRD §6.2). Group 1 of FILE_INJECT_RE is
+  // zero-width, so m.index is exactly the '#'; splicing out 2 chars drops exactly '#@'.
+  const injectedIndexes: number[] = [];
+
   for (const m of text.matchAll(FILE_INJECT_RE)) {
     const raw = m[2]; // capture group 2 = path token after #@ (group 1 is the zero-width ^ anchor)
     const token = cleanToken(raw); // trim trailing punctuation (S2)
@@ -223,6 +229,7 @@ export async function injectFiles(
       if (mime && buf.length === 0) {
         blocks.push(formatEmptyImageBlock(abs));
         injectedThisRun.add(abs); // within-run dedup (Issue 1)
+        injectedIndexes.push(m.index); // record injected-token index for precise #@ strip (Issue 2)
         count++;
         continue;
       }
@@ -264,6 +271,7 @@ export async function injectFiles(
         }
       }
       injectedThisRun.add(abs); // within-run dedup (Issue 1) — covers text-inline/paged/image/binary
+      injectedIndexes.push(m.index); // record injected-token index for precise #@ strip (Issue 2)
       count++;
     } catch {
       // read/resize error => leave THIS token verbatim, keep processing the rest (PRD §5.4, §12.5)
@@ -277,7 +285,16 @@ export async function injectFiles(
   // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
   // every #@ is 2 tokens of pure noise. Reached only when count > 0, so the nothing-injected path
   // above still returns the prompt byte-for-byte (missing/dir/error tokens keep their #@ verbatim).
-  const strippedText = text.replace(FILE_INJECT_RE, (_m, _boundary, path) => path);
+  // §6.2 — strip the '#@' trigger ONLY from tokens that ACTUALLY injected (Issue 2). Failed tokens
+  // (missing/dir/error) and deduped repeats were never pushed, so they keep '#@' verbatim.
+  // INDEX-BASED SPLICE (not substring replace): an injected match can be a prefix of another token
+  // (e.g. '#@a.ts' ⊂ '#@a.ts.bak'), so a substring replace would corrupt the longer token. Group 1
+  // of FILE_INJECT_RE is zero-width → m.index is exactly the '#'; removing 2 chars drops exactly
+  // '#@'. Process high→low so earlier offsets stay valid.
+  let strippedText = text;
+  for (const i of [...injectedIndexes].sort((a, b) => b - a)) {
+    strippedText = strippedText.slice(0, i) + strippedText.slice(i + 2);
+  }
   const finalText = `${strippedText}\n\n---\n\n${blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
   return { text: finalText, images, injected: count, paged };
 }

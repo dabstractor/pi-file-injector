@@ -633,7 +633,7 @@ await runCase("F2", "F2 — sentinel string in prompt no longer gates injection 
   const prompt = '<!--#@file-injected--> Review #@a.ts';
   const r = await mod.injectFiles(prompt, [], FIX);
   assert(r.injected === 1, `a.ts must be injected despite the sentinel string in the prompt (got ${r.injected})`);
-  assert(r.text.startsWith('<!--file-injected--> Review a.ts'), "both #@ markers stripped (sentinel's #@ too); paths remain as inline references");
+  assert(r.text.startsWith('<!--#@file-injected--> Review a.ts'), "only the injected #@a.ts is stripped (→ a.ts); the failed sentinel token keeps its #@ verbatim (Issue 2 fix)");
   assert(r.text.includes('<file name="' + A_TS + '">'), "injected text must contain the a.ts <file> block");
   // Exactly ONE block (a.ts) — no spurious block from the ghost `#@file-injected-->` token.
   const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
@@ -644,6 +644,32 @@ await runCase("F2", "F2 — sentinel string in prompt no longer gates injection 
   const slot = captureHandler();
   const out = await slot.cb({ text: prompt, source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform (sentinel no longer gates), got '${out.action}'`);
+});
+
+await runCase("FS1", "FS1 — mixed success+missing: failed token keeps #@ (Issue 2)", async () => {
+  const r = await mod.injectFiles("Review #@a.ts and check #@missing.ts", [], FIX);
+  assert(r.injected === 1, `a.ts injected (count=1), got injected=${r.injected}`);
+  assert(r.text.startsWith("Review a.ts"), "the injected #@a.ts is stripped to a.ts");
+  assert(r.text.includes("#@missing.ts") === true, `the FAILED #@missing.ts must keep its #@ verbatim (PRD §6.2), got text=${JSON.stringify(r.text.slice(0, 60))}`);
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `exactly 1 <file> block (a.ts only); missing.ts injected nothing (got ${aCount})`);
+});
+
+await runCase("FS2", "FS2 — mixed success+directory: failed token keeps #@ (Issue 2)", async () => {
+  const r = await mod.injectFiles("Review #@a.ts and list #@src/", [], FIX);
+  assert(r.injected === 1, `a.ts injected (count=1), got injected=${r.injected}`);
+  assert(r.text.startsWith("Review a.ts"), "the injected #@a.ts is stripped to a.ts");
+  assert(r.text.includes("#@src/") === true, `the directory token #@src/ must keep its #@ verbatim (PRD §6.2), got text=${JSON.stringify(r.text.slice(0, 60))}`);
+});
+
+await runCase("FS3", "FS3 — Issue1×Issue2: deduped repeat keeps #@ (first stripped)", async () => {
+  // Same path twice: Issue 1 dedup SKIPS the 2nd (it does not inject); Issue 2 strips #@ only from
+  // actually-injected tokens. ⇒ first stripped to a.ts, deduped second KEEPS its #@. One block.
+  const r = await mod.injectFiles("Compare #@a.ts with #@a.ts", [], FIX);
+  assert(r.injected === 1, `same path twice injects ONCE (Issue 1), got injected=${r.injected}`);
+  assert(r.text.startsWith("Compare a.ts with #@a.ts"), `first stripped, deduped second keeps #@ (Issue 2), got text=${JSON.stringify(r.text.slice(0, 40))}`);
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `exactly ONE <file> block for a.ts (got ${aCount})`);
 });
 
 await runCase("F3a", "F3 — mislabeled image (text body, .png ext) → text path, no garbage image", async () => {
