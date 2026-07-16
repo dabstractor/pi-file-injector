@@ -26,7 +26,7 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - **One syntax, every context.** Because the extension hooks the `input` event (which fires for *every* prompt — interactive typed messages *and* the initial CLI/`-p` message), `#@file` works identically whether you launch with it or type it mid-session. (See §3.)
 - **Explicit intent.** `#@` can't be confused with a path-completion trigger or an email-style `@mention`. The user is saying "give the model this whole file," and that's exactly what happens.
 - **Composable for docs.** `#@spec.md` pulls in everything `spec.md` references with the *same* `#@` directive — spec-and-its-dependencies in one token, loop-safe via dedup (§5.6).
-- **Zero config.** No thresholds, no toggles, no config files. It does one thing.
+- **Zero config by default.** No setup is required — `#@` works out of the box. There is one opt-in setting (`markdownBareAtImports`, §4.6) for users who want a bare `@file.md` to import inside markdown too; without it, behavior is fixed and predictable.
 
 ### Tagline
 > "`#@file`: the whole file, every time, everywhere."
@@ -38,10 +38,10 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 ### Goals
 1. **New syntax `#@<path>`** that unconditionally **delivers the entire file** into the model's context at prompt-submission time: injected whole when it fits remaining context, paged via the model's `read` tool when it does not (§5.5).
 2. **Works in every input context** — interactive TUI, the initial CLI/`-p` message, and RPC — because it operates on the `input` event.
-3. **No user-facing configuration.** No toggles, no config files, no env vars. The inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5). Behavior is fixed and predictable.
+3. **No configuration required.** `#@` works with zero setup; the inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5), and there are no knobs for format, image handling, paging, or budget. The single user-facing setting is the opt-in `markdownBareAtImports` (§4.6), off by default.
 4. **Correct file-type handling** with no knobs: text → content; image → attached; other binary → a clear note (not garbage); missing/dir → left as a literal token.
 5. **Non-destructive & loop-safe.** Leaves the user's original prompt intact; never breaks a prompt on an error; never re-expands its own or other extensions' injected messages.
-6. **Markdown transitive imports.** A delivered markdown file (`.md`/`.markdown`) is scanned for further `#@<path>` directives; each resolves **relative to that markdown file's directory**, is delivered as its own block, and is itself scanned if markdown. **An import may omit its `.md`/`.markdown` extension** — an extensionless token (e.g. `#@PRD`) resolves to `PRD.md` or `PRD.markdown` when no bare file of that name exists, treated as an exact match (markdown imports only; top-level tokens stay exact-match, §4.4). Recursion is bounded by **dedup — each absolute path is injected at most once across the whole prompt** (including paths already present as `<file>` blocks). Absolute/tilde paths inside markdown are ignored; `#@` inside fenced or inline code is ignored. All other rules (file-type handling, paging, budget) apply to imported files unchanged.
+6. **Markdown transitive imports.** A delivered markdown file (`.md`/`.markdown`) is scanned for further `#@<path>` directives; each resolves **relative to that markdown file's directory**, is delivered as its own block, and is itself scanned if markdown. **An import may omit its `.md`/`.markdown` extension** — an extensionless token (e.g. `#@PRD`) resolves to `PRD.md` or `PRD.markdown` when no bare file of that name exists, treated as an exact match (markdown imports only; top-level tokens stay exact-match, §4.4). Recursion is bounded by **dedup — each absolute path is injected at most once across the whole prompt** (including paths already present as `<file>` blocks). Absolute/tilde paths inside markdown are ignored; `#@` inside fenced or inline code is ignored. An opt-in setting (`markdownBareAtImports`, §4.6) additionally treats a bare `@<path>` (no `#`) as a markdown import, with all the same rules. All other rules (file-type handling, paging, budget) apply to imported files unchanged.
 7. **Total-size context accounting.** A single shared context-budget accumulator spans the entire prompt — every top-level token **and every transitive import** — with each delivered file (text whole/head, image, binary note) subtracting its cost *before* the next file is decided, so the inline-vs-paged decision is made against the running total of all files injected so far, not per-file in isolation (§5.6.2).
 
 ### Non-Goals
@@ -55,7 +55,7 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - **No extension shorthand at the top level.** The `.md`/`.markdown` omission is a markdown-import convenience (authored in files, no live completion). Top-level `#@` tokens stay exact-match — the user has path autocomplete (§14) and types the full name.
 - **No replacement of `@`, `read`, or any built-in.** `#@` is purely additive.
 - **No custom TUI rendering.** Injected content appears in the user's message bubble normally.
-- **No config** of any kind (this bears repeating).
+- **No config required to work.** `#@` injection needs no setup; the only setting is the opt-in `markdownBareAtImports` (§4.6). There are no toggles for format, image handling, paging, or context budget — those stay derived/fixed.
 
 ---
 
@@ -122,7 +122,8 @@ The built-in CLI `@file` path uses helpers that are **not** exported from the pa
 | `resizeImage(bytes, mime)` | ✅ yes | directly (image downscale to provider limits) |
 | `formatDimensionNote(resized)` | ✅ yes | directly (image dimension hint) |
 | `getLanguageFromPath(path)` | ✅ yes | not used (markdown is treated as text + scanned for imports, §5.6; no per-language formatting) |
-| `CONFIG_DIR_NAME` | ✅ yes | N/A (no config in v1) |
+| `CONFIG_DIR_NAME` | ✅ yes | project-local config path (`<cwd>/.pi/file-injector.json`, §4.6) |
+| `getAgentDir()` | ✅ yes | global config path (`~/.pi/agent/file-injector.json`, §4.6) |
 | `processImage(bytes, mime)` | ❌ internal | `resizeImage` instead |
 | `detectSupportedImageMimeTypeFromFile(path)` | ❌ internal | small inline MIME table (§5.2) |
 | `resolveReadPath(p, cwd)` (tilde + macOS Unicode-space) | ❌ internal | inline tilde expansion via `os.homedir()` (§4) |
@@ -185,6 +186,24 @@ A markdown file (`.md`/`.markdown`) may contain `#@<path>` directives using **ex
 4. **Code is exempt.** A `#@<path>` occurring inside a fenced code block or inline code is **not** an import — it is left verbatim and never stripped. This is the escape hatch for markdown that documents the `#@` syntax itself. Detection is approximate-CommonMark (§5.6.1).
 
 Everything else — token cleanup (§4.3), dedup, file-type handling, paging, budget — applies to imports exactly as to top-level tokens.
+
+### 4.6 Optional bare-`@` markdown imports (config: `markdownBareAtImports`)
+
+By default a markdown import **requires** the `#@` prefix (§4.5). Some doc conventions write file references as a bare `@file.md` (no `#`); to support those without making `#@` mandatory inside markdown, the extension exposes one opt-in setting.
+
+**Config file:** `file-injector.json`, read from two locations (project overrides global, merged shallowly):
+1. **Global:** `~/.pi/agent/file-injector.json` — `path.join(getAgentDir(), "file-injector.json")`.
+2. **Project:** `<cwd>/.pi/file-injector.json` — `path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json")`, honored **only when `ctx.isProjectTrusted()`** (an untrusted project cannot enable it).
+
+```json
+{ "markdownBareAtImports": true }
+```
+
+**Effect.** When `markdownBareAtImports === true`, markdown import scanning (§5.6) matches **both** `#@<path>` *and* a bare `@<path>`. The bare match uses `BARE_AT_RE = /(^|(?<=[^\w#]))@(\S+)/g` — an `@` at start-of-string or after a non-word char that is **not `#`**, so `#@file` is matched once (by `#@`), never twice. Every other rule — relative-only resolution, extension shorthand (§4.5 rule 3), code-exempt (rule 4), dedup, paging, budget — applies identically. The marker is stripped to its path just like `#@` (stripping 1 char instead of 2).
+
+**Scope.** Bare-`@` matching is **markdown-only**. The top-level user prompt is unaffected (always `#@`, §4.4); a bare `@path` at the prompt stays Pi's existing behavior and is never injected by this extension. Non-resolving bare tokens (e.g. `@username` with no matching file) are left verbatim, so a prose mention imports only when it happens to name a real file relative to the markdown's directory.
+
+**Loading.** Config is read on `session_start` (which provides `ctx.cwd` and `ctx.isProjectTrusted()`) and cached for the session; the `input` handler reads the cached value. A missing or malformed config file → default (`markdownBareAtImports: false`), never an error.
 
 ---
 
@@ -286,7 +305,7 @@ A delivered file whose lowercased extension is `md` or `markdown` is, in additio
 
 **Step 2 — claim self.** Add the markdown file's own absolute path to the global `injectedSet` *before* scanning, so a self-import (`notes.md` containing `#@notes.md`) dedups to verbatim and cannot recurse into itself.
 
-**Step 3 — scan for imports.** Compute the file's **code regions** (fenced blocks + inline code, approximate-CommonMark — see §5.6.1), then run `FILE_INJECT_RE` over the content and **drop any match whose start index lies inside a code region**. For each surviving match, clean the token (§4.3); if empty or if it starts with `/` or `~` → ignore (leave verbatim, no strip). **Resolve** the rest via `resolveImportPath(token, dirname(abs), tryMdExt=true)` (§4.5): try the exact path; if it is not an existing regular file **and** the token is extensionless (`path.extname(token) === ""`), try `<exact>.md` then `<exact>.markdown` — first existing regular file wins (`#@PRD` → `PRD.md`). If nothing resolves → ignore (leave verbatim). The scan helper is `async` (it stats candidate paths) and maintains a per-file `localSeen` set, checked alongside the global `injectedSet` **on the resolved abs**: if already in either → leave verbatim (no strip); otherwise add it to `localSeen` and record `{ index, abs }` as a **resolved import**. (Dedup keys on the *resolved* abs, so `#@PRD` and `#@PRD.md` in the same file collapse to one injection. The per-file set stops two imports of the same file within one markdown from both being stripped; the global set handles cross-file and self-import dedup.)
+**Step 3 — scan for imports.** Compute the file's **code regions** (fenced blocks + inline code, approximate-CommonMark — see §5.6.1), then run `FILE_INJECT_RE` over the content and **drop any match whose start index lies inside a code region**. For each surviving match, clean the token (§4.3); if empty or if it starts with `/` or `~` → ignore (leave verbatim, no strip). **Resolve** the rest via `resolveImportPath(token, dirname(abs), tryMdExt=true)` (§4.5): try the exact path; if it is not an existing regular file **and** the token is extensionless (`path.extname(token) === ""`), try `<exact>.md` then `<exact>.markdown` — first existing regular file wins (`#@PRD` → `PRD.md`). If nothing resolves → ignore (leave verbatim). The scan helper is `async` (it stats candidate paths) and maintains a per-file `localSeen` set, checked alongside the global `injectedSet` **on the resolved abs**: if already in either → leave verbatim (no strip); otherwise add it to `localSeen` and record `{ index, abs }` as a **resolved import**. (Dedup keys on the *resolved* abs, so `#@PRD` and `#@PRD.md` in the same file collapse to one injection. The per-file set stops two imports of the same file within one markdown from both being stripped; the global set handles cross-file and self-import dedup.) When `markdownBareAtImports` is on (§4.6), the scan additionally runs `BARE_AT_RE` over the content and unions its matches in; each recorded import then carries a `prefixLen` (2 for `#@`, 1 for a bare `@`) so Step 4 strips the right number of marker characters. `#@file` is matched once (the bare regex forbids a preceding `#`), and dedup still keys on the resolved abs.
 
 **Step 4 — strip resolved markers from this file's content.** Remove the literal `#@` (two chars) from each recorded marker, highest index first, leaving the **path** as a readable reference — identical to how resolved markers are stripped from the user prompt (§6.2). The result is the **block content** for this markdown file.
 
@@ -371,7 +390,7 @@ Maintain as **shared, mutable state across the entire prompt** (top-level tokens
 - `paged: number` — subset of `count` delivered via the §5.5 page path.
 - `remaining: number | null` — the single context-budget accumulator (§5.6.2); every emitted block subtracts from it.
 
-**Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the `#@` trigger** from each resolved marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so `#@` is pure noise). This stripping happens in two places: (a) resolved **top-level** markers in the user prompt, and (b) resolved **import** markers inside each markdown file's content, *before* that content becomes its block (§5.6 step 4). Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are left byte-for-byte verbatim, `#@` included:
+**Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the trigger** (`#@`, or a bare `@` when `markdownBareAtImports` is on — §4.6) from each resolved marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so the trigger is pure noise). This stripping happens in two places: (a) resolved **top-level** markers in the user prompt, and (b) resolved **import** markers inside each markdown file's content, *before* that content becomes its block (§5.6 step 4). Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are left byte-for-byte verbatim, `#@` included:
 
 ```
 <original prompt text, unchanged>
@@ -402,6 +421,8 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   resizeImage,          // (bytes: Uint8Array, mime: string, opts?) => Promise<ResizedImage | null>
   formatDimensionNote,  // (resized: ResizedImage) => string | undefined
+  CONFIG_DIR_NAME,      // project-local config dir name (".pi") — §4.6 config path
+  getAgentDir,          // global agent config dir (~/.pi/agent) — §4.6 config path
 } from "@earendil-works/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -461,11 +482,11 @@ Install locations:
 
 Internal sections (in order):
 1. Imports (§7)
-2. Constants: `FILE_INJECT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
-3. Pure/IO helpers: `cleanToken`, `isAbsoluteOrTilde`, `expandTildeAndResolve`, `resolveImportPath` (exact → `.md`/`.markdown`), `isRegularFile`, `extOf`, `isBinary`, `headSlice`, `headStartLine`, `headCompleteLineCount`, `estimateImageTokens`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`, `formatPagedDirectiveBlock`
+2. Constants: `FILE_INJECT_RE`, `BARE_AT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
+3. Pure/IO helpers: `cleanToken`, `isAbsoluteOrTilde`, `expandTildeAndResolve`, `resolveImportPath` (exact → `.md`/`.markdown`), `isRegularFile`, `readConfig` (§4.6), `extOf`, `isBinary`, `headSlice`, `headStartLine`, `headCompleteLineCount`, `estimateImageTokens`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`, `formatPagedDirectiveBlock`
 4. Markdown helpers: `computeCodeRanges(content)` → sorted `[start,end][]`; `inCode(index, ranges)` → boolean
-5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`
-6. Factory: `export default function (pi: ExtensionAPI) { pi.on("input", ...) }`
+5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,prefixLen,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`
+6. Factory: `export default function (pi: ExtensionAPI) { pi.on("session_start", …) (load `cfg`, §4.6); pi.on("input", ...) }`
 
 Target ~300–380 lines.
 
@@ -476,12 +497,13 @@ Target ~300–380 lines.
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { resizeImage, formatDimensionNote } from "@earendil-works/pi-coding-agent";
+import { resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
+const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;       // marker "#@"; group 2 = token
+const BARE_AT_RE     = /(^|(?<=[^\w#]))@(\S+)/g;    // marker "@" (markdown opt-in, §4.6); not after "#" or a word char
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;
 const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;
 const MIME_BY_EXT: Record<string, string> = {
@@ -495,6 +517,9 @@ const TRAILING_PUNCT = ".,;:!?\")]}>'";
 const PAGED_THRESHOLD = 0.6, MARGIN = 8192, HEAD_CHARS = 8192, READ_LIMIT = 2000;
 const DEFAULT_RESERVE = 8192, IMAGE_FALLBACK_TOKENS = 2805;
 
+// §4.6 config (read on session_start, cached). markdownBareAtImports: also match bare "@path" in markdown.
+interface FileInjectorConfig { markdownBareAtImports?: boolean; }
+
 // Shared, mutable state carried across the whole prompt (top-level tokens + imports).
 interface State {
   blocks: string[];
@@ -503,9 +528,12 @@ interface State {
   remaining: number | null;   // single budget accumulator (§5.6.2)
   count: number;              // files delivered (whole + paged + image + binary note)
   paged: number;              // subset delivered via the §5.5 page path
+  bareAt: boolean;            // markdown bare-"@" imports enabled? (§4.6)
 }
 
 export default function (pi: ExtensionAPI) {
+  let cfg: FileInjectorConfig = {};                       // loaded on session_start (§4.6)
+  pi.on("session_start", async (_e, ctx) => { cfg = await readConfig(ctx); });
   pi.on("input", async (event, ctx) => {
     // --- short circuits ---
     if (event.source === "extension") return { action: "continue" };        // loop prevention
@@ -525,11 +553,12 @@ export default function (pi: ExtensionAPI) {
     const state: State = {
       blocks: [], images: [...(event.images ?? [])],
       injectedSet: priorPaths, remaining, count: 0, paged: 0,
+      bareAt: cfg.markdownBareAtImports === true,
     };
 
-    // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping
+    // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping, bare-@ off
     const resolvedIdx = await processTokenStream(
-      event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false }, state, ctx);
+      event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
     if (state.count === 0) return { action: "continue" };   // nothing delivered → byte-for-byte
 
     // strip '#@' from resolved top-level markers (high→low)
@@ -543,27 +572,34 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-// Scan a text (user prompt OR markdown content) for #@ tokens that resolve, WITHOUT injecting.
+// Scan a text (user prompt OR markdown content) for import markers that resolve, WITHOUT injecting.
 // async because resolution stats candidate path(s); markdown also tries .md/.markdown (§4.5).
+// opts.bareAt (markdown only, §4.6) additionally matches a bare "@path" via BARE_AT_RE.
 // Per-text dedup via localSeen on the RESOLVED abs; global injectedSet skips already-claimed paths.
 async function scanTokens(
   text: string, baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt: boolean },
   state: State,
-): Promise<{ index: number; abs: string }[]> {
+): Promise<{ index: number; prefixLen: number; abs: string }[]> {
   const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;
   const localSeen = new Set<string>();
-  const out: { index: number; abs: string }[] = [];
-  for (const m of text.matchAll(FILE_INJECT_RE)) {
-    if (codeRanges && inCode(m.index!, codeRanges)) continue;          // §5.6.1 — code is exempt
-    const token = cleanToken(m[2]);
+  const out: { index: number; prefixLen: number; abs: string }[] = [];
+  // candidate markers: "#@" always (prefixLen 2); bare "@" when opts.bareAt (prefixLen 1).
+  // BARE_AT_RE forbids a "#" before the "@", so "#@file" matches once, not twice.
+  const cands: { idx: number; token: string; prefixLen: number }[] = [];
+  for (const m of text.matchAll(FILE_INJECT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 2 });
+  if (opts.bareAt) for (const m of text.matchAll(BARE_AT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 1 });
+  cands.sort((a, b) => a.idx - b.idx);
+  for (const c of cands) {
+    if (codeRanges && inCode(c.idx, codeRanges)) continue;             // §5.6.1 — code is exempt
+    const token = cleanToken(c.token);
     if (!token) continue;
     if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue;     // §4.5 — markdown: relative only
     const abs = await resolveImportPath(token, baseDir, opts.tryMdExt); // §4.5 — exact, then .md/.markdown
     if (!abs) continue;                                                // nothing resolved → leave verbatim
     if (state.injectedSet.has(abs) || localSeen.has(abs)) continue;    // dedup on resolved abs
     localSeen.add(abs);
-    out.push({ index: m.index!, abs });
+    out.push({ index: c.idx, prefixLen: c.prefixLen, abs });
   }
   return out;
 }
@@ -572,7 +608,7 @@ async function scanTokens(
 // return the start indices of markers that resolved (for '#@' stripping).
 async function processTokenStream(
   text: string, baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt: boolean },
   state: State, ctx: any,
 ): Promise<number[]> {
   const records = await scanTokens(text, baseDir, opts, state);   // scan once, before any injection
@@ -629,13 +665,13 @@ async function injectFile(abs: string, state: State, ctx: any): Promise<boolean>
 async function injectMarkdown(abs: string, content: string, state: State, ctx: any): Promise<void> {
   const dir = path.dirname(abs);
 
-  // Step 3: scan for imports (relative only, outside code; extension shorthand on)
-  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true }, state);
+  // Step 3: scan for imports (relative only, outside code; extension shorthand on; bare-@ per state.bareAt)
+  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
 
   // Step 4: strip '#@' from resolved import markers (high→low) → block content
   let stripped = content;
   for (const r of [...records].sort((a, b) => b.index - a.index))
-    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + 2);
+    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + r.prefixLen);
 
   // Step 5: emit this file's block (paged decision on STRIPPED content)
   emitText(abs, stripped, state);
@@ -696,6 +732,15 @@ async function resolveImportPath(token: string, baseDir: string, tryMdExt: boole
 }
 async function isRegularFile(p: string): Promise<boolean> {
   try { return (await fs.stat(p)).isFile(); } catch { return false; }
+}
+// §4.6 — read file-injector.json (global, then project-if-trusted; project overrides global).
+async function readConfig(ctx: any): Promise<FileInjectorConfig> {
+  const tryRead = async (p: string) => {
+    try { return JSON.parse((await fs.readFile(p, "utf8")).trim() || "{}"); } catch { return {}; }
+  };
+  let cfg: FileInjectorConfig = await tryRead(path.join(getAgentDir(), "file-injector.json"));
+  if (ctx.isProjectTrusted()) cfg = { ...cfg, ...(await tryRead(path.join(ctx.cwd, CONFIG_DIR_NAME, "file-injector.json"))) };
+  return cfg;
 }
 function extOf(abs: string): string {
   const base = path.basename(abs);
@@ -842,6 +887,14 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 | Top-level extensionless (`#@PRD` in prompt; only `PRD.md`) | Exact-only at top level; left verbatim. |
 | Missing `.md` at top level (`#@nope.md`) | Token left verbatim (missing); no scanning. |
 | Markdown imports push total over budget | Later files page against the running total; never silently exceed (§5.6.2). |
+| `markdownBareAtImports` off (default); `@api.md` in `a.md` | Bare `@` not matched; left verbatim. Only `#@` imports. |
+| `markdownBareAtImports` on; `@api.md` in `a.md` (file exists) | Imported (bare-`@`); marker stripped to `api.md`. Same rules as `#@`. |
+| `#@api.md` with the option on | Matched once by `#@` (bare regex skips a `#`-preceded `@`); never double-matched. |
+| `@username` in prose (option on; no `username.md`) | Not resolved → left verbatim. Prose imports only if it names a real file. |
+| `@api.md` at the top level (option on) | Unaffected — top-level is `#@`-only; Pi's normal `@` behavior. |
+| `user@host.com` in markdown (option on) | Not matched (`@` mid-word); left verbatim. |
+| Project `markdownBareAtImports: true` in an **untrusted** project | Ignored (`isProjectTrusted()` false); global value used. |
+| Missing/malformed `file-injector.json` | Defaults to `false`; no error, no behavior change. |
 
 ---
 
@@ -883,6 +936,10 @@ pi -e .                             # quick test (directory — resolves via pac
 | 22 | md ext exact-wins | `notes.md` imports `#@readme` where both `readme` and `readme.md` exist; `#@notes.md` | Bare `readme` (exact) injected, not `readme.md`; notify `2 whole`. |
 | 23 | md ext `.markdown` | `#@api` where only `api.markdown` exists; `#@notes.md` | Resolves to `api.markdown`; injected. |
 | 24 | top-level no fallback | `#@PRD` at top level, only `PRD.md` exists | Left verbatim (exact-only at top level); no injection. |
+| 25 | bare-`@` off (default) | `notes.md` with `@api.md` (exists); `#@notes.md` | `api.md` **not** imported (default); only `notes.md`; `@api.md` left verbatim. |
+| 26 | bare-`@` on | config `markdownBareAtImports:true`; `notes.md` with `@api.md` (exists); `#@notes.md` | `notes.md` block (marker→`api.md`) then `api.md` block; notify `2 whole`. |
+| 27 | bare-`@` on, `#@` still works | config on; `notes.md` with `#@api.md`; `#@notes.md` | `#@api.md` matched once, injected once; notify `2 whole`. |
+| 28 | bare-`@` on, top-level unaffected | config on; prompt `#@notes.md` (notes imports `@x.md`); also type `@other.md` in prompt | `@other.md` at top level left as Pi's `@` behavior (not injected); only the `#@` chain runs. |
 
 ### Automated sanity check (optional)
 
@@ -921,6 +978,7 @@ pi.registerCommand("sharp-at-test", {
 16. **Strip resolved markers in both scopes.** Top-level resolved markers are stripped from the user prompt; resolved import markers are stripped from each markdown file's content *before* it becomes a block (§5.6 step 4). Failed/deduped/absolute/inside-code markers keep `#@` verbatim everywhere.
 17. **Scan before inject (top-level).** `processTokenStream` runs `scanTokens` once over the whole prompt *before* injecting anything, so a later top-level token whose path an earlier token's import already claimed is left verbatim (cross-subtree dedup). Markdown does its own scan+strip+emit+recurse in `injectMarkdown`.
 18. **Extension shorthand is markdown-only and keyed on the resolved abs.** `resolveImportPath` tries exact → `.md` → `.markdown` only for *extensionless* markdown-import tokens (`tryMdExt: true`); top-level tokens pass `tryMdExt: false` (exact-only — the user has §14 autocomplete and types the full name). Dedup runs on the *resolved* abs, so `#@PRD` and `#@PRD.md` in one file collapse to one injection — which is why `scanTokens` is `async` (it stats candidate paths before checking `injectedSet`/`localSeen`).
+19. **The bare-`@` option is markdown-only, opt-in, and never double-matches `#@`.** `markdownBareAtImports` (default `false`, read from `file-injector.json` on `session_start`, project config honored only when `ctx.isProjectTrusted()`) adds bare-`@` matching to markdown scanning only — never the top-level prompt (Pi's `@` is left untouched, §3.2). `BARE_AT_RE` uses `(?<=[^\w#])` so an `@` preceded by `#` is not matched, hence `#@file` fires once. Each match carries `prefixLen` (2 for `#@`, 1 for `@`); Step 4 strips `slice(index, index + prefixLen)`. Non-resolving bare tokens (prose `@mentions`) stay verbatim.
 
 ---
 
@@ -940,8 +998,8 @@ For files that fit remaining context, behavior is unchanged: the whole file is i
 - `#@` is unambiguous, collision-free (§3.2), and signals stronger intent — the `#` reads as "force/sharp/inject."
 - The `#` does **not** piggyback on Pi's `@` autocomplete on its own — Pi's file-completion gate only fires for `@` at a token boundary, and `#` glued in front closes it. Path completion for `#@` is provided by a separate autocomplete provider (see §14).
 
-### 13.4 Why no user-facing config
-There is still no user-facing configuration: no toggles, no thresholds, no env vars. The inline-vs-paged decision is computed from the active model's context window and the current usage estimate (§5.5). The user writes `#@path` and the extension decides. Knobs for format or image handling would reintroduce the complexity the user asked to remove; the context budget is not a knob, it is derived.
+### 13.4 Why (almost) no user-facing config
+There is still no configuration *required*, and no knobs for the things that should just work: the inline-vs-paged decision is computed from the active model's context window and the current usage estimate (§5.5), and there are no toggles for format, image handling, paging, or the context budget — those stay derived/fixed. The one opt-in is `markdownBareAtImports` (§4.6): a bare `@file.md` is a widespread doc convention, and forcing `#@` inside markdown would fight existing docs. It is opt-in (default off) precisely so the default stays zero-setup and unambiguous — `#@` remains the only thing that ever triggers injection at the prompt, and bare-`@` matching never escapes markdown content. Knobs for anything else would reintroduce the complexity the user asked to remove.
 
 ### 13.5 Relationship to a size-gated `@`
 With §5.5, `#@` itself covers both the inline and the oversize cases, so a separate size-gated `@` extension is no longer needed for token-economy reasons. `@` stays as Pi's built-in autocomplete and CLI argument handling, unchanged. If a future feature wants `@` to inline small files interactively (which `#@` already does), it can be built independently; it does not compete with this PRD.
@@ -1020,12 +1078,13 @@ file's directory (§4.5), not the prompt cwd; an extensionless import token also
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { resizeImage, formatDimensionNote } from "@earendil-works/pi-coding-agent";
+import { resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
 const FILE_INJECT_RE = /(^|(?<=\W))#@(\S+)/g;
+const BARE_AT_RE     = /(^|(?<=[^\w#]))@(\S+)/g;    // §4.6
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1(?!`)/g;
 const FENCE_OPEN_RE  = /^ {0,3}(`{3,}|~{3,})/;
 const MIME_BY_EXT: Record<string, string> = {
@@ -1037,12 +1096,15 @@ const TRAILING_PUNCT = ".,;:!?\")]}>'";
 const PAGED_THRESHOLD = 0.6, MARGIN = 8192, HEAD_CHARS = 8192, READ_LIMIT = 2000;
 const DEFAULT_RESERVE = 8192, IMAGE_FALLBACK_TOKENS = 2805;
 
+interface FileInjectorConfig { markdownBareAtImports?: boolean; }
 interface State {
   blocks: string[]; images: ImageContent[];
-  injectedSet: Set<string>; remaining: number | null; count: number; paged: number;
+  injectedSet: Set<string>; remaining: number | null; count: number; paged: number; bareAt: boolean;
 }
 
 export default function (pi: ExtensionAPI) {
+  let cfg: FileInjectorConfig = {};
+  pi.on("session_start", async (_e, ctx) => { cfg = await readConfig(ctx); });
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension" || event.streamingBehavior === "steer") return { action: "continue" };
     if (!event.text?.includes("#@")) return { action: "continue" };
@@ -1055,9 +1117,10 @@ export default function (pi: ExtensionAPI) {
     const state: State = {
       blocks: [], images: [...(event.images ?? [])],
       injectedSet: priorPaths, remaining, count: 0, paged: 0,
+      bareAt: cfg.markdownBareAtImports === true,
     };
 
-    const resolvedIdx = await processTokenStream(event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false }, state, ctx);
+    const resolvedIdx = await processTokenStream(event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
     if (state.count === 0) return { action: "continue" };
 
     let stripped = event.text;
@@ -1069,7 +1132,7 @@ export default function (pi: ExtensionAPI) {
 }
 
 // ... scanTokens (async) / processTokenStream / injectFile / injectMarkdown / emitText / subtract
-//     + helpers (incl. resolveImportPath, isRegularFile) + computeCodeRanges / inCode  per §9 ...
+//     + helpers (incl. resolveImportPath, isRegularFile, readConfig) + BARE_AT_RE + computeCodeRanges / inCode  per §9 ...
 ```
 
 **Companion file — `package.json`:** the skeleton above is the whole extension, but the repo also
