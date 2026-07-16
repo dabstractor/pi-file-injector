@@ -806,6 +806,11 @@ await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + direct
   // directive block = the exported helper's output
   const expectedDirective = mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length);
   assert(r.text.includes(expectedDirective), "paged directive block must be present (full path + size + read instruction)");
+  // HARDCODED pin (Issue 4): the directive must resume PAST the injected ~2000-line head. Pi's read
+  // offset is 1-indexed (offset:0 and offset:1 BOTH start at line 1, re-reading the head), so the
+  // directive must say offset:2001 (first line after the head), not offset:0/1. Guards the regression.
+  assert(r.text.includes("offset:2001, limit:2000"),
+    "paged directive must point past the injected head (offset:2001), not re-read it (offset:0/1)");
   // #@ stripped from the injected marker; the path stays
   assert(r.text.startsWith("Summarize huge.log"), "#@huge.log must be stripped to huge.log (path stays)");
   assert(r.images.length === 0, "text-file paging attaches NO images");

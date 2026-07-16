@@ -119,12 +119,14 @@ export function formatEmptyImageBlock(abs: string): string {
 }
 
 /** PRD §5.5 — directive block for a paged (oversize) text file. Emits a <file name="abs"> note
- *  giving the full path + estimated size and instructing the model to load the rest via the read
- *  tool at offset:0, limit:2000 (the read tool's DEFAULT_MAX_LINES=2000), incrementing offset
- *  until the whole file is read. Reuses the em dash (U+2014) from formatBinaryBlock/formatEmptyImageBlock.
- *  The head block is NOT this helper — it is formatTextFileBlock(abs, content.slice(0, HEAD_BYTES)). */
+ *  giving the full path + estimated size and instructing the model to read the REMAINDER past the
+ *  ~2000-line head via the read tool at offset:2001, limit:2000 (Pi read offset is 1-indexed, so
+ *  offset:2001 is the first line AFTER the 8192-byte head; DEFAULT_MAX_LINES=2000), incrementing
+ *  offset by 2000 until the whole file is read. Reuses the em dash (U+2014) from
+ *  formatBinaryBlock/formatEmptyImageBlock. The head block is NOT this helper — it is
+ *  formatTextFileBlock(abs, content.slice(0, HEAD_BYTES)). */
 export function formatPagedDirectiveBlock(abs: string, totalBytes: number): string {
-  return '<file name="' + abs + '"><large file \u2014 estimated ' + totalBytes + ' bytes; first ' + HEAD_BYTES + ' bytes injected above. Use the read tool to load the rest: offset:0, limit:2000, incrementing offset until the entire file is read></file>';
+  return '<file name="' + abs + '"><large file \u2014 estimated ' + totalBytes + ' bytes; first ~2000 lines injected above. Use the read tool to read the rest: offset:2001, limit:2000, incrementing offset by 2000 until the entire file is read></file>';
 }
 
 /**

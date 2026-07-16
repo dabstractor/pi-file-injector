@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Correctness & Spec-Compliance Fixes for the #@file Injector",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Fix the 4 bugs found by the creative end-to-end validation of the #@file injection extension (file-injector.ts): two Major correctness bugs in injectFiles assembly (within-prompt dedup gap = Issue 1; failed-token #@ stripping in mixed prompts = Issue 2) and two Minor spec-deviation bugs (notify wording vs PRD 5.5 = Issue 3; paged directive offset:0 re-reading the head = Issue 4). All work is confined to file-injector.ts (fixes) and file-injector.test.mjs (test updates + new regression cases). All four bugs were reproduced live against the real committed module; the existing model-free harness passes 43/43 and must stay green throughout. See plan/002_0ac3eb160af7/bugfix/001_04217649554a/architecture/ for the research that grounds every subtask.",
       "milestones": [
         {
@@ -61,7 +61,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Minor Spec-Compliance Fixes (Issues 3 and 4)",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Fix the two Minor (Nice to Fix) spec-deviation bugs. Issue 3: the all-whole notify message says '#@ injected N file(s)' instead of PRD 5.5's '#@ injected N whole'. Issue 4: the paged-delivery directive says 'offset:0', but Pi's read tool offset is 1-indexed so offset:0 re-reads the already-injected head block (and offset:0 is identical to offset:1). These are independent single-location fixes (the notify block in the input handler; the formatPagedDirectiveBlock helper) and have no dependency on M1. Verified strategies and exact test impact are in architecture/code_changes_analysis.md.",
           "tasks": [
             {
@@ -92,14 +92,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Make the paged-delivery directive internally consistent so it does not re-read the injected head (Issue 4)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "The formatPagedDirectiveBlock helper instructs the model to read at offset:0, limit:2000, but Pi's read tool offset is 1-indexed ('offset ? Math.max(0, offset-1) : 0'), so offset:0 (identical to offset:1) starts at line 1 and re-reads the ~2000 lines already delivered as the head block. Make the directive point the model past the head (Option A, recommended) so the head is not re-read, and add a hardcoded-string assertion to pin the corrected offset (existing PD1/PD2 only assert presence via the helper, not correctness).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Update formatPagedDirectiveBlock to resume past the head + pin the offset with a hardcoded assertion",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (Issue 4 section) and architecture/external_deps.md section 1. CONFIRMED: Pi's read tool offset is 1-indexed with a 0-clamp - 'startLine = offset ? Math.max(0, offset-1) : 0' (dist/core/tools/read.js) - so offset:0 and offset:1 are IDENTICAL (both start at line 1), re-reading the already-injected head. The head block is content.slice(0, HEAD_BYTES) (8192 BYTES); the read window is line-based (limit:2000). An EXACT line offset to skip a byte head is impossible, BUT the PRD itself frames 'HEAD_BYTES = 8192 (about 2000 lines, matching the read tool default limit)', so an approximate line offset is consistent with the PRD own equivalence. Pick Option A (resume past the head, smallest diff, keeps the head+directive two-block structure). Also note: PD1/PD2 assert the directive via mod.formatPagedDirectiveBlock(...) (presence, not correctness) - they would pass even for an obviously wrong offset.\n2. INPUT: formatPagedDirectiveBlock(abs: string, totalBytes: number): string (exported pure helper) and the paged branch in injectFiles that calls blocks.push(formatPagedDirectiveBlock(abs, content.length)).\n3. LOGIC: Change ONLY the directive string in formatPagedDirectiveBlock to point the model past the ~2000-line head (keep HEAD_BYTES and the byte head block in injectFiles unchanged). Recommended wording: a note saying the large file has an estimated <totalBytes> bytes with the first ~2000 lines injected above, and instructing the model to read the rest with 'offset:2001, limit:2000', incrementing offset by 2000 until the entire file is read (offset:2001 = first line after the ~2000-line head; consistent with the PRD '8192 bytes ~= 2000 lines' framing). Keep the em dash (U+2014) convention. Do NOT change the head slice (content.slice(0, HEAD_BYTES)) or the HEAD_BYTES constant. (Implicit TDD: add the hardcoded assertion first, watch it fail on the old offset:0, then apply the string change.)\n4. OUTPUT: formatPagedDirectiveBlock emits a directive whose offset resumes AFTER the injected head. PD1/PD2 keep passing (they derive the expected string from the helper). ADD a hardcoded-string assertion to PD1 (and/or PD2) that pins the corrected offset, e.g. assert that r.text includes the substring 'offset:2001, limit:2000' with a message explaining the directive must resume past the injected head, not re-read it. Optionally add a short comment to PD1 noting the directive is now internally consistent with the read tool 1-indexed offset. Full suite green.\n5. DOCS: none - the directive string is model-facing and not quoted in README.md. [Mode A: none.]",
@@ -118,21 +118,21 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Changeset-Level Documentation Sync",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Final catch-all sweep (SOW 5 Mode B) to prevent the coherent delta from shipping with a stale README. None of Issues 1-4 changes user-facing config, CLI flags, env vars, or exported type signatures (so there were no per-subtask Mode A doc updates), but the corrected behavior (failed #@ tokens stay verbatim; the paged directive no longer re-reads the head) should be reconciled against README.md behavior descriptions. This task runs LAST and depends on every implementing subtask.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Sync changeset-level documentation (README.md)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Review README.md and update only what this changeset actually touches: verify the trigger-stripping and paged-delivery descriptions still match the corrected behavior, and add a brief note that failed #@ tokens are left verbatim if it improves clarity. No fabricated features.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Review and update README.md to match the corrected #@file behavior",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
