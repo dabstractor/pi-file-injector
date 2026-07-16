@@ -175,7 +175,32 @@ export function formatPagedDirectiveBlock(abs: string, totalBytes: number, start
  * optional so a cwd-only ctx is valid. `injected` counts whole-file injections; `paged` counts files
  * delivered via the page path (PRD §5.5). Return `{injected:0, paged:0}` => caller returns
  * {action:"continue"}; otherwise {action:"transform", text, images}.
+ *
+ * Internal state is carried in ONE shared `State` object (PRD §9) — `blocks`, `images`,
+ * `injectedSet` (consolidated dedup: prior `<file>` blocks ∪ within-run deliveries), `remaining`
+ * (the single budget accumulator), `count`, `paged` — so a later task can thread the same state
+ * through a recursive import chain. The `remaining` budget currently covers TEXT injections only
+ * (inline whole + paged head); it is computed once here and forward-references a WHOLE-PROMPT budget
+ * that will also span markdown imports once they land (PRD §5.6.2) — at which point image/binary
+ * deliveries will likewise call `subtract`.
  */
+interface State {
+  blocks: string[];
+  images: ImageContent[];
+  injectedSet: Set<string>; // seeded with priorPaths; holds resolved abs paths → dedup
+  remaining: number | null; // single budget accumulator (§5.5 / §5.6.2)
+  count: number;
+  paged: number;
+}
+
+/** PRD §9 — subtract a cost from the shared budget, no-op when the budget is unknown (null).
+ *  NOT exported (internal). Used by the text paged/inline paths now; image/binary in a later task. */
+function subtract(state: State, cost: number): void {
+  if (state.remaining !== null) {
+    state.remaining = Math.max(0, state.remaining - cost);
+  }
+}
+
 export async function injectFiles(
   text: string,
   imagesIn: ImageContent[],
@@ -186,26 +211,21 @@ export async function injectFiles(
     model?: { contextWindow: number; maxTokens: number } | undefined;
   },
 ): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number }> {
-  const blocks: string[] = [];
-  const images = [...imagesIn]; // MERGE — runner REPLACES the array on transform; seed originals (item §3a)
-  let count = 0;
-  let paged = 0; // §5.5 paged-delivery counter — files delivered head+directive (subset of count)
-
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
-  // null (right after compaction). Either → remainingBudget = null → O-1 fallback: inject WHOLE
+  // null (right after compaction). Either → remaining = null → O-1 fallback: inject WHOLE
   // (current behavior). When available: remaining = window - used - reserve - MARGIN, clamped ≥ 0.
-  let remainingBudget: number | null;
+  let remaining: number | null;
   try {
     const usage = ctx.getContextUsage?.();
     if (usage === undefined || usage.tokens === null) {
-      remainingBudget = null; // O-1 fallback: budget unknown → inject whole (no paging)
+      remaining = null; // O-1 fallback: budget unknown → inject whole (no paging)
     } else {
       const reserve = ctx.model?.maxTokens ?? DEFAULT_RESERVE;
-      remainingBudget = Math.max(0, usage.contextWindow - usage.tokens - reserve - MARGIN);
+      remaining = Math.max(0, usage.contextWindow - usage.tokens - reserve - MARGIN);
     }
   } catch {
-    remainingBudget = null; // getContextUsage threw → O-1 fallback (PRD §12.5: never throw)
+    remaining = null; // getContextUsage threw → O-1 fallback (PRD §12.5: never throw)
   }
 
   // PRIOR-INJECTION SET (defense-in-depth — validator finding F-NEW-1, recommendation #2). Collect
@@ -216,17 +236,28 @@ export async function injectFiles(
   // a single exact-path substring test and is strictly additive: it never suppresses a token whose
   // resolved path is NOT already in the set, so multi-file prompts (inject A then B) still work even
   // when a prior copy already injected A. NOTE: like any in-this-copy check, it cannot stop a LATER
-  // non-cooperating (pre-dedup) copy from re-injecting — see README's single-copy guidance.
+  // non-cooperating (pre-dedup) copy from re-injecting — see README's single-copy guidance. This
+  // prior set SEEDS state.injectedSet, which is also grown by each within-run delivery below — the
+  // two were separate locals before; they collapse here into one accumulator ("paths already claimed").
   const priorPaths = new Set<string>();
   for (const m of text.matchAll(/<file name="([^"]+)">/g)) {
     priorPaths.add(m[1]);
   }
 
-  // WITHIN-RUN DEDUP (Issue 1) — paths injected by THIS pass. Checked alongside priorPaths at the
-  // top of the loop so a same-path repeat in one prompt (e.g. "Compare #@a.ts with #@a.ts", or
-  // "#@a.ts" + "#@./a.ts") injects ONCE. SEPARATE from priorPaths so the F1c invariant holds (a
-  // prior block for X must not block a NEW path Y). Populated after each successful inject below.
-  const injectedThisRun = new Set<string>();
+  // SHARED STATE (PRD §9) — ONE object threaded through the loop (and, later, through a recursive
+  // import chain). blocks/images/count/paged were scattered locals; injectedSet consolidates the
+  // prior-injection set above WITH within-run dedup (Issue 1) — a per-token check of
+  // injectedSet.has(abs) is equivalent to the old (priorPaths.has || injectedThisRun.has) because the
+  // set at check time == {priorPaths} ∪ {abs paths successfully delivered so far this run}, grown by
+  // .add(abs) at each success site. remaining is the single budget accumulator (subtract() mutates it).
+  const state: State = {
+    blocks: [],
+    images: [...imagesIn], // COPY — runner REPLACES the array on transform; seed originals (item §3a)
+    injectedSet: priorPaths, // consolidated dedup: priorPaths ∪ within-run (added at each success)
+    remaining,
+    count: 0,
+    paged: 0, // §5.5 paged-delivery counter — files delivered head+directive (subset of count)
+  };
 
   // Issue 2 — start indices of tokens that ACTUALLY injected (pushed at each success site below).
   // Used after the loop to strip '#@' from EXACTLY those tokens (failed/dir/error and deduped
@@ -242,10 +273,12 @@ export async function injectFiles(
     const abs = expandTildeAndResolve(token, ctx.cwd); // ~ expand + path.resolve(cwd) (S2)
 
     // PER-TOKEN DEDUP — if a <file> block for this exact absolute path was already injected (by a
-    // prior copy in the runner's input-handler chain, or by Pi's own @file expander), skip
-    // re-injecting. Cooperation-independent: works even when the prior copy was a non-sentinel
-    // version (the default `pi -e` path when a global copy co-loads). Fixes Issue 1.
-    if (priorPaths.has(abs) || injectedThisRun.has(abs)) continue;
+    // prior copy in the runner's input-handler chain, by Pi's own @file expander, OR earlier in THIS
+    // run), skip re-injecting. state.injectedSet consolidates the prior-injection set with the
+    // within-run set (Issue 1); a same-path repeat in one prompt (e.g. "Compare #@a.ts with #@a.ts",
+    // or "#@a.ts" + "#@./a.ts") therefore injects ONCE. Cooperation-independent: works even when the
+    // prior copy was a non-sentinel version. Fixes Issue 1.
+    if (state.injectedSet.has(abs)) continue;
 
     let st;
     try {
@@ -264,10 +297,10 @@ export async function injectFiles(
       // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
       // Align with the text path's empty-file handling: emit a note block, attach nothing.
       if (mime && buf.length === 0) {
-        blocks.push(formatEmptyImageBlock(abs));
-        injectedThisRun.add(abs); // within-run dedup (Issue 1)
+        state.blocks.push(formatEmptyImageBlock(abs));
+        state.injectedSet.add(abs); // consolidated dedup (Issue 1)
         injectedIndexes.push(m.index); // record injected-token index for precise #@ strip (Issue 2)
-        count++;
+        state.count++;
         continue;
       }
 
@@ -279,25 +312,25 @@ export async function injectFiles(
       if (mime && isRealImage) {
         // IMAGE path (PRD §5.2) — classified by MIME first; SKIPS the NUL-byte check entirely.
         const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
-        images.push({
+        state.images.push({
           type: "image",
           data: resized?.data ?? buf.toString("base64"), // null => raw base64 of ORIGINAL bytes
           mimeType: resized?.mimeType ?? mime, // null => original mime
         });
-        blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file> (T2.S1 guards null)
+        state.blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file> (T2.S1 guards null)
       } else {
         // TEXT / BINARY path (PRD §5.1 / §5.3) — also the F3 fallback for mislabeled image-ext files.
         if (isBinary(buf)) {
-          blocks.push(formatBinaryBlock(abs)); // §5.3 note — no decoded garbage (em dash U+2014)
+          state.blocks.push(formatBinaryBlock(abs)); // §5.3 note — no decoded garbage (em dash U+2014)
         } else {
           // §5.5 INLINE-VS-PAGED — the whole file always reaches the model. Inline when it fits the
           // remaining budget (or budget unknown → O-1 fallback); else head block + paged directive.
           const content = buf.toString("utf8");
           const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
-          if (remainingBudget === null || fileCost <= PAGED_THRESHOLD * remainingBudget) {
+          if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
             // INLINE (whole) — current behavior preserved (PRD §5.1)
-            blocks.push(formatTextFileBlock(abs, content));
-            if (remainingBudget !== null) remainingBudget = Math.max(0, remainingBudget - fileCost);
+            state.blocks.push(formatTextFileBlock(abs, content));
+            subtract(state, fileCost);
           } else {
             // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
             //
@@ -316,26 +349,26 @@ export async function injectFiles(
             const head = headSlice(content);
             if (content.length <= HEAD_CHARS) {
               // whole content fits the head slice → deliver inline, never page (FINDING 2)
-              blocks.push(formatTextFileBlock(abs, content));
+              state.blocks.push(formatTextFileBlock(abs, content));
             } else {
-              blocks.push(formatTextFileBlock(abs, head));
-              blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
-              paged++;
-              remainingBudget = Math.max(0, remainingBudget - Math.ceil(HEAD_CHARS / 4));
+              state.blocks.push(formatTextFileBlock(abs, head));
+              state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+              state.paged++;
+              subtract(state, Math.ceil(HEAD_CHARS / 4));
             }
           }
         }
       }
-      injectedThisRun.add(abs); // within-run dedup (Issue 1) — covers text-inline/paged/image/binary
+      state.injectedSet.add(abs); // consolidated dedup (Issue 1) — covers text-inline/paged/image/binary
       injectedIndexes.push(m.index); // record injected-token index for precise #@ strip (Issue 2)
-      count++;
+      state.count++;
     } catch {
       // read/resize error => leave THIS token verbatim, keep processing the rest (PRD §5.4, §12.5)
       continue;
     }
   }
 
-  if (count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
+  if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
   // Strip the #@ trigger from each inline marker — the PATH stays put as a readable reference. The
   // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
@@ -351,8 +384,8 @@ export async function injectFiles(
   for (const i of [...injectedIndexes].sort((a, b) => b - a)) {
     strippedText = strippedText.slice(0, i) + strippedText.slice(i + 2);
   }
-  const finalText = `${strippedText}\n\n---\n\n${blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
-  return { text: finalText, images, injected: count, paged };
+  const finalText = `${strippedText}\n\n---\n\n${state.blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
+  return { text: finalText, images: state.images, injected: state.count, paged: state.paged };
 }
 
 /**
