@@ -39,7 +39,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Run tsc --strict typecheck — confirm 0 errors",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 0.5,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Prior research (plan/006_1862a6537500/architecture/external_deps.md) validated all Pi API imports against v0.80.8 — resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir, ResizedImage, ExtensionAPI, ImageContent all confirmed exported. typecheck was clean (0 errors) as of research time.\n2. INPUT: file-injector.ts (1114 lines), tsconfig.json, scripts/typecheck.mjs. The typecheck script runs tsc --strict against the extension file.\n3. LOGIC: Run `node ./scripts/typecheck.mjs`. Assert output contains '0 errors'. If errors appear, diagnose each — it would indicate either a type regression in file-injector.ts or a breaking API change in the Pi package. Fix the offending code (do not suppress with @ts-ignore or loosen strictness). The installed package is at /home/dustin/.local/lib/node_modules/@earendil-works/pi-coding-agent/ (v0.80.8).\n4. OUTPUT: Record the typecheck result. If clean, mark complete. If errors, fix and re-run.\n5. DOCS: none — verification subtask, no surface change.",
