@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Fix CRLF Fence-Close Detection in Markdown Code Regions",
-      "status": "Researching",
+      "status": "Complete",
       "description": "Fix the single Major bug found by the independent creative end-to-end QA pass: CRLF (\\r\\n) line endings in markdown files silently break fenced-code-block close detection in computeCodeRanges, causing every #@ import appearing after a fenced code block to be classified as 'inside code' and silently dropped. The fix is a single-line regex change (add \\r? to the close-fence regex tail), but the PRD requires comprehensive CRLF regression test coverage that does not exist today (zero tests use CRLF). All work is confined to file-injector.ts (the one-line fix) and file-injector.test.mjs (regression tests). See plan/007_3778406b61d6/bugfix/001_3e09899f9ba3/architecture/ for the research that grounds every subtask.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Fix closeRe Regex and Add CRLF Regression Test Suite",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Apply the one-line regex fix to computeCodeRanges (line 496: add \\r? before $ in the closeRe template) so that closing fence lines with a trailing \\r (from CRLF content.split(\"\\n\")) are correctly recognized as closes. Then add the comprehensive CRLF regression test suite the PRD requests: unit-level computeCodeRanges/inCode probes for CRLF fence-close, CRLF code-exempt preservation, CR-only documentation, mixed LF/CRLF endings, trailing-spaces-before-close; plus an end-to-end integration test proving a CRLF markdown fixture with a fenced block followed by a #@ import directive injects both files. The existing 182-assertion suite (all LF) must stay green — the fix is backward-compatible (\\r? matches zero \\r on LF lines).",
           "tasks": [
             {
@@ -59,14 +59,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Update README.md to document that fenced-code-block detection (the 'Code is the escape hatch' behavior) works correctly across Windows (CRLF) and Unix (LF) line endings. This is a Mode B changeset-level doc touch: the README does not currently mention line endings, and the fix makes the documented 'Code is the escape hatch' behavior correct for CRLF files. A brief note prevents future regressions being perceived as 'by design.'",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Update README.md to note CRLF/Windows line-ending compatibility for markdown fenced code block detection",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
