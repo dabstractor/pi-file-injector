@@ -1,0 +1,99 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "PRD Done-definition Test-Count Consistency Fix (v007 Delta)",
+      "status": "Ready",
+      "description": "Documentation-only consistency fix: PRD.md Appendix A Done-definition changed 'all 24 manual test cases' to 'all 32 manual test cases' to match the actual §11 test matrix (which always had 32 rows). The fix is already applied (commit 1ad7b19). The file-injector.ts implementation is complete from prior sessions — no code changes are required or possible. This phase verifies the fix is correctly in place, confirms no regression, and sweeps changeset-level docs.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Verify Done-definition count fix and confirm zero-code-impact",
+          "status": "Planned",
+          "description": "Confirm the single-token PRD fix (24→32 at line 1189) is correctly applied, that §11 has exactly 32 rows, that no other stale test-count references exist, and that the complete implementation (file-injector.ts + 182 tests) passes hermetic validation without any code edits.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Verify PRD Done-definition consistency fix is correctly applied",
+              "status": "Planned",
+              "description": "Confirm the fix at PRD.md:1189 ('all 32 manual test cases'), validate the §11 matrix row count matches, and ensure no other stale '24'-as-test-count references remain. This is a read-only verification — the fix is already committed (1ad7b19).",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Verify Done-definition line reads '32' and §11 matrix has exactly 32 numbered rows",
+                  "status": "Planned",
+                  "story_points": 0.5,
+                  "dependencies": [],
+                  "prd_selectors": ["h2.14", "h2.10/h3.23"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: The delta_prd.md (plan/007_3778406b61d6/delta_prd.md) confirms this is a single-token doc fix already applied in commit 1ad7b19. The session-006 baseline (plan/006_1862a6537500/prd_snapshot.md) shows the 'before' value was '24'. The architecture/delta_analysis.md documents the full verification trail.\n2. INPUT: PRD.md (the current working-tree version). Read Appendix A Done-definition (around line 1189) and the §11 Manual test matrix.\n3. LOGIC: (a) Assert PRD.md Done-definition line contains the literal 'all 32 manual test cases' (not '24'). (b) Count the numbered rows in the §11 Manual test matrix table — assert exactly 32 sequential rows (#1 through #32, no gaps). (c) Confirm the two counts agree (32 == 32). This is a read-only assertion gate; make no edits.\n4. OUTPUT: Pass/fail confirmation that the Done-definition count equals the matrix row count. If they disagree, the fix is regressed and must be re-applied (change the count to match the matrix — currently 32).\n5. DOCS: none — no user-facing/config/API surface change. This subtask verifies existing docs; it does not modify them."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S2",
+                  "title": "Scan PRD.md for any other stale test-count references",
+                  "status": "Planned",
+                  "story_points": 0.5,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": ["h2.14", "h2.10/h3.23"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: architecture/delta_analysis.md §Verification item 3 confirms only one legitimate '24' survives in PRD.md: the row index '| 24 | top-level no fallback |' at line ~971, which is a table row label, NOT a count, and must NOT be touched.\n2. INPUT: The full text of PRD.md.\n3. LOGIC: Search PRD.md for all occurrences of the string '24'. For each occurrence, classify it as either (a) a test-COUNT reference (stale — should be 32) or (b) a row index / unrelated number (correct — leave alone). Assert that NO occurrence is a stale test-count reference. The expected finding: the only '24' is the row index '| 24 |' in the §11 matrix.\n4. OUTPUT: A pass/fail scan result listing every '24' occurrence with its classification. If any stale count is found, fix it to match the actual count (32). If none found (expected), report clean.\n5. DOCS: none — no user-facing/config/API surface change."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "Run hermetic regression validation to confirm zero-code-impact",
+              "status": "Planned",
+              "description": "Execute the hermetic phases of validate.sh (typecheck + 3 test suites + manifest check) to confirm the complete implementation passes without any code edits. This validates that the already-applied doc fix did not introduce any regression and the implementation remains internally consistent with the 32-case test matrix.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "Run typecheck and all three test suites via validate.sh (phases 1-3, skip e2e)",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S2"],
+                  "prd_selectors": ["h2.7", "h2.8", "h2.10/h3.24"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: architecture/system_context.md documents the test infrastructure: validate.sh runs 4 phases — (1) tsc --strict via scripts/typecheck.mjs, (2) 3 test suites expecting 122/38/22 = 182 cases, (3) package.json manifest validation, (4) 11 live pi -p e2e (skippable via FI_SKIP_E2E=1). Phase 4 requires a real pi binary + API key and is out of scope for this delta.\n2. INPUT: The existing codebase (file-injector.ts, package.json, tsconfig.json, the 3 test files). No modifications from this delta.\n3. LOGIC: Run `FI_SKIP_E2E=1 bash validate.sh` (or run phases 1-3 individually: npm run typecheck, npm test, and the manifest check). Assert: (a) tsc --strict passes with zero errors, (b) file-injector.test.mjs reports 122 passed, (c) relative-imports.test.mjs reports 38 passed, (d) import-behavior.test.mjs reports 22 passed, (e) package.json manifest validation passes. All of these exercise the 32-case §11 matrix + §10 edge cases + relative-import properties + import-behavior scenarios.\n4. OUTPUT: Pass/fail for each phase with exit codes. If any phase fails, investigate — but note the delta expects zero code changes, so a failure would indicate a pre-existing issue or an environment problem (e.g., missing global pi .d.ts for typecheck), not a delta regression.\n5. MOCKING: No external services. The typecheck resolves global @earendil-works/pi-coding-agent + pi-ai .d.ts from the global install. The test suites use a tmpdir fixture and Pi's jiti loader to load the real extension — no API calls, no network.\n6. DOCS: none — no user-facing/config/API surface change. This subtask runs existing tests."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T3",
+              "title": "Sync changeset-level documentation",
+              "status": "Planned",
+              "description": "Mode B final docs sweep: confirm README.md and PRD.md are internally consistent with the Done-definition fix and the 32-case matrix. No new feature docs are needed (zero code change), but the overview-level docs must not contain stale test counts or contradictory references.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T3.S1",
+                  "title": "Verify README.md has no stale test-count or feature references",
+                  "status": "Planned",
+                  "story_points": 0.5,
+                  "dependencies": ["P1.M1.T2.S1"],
+                  "prd_selectors": ["h2.0", "h2.1", "h2.7"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: architecture/system_context.md documents README.md (136 lines) with sections: `#@file`, Why, Install, Usage, What gets injected, Syntax, Optional bare-@ markdown imports, Limits, `#@` versus `@`. The session-006 audit (plan/006_1862a6537500/architecture/research-doc-audit.md) already confirmed README.md is coherent with the spec. This delta (24→32) lives exclusively in PRD.md's Done-definition prose, which README.md does not reference.\n2. INPUT: README.md and PRD.md.\n3. LOGIC: Read README.md in full. Assert: (a) no mention of a specific test-case count (e.g., '24 tests' or '32 tests') that would now be stale, (b) no contradiction with PRD.md's current spec, (c) the syntax/behavior descriptions match the implemented features. If a stale reference is found (unlikely), update it. If README.md is clean (expected), report confirmed.\n4. OUTPUT: Pass/confirm that README.md is consistent. No edits expected.\n5. DOCS: [Mode B] This IS the changeset-level documentation sweep. README.md and PRD.md are the overview docs for this changeset. Since the delta is doc-only with zero code change, the sweep confirms coherence rather than editing content."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T3.S2",
+                  "title": "Verify PRD.md internal consistency (Done-definition matches matrix, no stale counts)",
+                  "status": "Planned",
+                  "story_points": 0.5,
+                  "dependencies": ["P1.M1.T3.S1"],
+                  "prd_selectors": ["h2.14", "h2.10/h3.23"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: architecture/delta_analysis.md confirms the Done-definition (line 1189) now reads '32' and the §11 matrix has 32 rows. This subtask is the final coherence gate for the delta.\n2. INPUT: PRD.md (full document).\n3. LOGIC: Final cross-check: (a) Done-definition count (32) == §11 matrix row count (32) == §11 Automated sanity check expectations (file-injector.test.mjs covers 'the full §11 matrix + §10 edges'), (b) the '32 manual test cases' phrasing is internally consistent throughout PRD.md, (c) no remaining '24'-as-count anywhere. This subtask depends on P1.M1.T3.S1 (README sweep) and transitively on all prior subtasks, ensuring it runs last as the final changeset-level documentation gate.\n4. OUTPUT: Final pass/fail confirmation that PRD.md is internally consistent. This completes the delta.\n5. DOCS: [Mode B] This is the final changeset-level documentation gate for the v007 delta. It confirms the whole document is coherent after the single-token fix."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
