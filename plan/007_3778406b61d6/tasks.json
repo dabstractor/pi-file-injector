@@ -55,14 +55,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Run hermetic regression validation to confirm zero-code-impact",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Execute the hermetic phases of validate.sh (typecheck + 3 test suites + manifest check) to confirm the complete implementation passes without any code edits. This validates that the already-applied doc fix did not introduce any regression and the implementation remains internally consistent with the 32-case test matrix.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Run typecheck and all three test suites via validate.sh (phases 1-3, skip e2e)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"
@@ -87,7 +87,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T3.S1",
                   "title": "Verify README.md has no stale test-count or feature references",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 0.5,
                   "dependencies": [
                     "P1.M1.T2.S1"
