@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "PRD Done-definition Test-Count Consistency Fix (v007 Delta)",
-      "status": "Researching",
+      "status": "Complete",
       "description": "Documentation-only consistency fix: PRD.md Appendix A Done-definition changed 'all 24 manual test cases' to 'all 32 manual test cases' to match the actual §11 test matrix (which always had 32 rows). The fix is already applied (commit 1ad7b19). The file-injector.ts implementation is complete from prior sessions — no code changes are required or possible. This phase verifies the fix is correctly in place, confirms no regression, and sweeps changeset-level docs.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Verify Done-definition count fix and confirm zero-code-impact",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Confirm the single-token PRD fix (24→32 at line 1189) is correctly applied, that §11 has exactly 32 rows, that no other stale test-count references exist, and that the complete implementation (file-injector.ts + 182 tests) passes hermetic validation without any code edits.",
           "tasks": [
             {
@@ -80,7 +80,7 @@
               "type": "Task",
               "id": "P1.M1.T3",
               "title": "Sync changeset-level documentation",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Mode B final docs sweep: confirm README.md and PRD.md are internally consistent with the Done-definition fix and the 32-case matrix. No new feature docs are needed (zero code change), but the overview-level docs must not contain stale test counts or contradictory references.",
               "subtasks": [
                 {
@@ -103,7 +103,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T3.S2",
                   "title": "Verify PRD.md internal consistency (Done-definition matches matrix, no stale counts)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 0.5,
                   "dependencies": [
                     "P1.M1.T3.S1"
