@@ -1,0 +1,9 @@
+h1.0 Bug Fix Requirements
+ h2.0 Overview
+ h2.1 Critical Issues (Must Fix)
+ h2.2 Major Issues (Should Fix)
+  h3.0 Issue 1: CRLF line endings break fenced-code-block close detection, silently dropping markdown imports after a fence
+ h2.3 Minor Issues (Nice to Fix)
+ h2.4 Testing Summary
+---
+code:5 para:21 list:5

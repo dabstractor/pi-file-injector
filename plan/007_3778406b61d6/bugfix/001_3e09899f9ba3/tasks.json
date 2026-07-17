@@ -1,0 +1,89 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "Fix CRLF Fence-Close Detection in Markdown Code Regions",
+      "status": "Planned",
+      "description": "Fix the single Major bug found by the independent creative end-to-end QA pass: CRLF (\\r\\n) line endings in markdown files silently break fenced-code-block close detection in computeCodeRanges, causing every #@ import appearing after a fenced code block to be classified as 'inside code' and silently dropped. The fix is a single-line regex change (add \\r? to the close-fence regex tail), but the PRD requires comprehensive CRLF regression test coverage that does not exist today (zero tests use CRLF). All work is confined to file-injector.ts (the one-line fix) and file-injector.test.mjs (regression tests). See plan/007_3778406b61d6/bugfix/001_3e09899f9ba3/architecture/ for the research that grounds every subtask.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Fix closeRe Regex and Add CRLF Regression Test Suite",
+          "status": "Planned",
+          "description": "Apply the one-line regex fix to computeCodeRanges (line 496: add \\r? before $ in the closeRe template) so that closing fence lines with a trailing \\r (from CRLF content.split(\"\\n\")) are correctly recognized as closes. Then add the comprehensive CRLF regression test suite the PRD requests: unit-level computeCodeRanges/inCode probes for CRLF fence-close, CRLF code-exempt preservation, CR-only documentation, mixed LF/CRLF endings, trailing-spaces-before-close; plus an end-to-end integration test proving a CRLF markdown fixture with a fenced block followed by a #@ import directive injects both files. The existing 182-assertion suite (all LF) must stay green — the fix is backward-compatible (\\r? matches zero \\r on LF lines).",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Fix closeRe regex to tolerate CRLF trailing CR + add core CRLF unit tests",
+              "status": "Planned",
+              "description": "Apply the regex fix (Option A from the PRD: add \\r? before $ in the closeRe construction at file-injector.ts:496) and add the two primary CRLF regression unit tests (CC12, CC13) that directly prove the fix: (CC12) a CRLF fenced block closes correctly so a #@ AFTER the fence is NOT in code, and (CC13) a #@ INSIDE a CRLF fenced block IS in code (code-exempt behavior still works under CRLF). These are pure-function probes of mod.computeCodeRanges/mod.inCode, mirroring the existing CC1–CC11 pattern.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Fix closeRe at file-injector.ts:496 to tolerate trailing \\r (CRLF fence-close detection)",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [],
+                  "prd_selectors": [
+                    "h2.0",
+                    "h2.2",
+                    "h3.0",
+                    "h2.4"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (§ The Single Broken Line + § The Fix + § Verification: Offset Math Under CRLF) and architecture/system_context.md (§ The Bug + § The Fix). CONFIRMED: The closeRe regex at file-injector.ts:496 is `new RegExp(\"^ {0,3}\" + escapeRegex(fenceChar) + \"{\" + fenceLen + \",}[ \\\\t]*$\")`. The tail `[ \\t]*$` does NOT permit a trailing `\\r`. When content has CRLF endings, `content.split(\"\\n\")` at line 474 leaves a `\\r` at the end of each line, so a closing fence line `\"```\\r\"` fails `closeRe.test()` → the fence is treated as unterminated → its range runs to EOF (line 512) → every `#@` after the fence is classified as inCode → silently dropped by scanTokens (line 648). The fix is Option A: add `\\\\r?` immediately before `$` so the tail becomes `[ \\t]*\\r?$`. This is the ONLY code change. Do NOT touch content.split(\"\\n\"), lineStart[] math, FENCE_OPEN_RE, inlineCodeRanges, or escapeRegex — all are verified correct under CRLF (see architecture/system_context.md § Scope of the Fix). lineStart[] uses `lines[i].length + 1`; under CRLF the `\\r` counts toward `lines[i].length` so offsets stay correct — the `+1` for the `\\n` that split removed is still accurate.\n2. INPUT: file-injector.ts function `computeCodeRanges` (line 472). The function receives `content: string` and splits it via `const lines = content.split(\"\\n\")` (line 474). For each detected fence opener (matched by `FENCE_OPEN_RE` at line 489), it builds `closeRe` at line 496 and scans forward (lines 500–510) testing `closeRe.test(lines[j])` at line 502.\n3. LOGIC: Change EXACTLY line 496 from: `const closeRe = new RegExp(\"^ {0,3}\" + escapeRegex(fenceChar) + \"{\" + fenceLen + \",}[ \\\\t]*$\");` to: `const closeRe = new RegExp(\"^ {0,3}\" + escapeRegex(fenceChar) + \"{\" + fenceLen + \",}[ \\\\t]*\\\\r?$\");` — i.e., insert `\\\\r?` between `*` and `$`. In the string literal, `\\\\r` produces the regex token `\\r` (carriage return) and `?` makes it optional. No other line changes. (Implicit TDD: write the failing CC12 test FIRST, confirm it fails on the old regex, apply the one-line fix, confirm it passes — then CC13.)\n4. OUTPUT: After the fix, `mod.computeCodeRanges(\"```\\r\\ncode\\r\\n```\\r\\n#@after.md\\r\\n\")` returns ONE range covering `[0, 15]` (the fenced block only, NOT to EOF), and `mod.inCode(indexOfFirstHash(txt), ranges)` returns `false` for the `#@after.md` marker. ADD two regression cases in file-injector.test.mjs at the end of the CODE-REGION DETECTION section (after CC11, before the `// ── TOTAL-SIZE BUDGET` section header at line ~1438), following the EXACT CC1–CC11 pattern (use `indexOfFirstHash(txt)` to derive the #@ index, call `mod.computeCodeRanges`, assert via `mod.inCode`): CC12 \"§5.6.1 — CRLF fence closes correctly; #@ AFTER the fence is NOT in code\" — txt = \"```\\r\\ncode\\r\\n```\\r\\n#@after.md\\r\\n\", assert r.length === 1 (one fenced range, NOT to EOF) and mod.inCode(idx, r) === false; CC13 \"§5.6.1 — CRLF: #@ INSIDE a fenced block IS in code (code-exempt still works under CRLF)\" — txt = \"```\\r\\n#@inside.ts\\r\\n```\\r\\n#@outside.md\\r\\n\", assert mod.inCode(idxInside, r) === true for the first #@. Run `node ./file-injector.test.mjs` — full suite green including the two new CC cases. Also run `node ./relative-imports.test.mjs` and `node ./import-behavior.test.mjs` (not in npm test but must stay green — no edits to them).\n5. DOCS: none — no user-facing/config/API surface change. The closeRe regex is an internal implementation detail. [Mode A: none.]"
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S2",
+                  "title": "Add defense-in-depth regression tests: CR-only, mixed LF/CRLF, trailing-spaces-before-close + e2e CRLF markdown import integration test",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [
+                    "P1.M1.T1.S1"
+                  ],
+                  "prd_selectors": [
+                    "h2.0",
+                    "h2.2",
+                    "h3.0",
+                    "h2.4"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/code_changes_analysis.md (§ Test Plan + § Why Not content.split(/\\r\\n|\\r|\\n/)?) and architecture/system_context.md (§ Test Infrastructure). The PRD's Testing Summary says: 'Recommend also adding \\r-only (classic Mac) and mixed-ending cases to the regression suite as defense-in-depth, though \\r-alone is essentially extinct.' The PRD's Suggested Fix says: 'Add regression tests that exercise CRLF markdown with (a) a fence followed by an import (must inject) [DONE in CC12/CC13 from S1], (b) a fence containing a #@ (must stay verbatim/code) [DONE in CC13], and (c) mixed LF/CRLF line endings in one file.' So this subtask adds (c) plus the e2e integration test and the CR-only documentation test. CRITICAL: pure \\r-only files are NOT split by content.split(\"\\n\") — they become one giant line — so CC14 is a DOCUMENTATION test asserting this known limitation, NOT a behavior-correctness target. No code changes in this subtask (S1's fix is already applied); this subtask is purely additional test coverage.\n2. INPUT: The fixed closeRe from dependency P1.M1.T1.S1 (now tolerant of trailing \\r). The existing CC1–CC11 test pattern (file-injector.test.mjs lines 1289–1432) and the markdown transitive import test pattern (lines 1515–1660, cases 15/16/MD1 using fsSync.writeFileSync + mod.injectFiles with FIX = { cwd: TMPDIR }). The existing TMPDIR fixture infrastructure (a.ts, b.ts, pic.png, etc. — see file-injector.test.mjs fixture setup). The `indexOfFirstHash(txt)` helper (line 1293) and `countFileBlocks(text, abs)` helper (line ~270).\n3. LOGIC: Add the following test cases to file-injector.test.mjs (no changes to file-injector.ts): (a) CC14 \"§5.6.1 — CR-only (classic Mac) line endings: known limitation documentation\" — txt = \"```\\r#@inside.ts\\r```\\r#@outside.md\", call mod.computeCodeRanges(txt), assert r.length <= 1 (the entire content is ONE line because split(\"\\n\") does not split on \\r); add a comment explaining this is an intentional scope boundary, not a regression. (b) CC15 \"§5.6.1 — mixed LF/CRLF line endings in one file: fence closes correctly\" — txt = \"```\\ncode\\r\\n```\\r\\n#@after.md\\n\" (open fence uses LF, close uses CRLF, import uses LF), idx = indexOfFirstHash(txt), assert mod.inCode(idx, r) === false. (c) CC16 \"§5.6.1 — CRLF with trailing spaces before the close fence\" — txt = \"```\\r\\ncode\\r\\n```  \\r\\n#@after.md\\r\\n\" (close line has 2 trailing spaces then \\r), idx = indexOfFirstHash(txt), assert mod.inCode(idx, r) === false. (d) E2E integration case in the MARKDOWN TRANSITIVE IMPORTS section (around line 1534, near case 16): \"CRLF markdown with fenced block + #@ import directive → both files injected\" — write a CRLF .md fixture: fsSync.writeFileSync(path.join(TMPDIR, 'crlf_spec.md'), '# CRLF Spec\\r\\n\\r\\n```\\r\\ncode here\\r\\n```\\r\\n\\r\\nSee #@crlf_after.md\\r\\n') and fsSync.writeFileSync(path.join(TMPDIR, 'crlf_after.md'), '# After Content\\n'); call mod.injectFiles('Read #@crlf_spec.md', [], { cwd: TMPDIR }); assert r.injected === 2, assert r.text includes a <file> block for crlf_after.md, assert r.text includes 'See crlf_after.md' (marker stripped — proving the #@ was recognized as an import, not code). All new cases use runCase. Insert CC14–CC16 after CC13 (from S1) in the CODE-REGION DETECTION section; insert the e2e case near case 16.\n4. OUTPUT: file-injector.test.mjs gains 4 new test cases (CC14, CC15, CC16, + 1 e2e). `node ./file-injector.test.mjs` passes with all new cases green. `node ./relative-imports.test.mjs` and `node ./import-behavior.test.mjs` unchanged and green. No source code changes (file-injector.ts stays as S1 left it).\n5. DOCS: none — no user-facing/config/API surface change. [Mode A: none.]"
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "Sync changeset-level documentation",
+              "status": "Planned",
+              "description": "Update README.md to document that fenced-code-block detection (the 'Code is the escape hatch' behavior) works correctly across Windows (CRLF) and Unix (LF) line endings. This is a Mode B changeset-level doc touch: the README does not currently mention line endings, and the fix makes the documented 'Code is the escape hatch' behavior correct for CRLF files. A brief note prevents future regressions being perceived as 'by design.'",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "Update README.md to note CRLF/Windows line-ending compatibility for markdown fenced code block detection",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M1.T1.S1",
+                    "P1.M1.T1.S2"
+                  ],
+                  "prd_selectors": [
+                    "h2.2",
+                    "h3.0",
+                    "h2.4"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See architecture/system_context.md (§ Documentation Surface). README.md has NO mention of line endings anywhere (confirmed by grep for crlf/line.ending/carriage/windows across README.md — zero matches). The README's ## Syntax section has a bullet under 'Markdown imports' that reads: '- **Code is the escape hatch.** A #@ inside a fenced or inline code span is not an import — it stays verbatim. So a doc can show `#@example.ts` as an example without importing anything.' After the fix (P1.M1.T1.S1), this behavior is correct for both LF and CRLF files. The fix is backward-compatible and transparent (CRLF now behaves identically to LF), so no behavioral caveat is needed — just a brief positive note that fenced code detection is line-ending agnostic.\n2. INPUT: README.md (current committed state). The fix from P1.M1.T1.S1 (closeRe now tolerates trailing \\r) and regression tests from P1.M1.T1.S2 (CC12–CC16 + e2e) are complete. No source code changes are made in this subtask — it is README.md only.\n3. LOGIC: Add a brief sentence to the README.md 'Code is the escape hatch' bullet (in ## Syntax → Markdown imports, or alternatively in ## Limits) noting that fenced code block detection works across line endings (LF/Unix, CRLF/Windows). For example, append to the existing bullet: 'This works regardless of line endings — Windows (CRLF) and Unix (LF) markdown files detect code fences identically.' Keep the change minimal (one sentence addition to an existing bullet — do NOT add a new section or heading). Do not change any other part of README.md. The implementing agent should decide the exact wording and placement; the constraint is: one brief note, existing structure preserved, no new sections.\n4. OUTPUT: README.md has one added sentence noting CRLF/LF line-ending compatibility for fenced code block detection. No other files change. `node ./file-injector.test.mjs` still green (README.md is not loaded by tests).\n5. DOCS: [Mode B — this IS the changeset-level documentation task.] This subtask's deliverable is the README.md update itself."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
