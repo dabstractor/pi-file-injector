@@ -1458,6 +1458,40 @@ await runCase("CC13", "§5.6.1 — CRLF: #@ INSIDE a fenced block IS in code (co
     `#@ inside a CRLF fenced block must BE in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
 });
 
+await runCase("CC14", "§5.6.1 — CR-only (classic Mac) line endings: known limitation documentation", async () => {
+  // DEFENSE-IN-DEPTH / DOCUMENTATION (NOT a correctness target): content.split("\n") does NOT split on \r,
+  // so a pure \r-only file is ONE giant line. computeCodeRanges sees a single line; the open fence matches
+  // FENCE_OPEN_RE but there is no further line to close on → at most one range covering the whole content.
+  // This is an INTENTIONAL SCOPE BOUNDARY (CR-only is essentially extinct — classic Mac OS ≤9, pre-2001),
+  // not a regression: S1's `\r?` fix only helps when split("\n") produces multiple lines (CRLF/LF), not CR-only.
+  const txt = "```\r#@inside.ts\r```\r#@outside.md";
+  const r = mod.computeCodeRanges(txt);
+  assert(r.length <= 1,
+    `CR-only content is one line to split("\n") → at most one range (known limitation, not a target), got ${JSON.stringify(r)}`);
+});
+
+await runCase("CC15", "§5.6.1 — mixed LF/CRLF line endings in one file: fence closes correctly", async () => {
+  // Open fence on LF ("\n"), close fence on CRLF ("\r\n"), import on LF ("\n"). The `\r?` in closeRe lets the
+  // close line "```\r" match → the fence closes → the #@after.md import is OUTSIDE the code range → injected.
+  const txt = "```\ncode\r\n```\r\n#@after.md\n";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === false,
+    `#@ after a mixed LF/CRLF-closed fence must NOT be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC16", "§5.6.1 — CRLF with trailing spaces before the close fence", async () => {
+  // Close line "```  \r" (2 trailing spaces then \r). `[ \t]*` consumes the spaces, `\r?` consumes the \r,
+  // `$` anchors end → the fence closes → the #@after.md import is OUTSIDE the code range → injected.
+  const txt = "```\r\ncode\r\n```  \r\n#@after.md\r\n";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === false,
+    `#@ after a CRLF close fence with trailing spaces must NOT be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // ── TOTAL-SIZE BUDGET (PRD §5.6.2) — image/binary consume remaining ──────────
 // EIT = Estimate Image Tokens (pure unit cases pinning the 512-tile formula).
@@ -1564,6 +1598,26 @@ await runCase(16, "md code-exempt: fenced #@example.ts left verbatim; only api.m
   // example.ts is never imported (code-exempt → never resolved, never stat'd; it is not even a fixture)
   assert(!r.text.includes('<file name="' + path.join(TMPDIR, "example.ts") + '">'),
     "example.ts must NOT be injected (inside a fenced block → code-exempt)");
+});
+
+await runCase("CRLF-E2E", "§5.6 — CRLF markdown: fenced block + #@ import → both injected, marker stripped", async () => {
+  // End-to-end integration: a CRLF .md file with a fenced code block FOLLOWED by a #@ import. Before S1's
+  // closeRe `\r?` fix the fence never closed → the import was classified inCode → silently dropped
+  // (injected===1). After the fix the fence closes → the import resolves → injected===2 + marker stripped.
+  // UNIQUE fixture names (no collision with shared buildFixtures entries).
+  const crlfSpec = path.join(TMPDIR, "crlf_spec.md");
+  const crlfAfter = path.join(TMPDIR, "crlf_after.md");
+  fsSync.writeFileSync(crlfSpec, "# CRLF Spec\r\n\r\n```\r\ncode here\r\n```\r\n\r\nSee #@crlf_after.md\r\n");
+  fsSync.writeFileSync(crlfAfter, "# After Content\n");
+  const r = await mod.injectFiles("Read #@crlf_spec.md", [], FIX);
+  assert(r.injected === 2, `CRLF spec + crlf_after.md both injected (import after the fence resolved), got injected=${r.injected}`);
+  assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
+  assert(r.text.startsWith("Read crlf_spec.md"), "top-level #@crlf_spec.md marker stripped to crlf_spec.md");
+  assert(r.text.indexOf('<file name="' + crlfSpec + '">') !== -1, "crlf_spec.md block present");
+  assert(r.text.indexOf('<file name="' + crlfAfter + '">') !== -1, "crlf_after.md block present (import after the CRLF fence resolved)");
+  // The import marker is STRIPPED to the bare path — proving the #@ was recognized as an import (NOT code).
+  assert(r.text.includes("See crlf_after.md"), "crlf_spec.md block: CRLF-path import marker stripped to crlf_after.md");
+  assert(!r.text.includes("See #@crlf_after.md"), "the resolved CRLF-path import marker must NOT retain #@");
 });
 
 await runCase(17, "md cycle: a.md↔b.md → each once, b.md's #@a.md verbatim, no loop, injected=2", async () => {
