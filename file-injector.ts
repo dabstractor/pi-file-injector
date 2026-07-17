@@ -493,7 +493,7 @@ export function computeCodeRanges(content: string): [number, number][] {
     const fenceLen = run.length;
     const openStart = lineStart[i];            // first char of the opening fence line (PRD §5.6.1)
     // strict-CommonMark close: 0-3 leading spaces, then >= fenceLen of fenceChar, then whitespace-only.
-    const closeRe = new RegExp("^ {0,3}" + escapeRegex(fenceChar) + "{" + fenceLen + ",}[ \\t]*$");
+    const closeRe = new RegExp("^ {0,3}" + escapeRegex(fenceChar) + "{" + fenceLen + ",}[ \\t]*\\r?$");
 
     // scan forward from the NEXT line for the closing fence
     let j = i + 1;

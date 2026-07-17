@@ -1433,6 +1433,31 @@ await runCase("CC11", "§5.6.1 — pathological 200k-backtick run completes in b
   assert(r.every((rg) => rg[1] <= 200000 + " tail".length), "no range may run past the content");
 });
 
+await runCase("CC12", "§5.6.1 — CRLF fence closes correctly; #@ AFTER the fence is NOT in code", async () => {
+  // CRLF (\r\n) line endings: split("\n") leaves a trailing \r on each line. The OLD closeRe
+  // (`[ \t]*$`) rejected a trailing \r → the fence looked unterminated → its range ran to EOF →
+  // every #@ after the fence was silently classified inCode and dropped. The fix adds `\r?` before
+  // the `$` anchor so a closing fence line "```\r" is recognized as a close.
+  const txt = "```\r\ncode\r\n```\r\n#@after.md\r\n";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(r.length === 1, `CRLF fence must produce ONE range (close detected), got ${JSON.stringify(r)}`);
+  assert(mod.inCode(idx, r) === false,
+    `#@ after a CRLF-closed fence must NOT be in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
+await runCase("CC13", "§5.6.1 — CRLF: #@ INSIDE a fenced block IS in code (code-exempt still works under CRLF)", async () => {
+  // Guard that the \r? fix did not break code-exempt: a #@ inside a CRLF fenced block must still
+  // be treated as code (left verbatim, NOT imported). The FIRST #@ is the one inside the fence.
+  const txt = "```\r\n#@inside.ts\r\n```\r\n#@outside.md\r\n";
+  const idx = indexOfFirstHash(txt);
+  assert(idx > -1, "test fixture must contain a #@ token");
+  const r = mod.computeCodeRanges(txt);
+  assert(mod.inCode(idx, r) === true,
+    `#@ inside a CRLF fenced block must BE in code (idx=${idx}, ranges=${JSON.stringify(r)})`);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // ── TOTAL-SIZE BUDGET (PRD §5.6.2) — image/binary consume remaining ──────────
 // EIT = Estimate Image Tokens (pure unit cases pinning the 512-tile formula).
