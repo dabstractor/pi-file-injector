@@ -12,11 +12,19 @@ Pi's built-in `@file` injects a file only when you pass it on the command line b
 
 ## Install
 
+Published on npm:
+
+```bash
+pi install npm:pi-file-injector
+```
+
+Or, directly from git:
+
 ```bash
 pi install git:github.com/dabstractor/pi-file-injector
 ```
 
-Restart Pi if a session is already open. To uninstall, run `pi remove git:github.com/dabstractor/pi-file-injector`.
+Restart Pi if a session is already open. To uninstall, run `pi remove npm:pi-file-injector`.
 
 ## Usage
 

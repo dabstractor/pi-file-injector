@@ -1,14 +1,62 @@
 {
   "name": "pi-file-injector",
   "version": "0.1.0",
-  "private": true,
-  "description": "#@file — inject the whole file, every time, everywhere. A Pi extension.",
+  "description": "#@file — inject the whole file into your Pi prompt, every time and everywhere, only when you want it. Renders as a compact read-tool line.",
+  "author": "Dustin Schultz",
+  "license": "MIT",
   "type": "module",
+  "main": "./file-injector.ts",
+  "exports": {
+    ".": "./file-injector.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dabstractor/pi-file-injector.git"
+  },
+  "homepage": "https://github.com/dabstractor/pi-file-injector#readme",
+  "bugs": {
+    "url": "https://github.com/dabstractor/pi-file-injector/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "file-injection",
+    "context",
+    "prompt",
+    "ai",
+    "agents",
+    "cli"
+  ],
+  "files": [
+    "file-injector.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "file-injector.ts"
+    ]
+  },
   "scripts": {
     "typecheck": "node ./scripts/typecheck.mjs",
-    "test": "node ./file-injector.test.mjs && node ./import-behavior.test.mjs && node ./relative-imports.test.mjs"
+    "test": "node ./file-injector.test.mjs && node ./import-behavior.test.mjs && node ./relative-imports.test.mjs",
+    "prepublishOnly": "npm run typecheck"
   },
-  "pi": {
-    "extensions": ["file-injector.ts"]
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
   }
 }
