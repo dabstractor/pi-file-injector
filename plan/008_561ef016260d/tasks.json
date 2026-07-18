@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Compact read-tool-style display via custom-message delivery",
-      "status": "Researching",
+      "status": "Complete",
       "description": "Swap the file delivery model from appending <file> blocks into the user prompt text (\\n\\n---\\n\\n separator) to delivering them as a single custom message returned from a before_agent_start handler, rendered compactly in the chat as green collapsible read <path> lines via a registered MessageRenderer. The model still receives the same <file> blocks (byte-identical content); only the message boundary and chat display change. All injection engine logic (regex, resolution, classification, paging, budget, markdown imports, dedup, config, autocomplete) is untouched.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Implement delivery + renderer in file-injector.ts",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Thread FileDetail metadata through the injection core, split delivery across input + before_agent_start hooks with a one-shot stash, register a green read-tool-style MessageRenderer, and expose blocks/details from injectFiles. The existing file-injector.ts (1114 lines) ships the OLD append-to-prompt model and must be updated in place.",
           "tasks": [
             {
@@ -61,7 +61,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Split delivery across two hooks + register the MessageRenderer",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add a pending closure stash; change the input handler to stash {blocks, details} and return the stripped prompt; add a before_agent_start handler that consumes the stash and returns the custom message; register a MessageRenderer for fileInjector.injected that draws a green read-tool-style box; add the new imports (highlightCode, getLanguageFromPath, Box, Text, Component).",
               "subtasks": [
                 {
@@ -87,7 +87,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "Register MessageRenderer + implement renderInjectedMessage with green read-tool-style display",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1"

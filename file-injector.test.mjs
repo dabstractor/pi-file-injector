@@ -230,6 +230,10 @@ const HOME_NOTES_CONTENT = "# Notes\n\nTilde-expansion fixture for #@~/...\n";
 
 function buildFixtures() {
   fsSync.writeFileSync(path.join(TMPDIR, "a.ts"), A_TS_CONTENT);
+  // BUG-1 regression fixture: a file whose OWN content contains a literal `</file>`. The renderer's
+  // block regex used to truncate the expanded view at the INNER `</file>`; emitText now stores the
+  // exact body in detail.body so the renderer never re-regexes real content.
+  fsSync.writeFileSync(path.join(TMPDIR, "nest.ts"), "Example:\n<file name=\"d\">nested</file>\nDONE\n");
   fsSync.writeFileSync(path.join(TMPDIR, "b.ts"), B_TS_CONTENT);
   fsSync.writeFileSync(path.join(TMPDIR, "a.txt"), TXT_CONTENT);
   fsSync.writeFileSync(path.join(TMPDIR, "pic.png"), PNG_BYTES);
@@ -2644,6 +2648,41 @@ await runCase("REND-10", "color parity: toolSuccessBg (bg) + toolTitle/accent/di
   box.render(80);
   assert(calls.bg.includes("toolSuccessBg"), `bg uses toolSuccessBg (GREEN, the read tool's completed-call color; NOT purple customMessageBg), got bg=${JSON.stringify(calls.bg)}`);
   assert(!calls.bg.includes("customMessageBg"), `must NOT use customMessageBg (purple = skills, §12.24), got bg=${JSON.stringify(calls.bg)}`);
+});
+
+// REND-11 — BUG-1 REGRESSION (nested </file>). A file whose OWN content contains a literal `</file>`
+// must render its FULL body in the expanded view. Before the fix, the renderer re-derived each body
+// from message.content via the lazy block regex, which truncated at the INNER `</file>`. The fix stores
+// the exact body in detail.body at emit time; the renderer prefers it and only falls back to the regex
+// for entries without one (old/foreign/test messages). This test pins BOTH the stored-body path (real
+// injected detail) and that the regex fallback alone would have failed.
+await runCase("REND-11", "BUG-1: a file whose content has a nested </file> renders the FULL body when expanded (not truncated)", async () => {
+  // (a) UNIT (renderer-direct): a detail carrying the stored body. The expanded view must include 'DONE'
+  //     (which sits AFTER the inner </file> in the content). The regex fallback alone would truncate.
+  const fullBody = "Example:\n<file name=\"d\">nested</file>\nDONE\n";
+  const block = '<file name="/abs/nest.ts">\n' + fullBody + '\n</file>';
+  const msg = { details: { files: [{ path: "/abs/nest.ts", kind: "text", body: fullBody }] }, content: block };
+  const expanded = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME);
+  const bodyChild = textOf(expanded.children[expanded.children.length - 1]);
+  assert(bodyChild.includes("DONE"), `expanded body must include text AFTER the inner </file> ('DONE'); got ${JSON.stringify(bodyChild.slice(0, 80))}`);
+  assert(!bodyChild.endsWith("nested"), `expanded body must NOT be truncated at the inner </file>; got ${JSON.stringify(bodyChild.slice(0, 80))}`);
+
+  // (b) E2E (injectFiles → render): a REAL file with a nested </file> produces a detail whose stored body
+  //     is exact, and the renderer shows the full content (DONE present), and the model-facing content is
+  //     also intact (the delivery contract is unaffected — this bug is display-only per the report).
+  const r = await mod.injectFiles("Review #@nest.ts", [], FIX);
+  assert(r.injected === 1, `nest.ts was injected, got injected=${r.injected}`);
+  assert(Array.isArray(r.details) && r.details.length === 1, `one detail for nest.ts, got ${JSON.stringify(r.details?.length)}`);
+  const d = r.details[0];
+  assert(typeof d.body === "string" && d.body.includes("DONE"),
+    `detail.body carries the full content (incl. 'DONE' after the inner </file>), got ${JSON.stringify(d.body)}`);
+  // model-facing content is the full block (delivery unaffected):
+  assert(r.blocks[0].includes("DONE"), `the model-facing block carries the full content ('DONE' present), got ${JSON.stringify(r.blocks[0])}`);
+  // renderer (as published by before_agent_start: content=blocks.join) shows DONE in the expanded view:
+  const published = { details: { files: r.details }, content: r.blocks.join("\n\n") };
+  const exp = mod.renderInjectedMessage(published, { expanded: true }, REND_THEME);
+  const shown = textOf(exp.children[exp.children.length - 1]);
+  assert(shown.includes("DONE"), `expanded view of a real nested-</file> file shows the full body ('DONE'), got ${JSON.stringify(shown.slice(0, 80))}`);
 });
 
 // 10. Summary + cleanup + exit.

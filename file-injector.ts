@@ -341,6 +341,10 @@ export interface FileDetail {
   range?: string; // paged: ":<startLine>-…" resume range (read-tool style)
   pagedHeadLines?: number; // paged: complete lines delivered in the head
   dimensionHint?: string; // image: formatDimensionNote(resized) — UNUSED in S1 (image is S2)
+  body?: string; // the EXACT file body embedded in the block (text/paged head), so the renderer can
+                 //   display it WITHOUT re-regexing message.content (which mis-truncates when a file's
+                 //   own content contains a literal </file>). Renderer-only metadata; never sent to the
+                 //   model. OMITTED for image/binary (no displayable body) and by old/foreign entries.
 }
 
 interface State {
@@ -626,7 +630,11 @@ const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
  */
 export function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
   const files: FileDetail[] = message?.details?.files ?? []; // defensive — old/foreign entries
-  // re-derive each file's body from message.content (NOT from details — details is renderer-only metadata, §12.22)
+  // FALLBACK body derivation: re-parse message.content with the block regex ONLY when a detail lacks a
+  // stored `body` (old/foreign/test entries). BUG-1: a file whose own content contains a literal `</file>`
+  // truncates the lazy `([\s\S]*?)` at the INNER `</file>`, so we must NOT rely on re-parsing for real
+  // injected files. emitText now stores the EXACT body in `detail.body`; the renderer prefers it and only
+  // falls back to the regex for entries without one (e.g. the REND-* unit tests, which pass crafted details).
   const bodies: string[] = [];
   if (typeof message?.content === "string") {
     let m: RegExpExecArray | null;
@@ -650,7 +658,8 @@ export function renderInjectedMessage(message: any, opts: { expanded: boolean },
     // one read line per file; expand hint ONCE per box (i===0), matching the [skill] precedent (PRD §6.3)
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
     if (opts.expanded) {
-      const body = bodies[i];
+      // Prefer the EXACT stored body (BUG-1 fix); fall back to the regex-derived body for entries without one.
+      const body = typeof d.body === "string" ? d.body : bodies[i];
       if (body !== undefined && d.kind !== "image") { // images already attached to user msg (§6.4) — skip
         const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
         const rendered = lang ? highlightCode(body, lang).join("\n") : body;
@@ -872,7 +881,7 @@ export function emitText(abs: string, content: string, state: State): void {
   if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
     // INLINE (whole) — current behavior preserved (PRD §5.1)
     state.blocks.push(formatTextFileBlock(abs, content));
-    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount });
+    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, body: content });
     subtract(state, fileCost);
   } else {
     // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
@@ -896,7 +905,7 @@ export function emitText(abs: string, content: string, state: State): void {
       // subtracts its cost at emit time"). Earlier this branch pushed the block without subtract(),
       // which let a tight-but-positive budget never deplete across a run of small files (F1).
       state.blocks.push(formatTextFileBlock(abs, content));
-      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount });
+      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, body: content });
       subtract(state, fileCost);
     } else {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
@@ -904,7 +913,7 @@ export function emitText(abs: string, content: string, state: State): void {
       const startLine = headLines + 1; // == headStartLine(head)
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(formatPagedDirectiveBlock(abs, content.length, startLine, headLines));
-      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines });
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines, body: head });
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }
