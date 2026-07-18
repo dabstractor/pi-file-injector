@@ -1,0 +1,12 @@
+h1.0 Bug Fix Requirements
+ h2.0 Overview
+ h2.1 Critical Issues (Must Fix)
+ h2.2 Major Issues (Should Fix)
+  h3.0 Issue 1: resolveImportPath truncation heuristic silently injects the WRONG file
+ h2.3 Minor Issues (Nice to Fix)
+  h3.1 Issue 2: FileDetail.body duplicates file bytes, violating PRD §12.22
+  h3.2 Issue 3: Paged-file expanded view omits the paging directive (PRD §6.3)
+  h3.3 Issue 4: Image magic-number sniff rejects a valid image whose extension ≠ actual type (PRD §5.2)
+ h2.4 Testing Summary
+---
+code:6 para:19 list:2
