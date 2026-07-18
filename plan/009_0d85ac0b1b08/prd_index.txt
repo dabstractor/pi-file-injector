@@ -1,0 +1,64 @@
+h1.0 PRD: #@file Whole-File Injection & Markdown Import Extension for Pi
+ h2.0 1. Overview
+  h3.0 Problem
+  h3.1 Solution
+  h3.2 Value proposition
+  h3.3 Tagline
+ h2.1 2. Goals & Non-Goals
+  h3.4 Goals
+  h3.5 Non-Goals
+ h2.2 3. Background: How Pi Handles Input (must-read for implementer)
+  h3.6 3.1 Why #@ works everywhere (the key advantage)
+  h3.7 3.2 Why #@ is a safe, collision-free trigger
+  h3.8 3.3 Public vs internal utilities
+  h3.9 3.4 How #@ delivers files and renders them compactly (the two-mechanism model)
+ h2.3 4. The #@ Syntax Specification
+  h3.10 4.1 Grammar
+  h3.11 4.2 Detection regex
+  h3.12 4.3 Token cleanup
+  h3.13 4.4 Path resolution (top-level user tokens)
+  h3.14 4.5 Markdown import directives (same grammar, narrower rules)
+  h3.15 4.6 Optional bare-@ markdown imports (config: markdownBareAtImports)
+ h2.4 5. Behavior by File Type
+  h3.16 5.1 Text files (everything that isn't a recognized image)
+  h3.17 5.2 Image files
+  h3.18 5.3 Other binary files (non-image, NUL detected)
+  h3.19 5.4 Missing / directory / read error
+  h3.20 5.5 Oversize files: automatic paged delivery
+  h3.21 5.6 Markdown transitive imports
+   h4.0 5.6.1 Code-region detection (approximate CommonMark)
+   h4.1 5.6.2 Total-size budget accounting
+ h2.5 6. Output Format, Delivery & Chat Display
+  h3.22 6.1 Model-facing format: Pi-native <file> tags (unchanged)
+  h3.23 6.2 Delivery: a custom message returned from before_agent_start
+  h3.24 6.3 Chat display: a green, collapsible read-line box (the MessageRenderer)
+  h3.25 6.4 Assembly & shared state
+ h2.6 7. Technical Reference (verified APIs)
+ h2.7 8. File Structure
+ h2.8 9. Algorithm (pseudocode)
+ h2.9 10. Edge Cases (implementer checklist)
+h1.1 See hosts(5) for details.
+h1.2 See hosts(5) for details.
+h1.3 See hosts(5) for details.
+ h2.10 11. Acceptance Criteria & Test Plan
+  h3.26 Manual test matrix
+h1.4 See hosts(5) for details.
+  h3.27 Automated sanity check (optional)
+ h2.11 12. Implementation Notes & Gotchas
+ h2.12 13. Design Rationale & Tradeoffs
+  h3.28 13.1 Why unconditional delivery (no silent size gate)
+  h3.29 13.2 The tradeoff (be honest about it)
+  h3.30 13.3 Why a separate symbol instead of reusing @
+  h3.31 13.4 Why (almost) no user-facing config
+  h3.32 13.5 Relationship to a size-gated @
+  h3.33 13.6 Why markdown transitive imports, and why these guards
+  h3.34 13.7 Why custom messages + a renderer (compact display), and its one tradeoff
+  h3.35 13.8 Why the prompt is preserved verbatim (no #@ stripping)
+ h2.13 14. Interactive Path Autocomplete (TUI)
+  h3.36 14.1 Hook
+  h3.37 14.2 Implementation (shipped) — line-rewrite reuse (Option 1)
+  h3.38 14.3 Non-goal
+  h3.39 14.4 Scope note (markdown imports are injection-only)
+ h2.14 Appendix A — Minimal skeleton
+---
+code:31 para:135 list:30 table:6 quote:7
