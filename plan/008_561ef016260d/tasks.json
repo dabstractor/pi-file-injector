@@ -111,7 +111,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Migrate tests, add delivery/display tests, and sync README (Mode B)",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Migrate the ~170 existing test assertions from reading r.text for block content to reading r.blocks/r.details; add new tests for the custom-message delivery, stash lifecycle, and renderer output; and sync README.md to describe the new compact read-tool-style appearance (removing the --- append language).",
           "tasks": [
             {
@@ -203,14 +203,14 @@
               "type": "Task",
               "id": "P1.M2.T3",
               "title": "Sync changeset-level documentation (Mode B)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Update README.md to describe the new compact read-tool-style chat display, removing all references to the removed --- append model. This is the cross-cutting changeset-level documentation sync that only makes sense once the full implementation (M1) and test migration (M2.T1-T2) are in place.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T3.S1",
                   "title": "Update README.md for compact read-tool-style display (remove --- append language)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2",

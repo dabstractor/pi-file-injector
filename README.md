@@ -30,7 +30,7 @@ Diff #@a.ts vs #@b.ts
 See #@a.ts.
 ```
 
-On submit, the file contents appear below a `---` rule. The `#@` trigger is stripped from each reference, so `Review #@a.ts` reaches the model as `Review a.ts` with the file appended underneath.
+On submit, each file shows up as a compact green `read <path>` line directly below your message — one line per file, indistinguishable from the `read` tool. Press `ctrl+o` to expand any of them to the full contents. The `#@` trigger is stripped from each reference, so `Review #@a.ts` appears in your message as `Review a.ts`, with the file delivered to the model underneath — never pasted into your message bubble.
 
 Markdown files can import other files. If `spec.md` itself contains `#@api.md`, a single `#@spec.md` delivers both — `spec.md` first, then `api.md` — and the import marker is stripped from `spec.md` the same way a top-level marker is:
 
@@ -49,7 +49,7 @@ Bare `@` is unchanged, so `Review @a.ts` behaves as before.
 | Text (`.ts`, `.md`, `.json`, `.log`, etc.) | Entire contents injected when they fit remaining context. Oversize files are delivered as a head block plus a paging directive — the model reads the rest via the `read` tool. Never silently truncated. |
 | Image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) | Attached as an image. |
 | Other binary | Not injected. A short note says it was skipped. |
-| Missing file, directory, or permission error | Left as written. Nothing is appended. |
+| Missing file, directory, or permission error | Left as written. Nothing is injected. |
 
 A delivered markdown file (`.md` or `.markdown`) is also scanned for relative `#@` imports. Each import it references is delivered as its own block, and is scanned in turn if it is also markdown — so a single `#@spec.md` can pull in a whole tree of docs. The same file-type rules (text / image / binary / missing) apply to each import unchanged.
 
@@ -60,6 +60,8 @@ Text uses Pi's native block format, the same one `@file` uses:
 <entire file contents>
 </file>
 ```
+
+That's what the model receives. You won't see it as raw text in the chat — each injected file renders as a green `read <path>` line (just like the `read` tool), with `ctrl+o` to expand. Your own message shows only what you typed.
 
 Images are matched by their real bytes, not just the extension. A text file renamed `fake.png` is injected as text, not attached as a broken image. An empty (0-byte) image attaches nothing.
 
