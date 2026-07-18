@@ -1051,6 +1051,14 @@ export async function injectFiles(
 let cfg: FileInjectorConfig = {};
 
 export default function (pi: ExtensionAPI) {
+  // §6.2/§12.20 — one-shot handoff stash from the input handler to before_agent_start. input produces the
+  // work (file I/O + blocks/details); before_agent_start publishes it as the custom message after the user
+  // message. prompt() runs input → … → before_agent_start sequentially (one awaited call), so there is no race.
+  // CLOSURE var (NOT module-level like cfg above): pending is a per-prompt handoff between two handlers from
+  // this same factory invocation; closure scope is correct and per-session. Cleared unconditionally in
+  // before_agent_start (one-shot per prompt, §12.20) so a later no-#@ prompt never re-delivers a stale stash.
+  let pending: { blocks: string[]; details: FileDetail[] } | null = null;
+
   // §4.6 — load file-injector.json config on session_start (provides ctx.cwd + ctx.isProjectTrusted()).
   // Registered FIRST so captureHandler("session_start").all[0] is this handler. readConfig NEVER throws
   // (tryRead → {}), so this can't break the session. A separate handler (not merged into autocomplete)
@@ -1063,8 +1071,12 @@ export default function (pi: ExtensionAPI) {
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
     if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
 
-    const { text, images, injected, paged } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg
-    if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered
+    const { text, images, injected, paged, blocks, details } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start
+    if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered (no stash set → before_agent_start returns undefined)
+
+    // §6.2 hand the built blocks+details to before_agent_start (the custom message). Only stashed when
+    // injected > 0 (the !injected early-return above left no stash). Cleared one-shot in before_agent_start.
+    pending = { blocks, details };
 
     // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). Unified wording: always
     // "N whole"; append ", M paged" only when paging. paged===0 → "#@ injected N whole"; paged>0 →
@@ -1073,6 +1085,26 @@ export default function (pi: ExtensionAPI) {
     const msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
     if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 unified whole/paged wording; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
+  });
+
+  // §6.2 publish the stashed files as ONE custom message, appended after the user message. Fires once per
+  // prompt(), after the input handler. No stash (no #@, or short-circuited, or nothing injected) → return
+  // undefined (no-op). The customType "fileInjector.injected" is the handshake with the MessageRenderer T2.S2
+  // registers; until then Pi renders its default [fileInjector.injected] box (delivery to the model — via
+  // convertToLlm role:custom→user — works regardless of rendering). Cleared unconditionally (one-shot, §12.20).
+  pi.on("before_agent_start", async (_e, _ctx) => {
+    if (!pending) return undefined;
+    const { blocks, details } = pending;
+    pending = null; // clear regardless — one-shot per prompt (a later no-#@ prompt never re-delivers)
+    return {
+      message: {
+        customType: "fileInjector.injected", // the renderer's registered customType (T2.S2 registers it)
+        content: blocks.join("\n\n"),        // every <file> block → sent to the LLM (convertToLlm: custom→user)
+        display: true,                       // render in the TUI (renderer registered in T2.S2; Pi's default
+                                             //   [fileInjector.injected] box shows until then — acceptable interim)
+        details: { files: details },         // renderer metadata (NOT extra model text; convertToLlm ignores details)
+      },
+    };
   });
 
   // ── #@ path autocomplete (TUI/RPC only) ─────────────────────────────────────
