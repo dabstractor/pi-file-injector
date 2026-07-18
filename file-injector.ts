@@ -127,12 +127,19 @@ export async function isRegularFile(p: string): Promise<boolean> {
  *  Resolution ladder (exact-match ALWAYS wins):
  *    1. expand tilde + resolve(baseDir, token) → `abs` (the existing `expandTildeAndResolve`, NO stat);
  *    2. if `abs` is an existing regular file → return `abs` (exact match wins, e.g. bare `PRD` beats `PRD.md`);
+ *    2b. formatting-strip fallback: if the token carries trailing markdown-emphasis GLUE (`*`/`_`) that
+ *        `cleanToken` does NOT handle, strip that trailing run, re-clean (to drop a now-exposed trailing
+ *        `.`), and retry the EXACT path (`@b.md.*` → `b.md`). This is a NARROWED formatting strip — it is
+ *        NOT a `.md`-substring truncation, so a missing `report.md.backup`/`X.md.bak`/`X.md.txt`/`X.md.old`
+ *        stays verbatim (exact-only per §4.4/§4.5). `_` inside a name (`my_file.md`) is never stripped —
+ *        only a TRAILING run; the re-clean is load-bearing (without it `my_file.md.` would not stat).
  *    3. ONLY when `tryMdExt` is true AND the cleaned token is extensionless (`path.extname(token) === ""`):
  *       try `abs + ".md"`, then `abs + ".markdown"` — first existing regular file wins (`#@PRD` → `PRD.md`);
  *    4. otherwise → `null` (nothing resolved; the caller leaves the `#@` marker verbatim).
  *  `tryMdExt` is `true` for markdown imports (§4.5 shorthand) and `false` for top-level user tokens
  *  (§4.4 exact-only — top-level prompt behavior is byte-for-byte identical to today). Tokens already
- *  ending in `.md`/`.markdown` or any extension are exact-only (`#@PRD.md` never becomes `PRD.md.md`).
+ *  ending in `.md`/`.markdown` or any extension are exact-only (`#@PRD.md` never becomes `PRD.md.md`, and
+ *  a missing `X.md.bak` is NEVER truncated to `X.md`).
  *  Dotfiles: `path.extname(".env") === ""` technically qualifies for the fallback, BUT exact-match-wins
  *  returns a bare `.env` before the `.md` fallback runs (follows PRD §4.5 literally — no dotfile exclusion).
  *  Pure: only stats paths, never mutates `state` (preserves the scan-then-inject separation for dedup). */
@@ -142,14 +149,18 @@ export async function resolveImportPath(
   tryMdExt: boolean,
 ): Promise<string | null> {
   // Candidate filenames to try, in order (most-specific first). `token` is already cleanToken()'d by the
-  // caller, but \S+ can still glue markdown formatting / sentence junk to a .md filename (an italic line
-  // like "*see @ARCHITECTURE.md.*" captures "ARCHITECTURE.md.*"). A filename's extension is its natural
-  // terminator, so when the token contains .md/.markdown we ALSO try it truncated immediately after the
-  // LAST .md/.markdown (drops trailing *, **, etc.). `_` is a valid filename char and is never stripped.
-  // The full token always wins over the truncation (a genuine "weird.md.bak" beats "weird.md").
+  // caller, but \S+ can still glue markdown formatting to a .md filename (an italic line like
+  // "*see @ARCHITECTURE.md.*" captures "ARCHITECTURE.md.*"). cleanToken only trims TRAILING_PUNCT
+  // (.,;:!?")]}>'), so it leaves the emphasis glue chars `*` and `_` untouched. PRD §4.4/§4.5 make a
+  // token that already carries an extension EXACT-ONLY (a missing `report.md.backup`/`X.md.bak` must
+  // stay verbatim, NEVER truncated to the base `.md`). So instead of cutting at a `.md` substring we
+  // NARROW the fallback to a TRAILING run of the actual glue chars (`*`/`_`): strip that run, re-clean
+  // (to drop a now-exposed trailing `.` — e.g. `my_file.md.*` → `my_file.md.` → `my_file.md`), and retry
+  // the EXACT path. This preserves GROUP-4a–4g (`@b.md.*` → `b.md`) WITHOUT turning `.bak`/`.txt`/`.old`
+  // into `.md`. `_` INSIDE a name is never stripped (only a trailing run). The re-clean is load-bearing.
   const candidates: string[] = [token];
-  const extCut = token.match(/^.*\.(?:md|markdown)/); // greedy → cut after the LAST .md/.markdown
-  if (extCut && extCut[0] !== token) candidates.push(extCut[0]);
+  const fmtCut = token.replace(/[*_]+$/, ""); // strip a trailing run of the glue chars cleanToken omits
+  if (fmtCut !== token && fmtCut !== "") candidates.push(cleanToken(fmtCut));
   for (const cand of candidates) {
     const abs = expandTildeAndResolve(cand, baseDir); // §4.4 — ~ expand + resolve(baseDir) — NO stat
     if (await isRegularFile(abs)) return abs;          // §4.5 rule 3 — EXACT MATCH ALWAYS WINS
