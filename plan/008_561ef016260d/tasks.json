@@ -159,14 +159,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Add delivery, stash lifecycle, and renderer display tests",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Add new runnable tests covering the NEW-model behaviors not exercised by the migrated suites: the injectFiles return shape (blocks/details arrays + stripped text), the before_agent_start custom-message emission and one-shot stash lifecycle, and the renderInjectedMessage output (green read-lines per file kind, defensive fallback).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Delivery + custom-message + stash lifecycle tests",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
@@ -184,7 +184,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T2.S2",
                   "title": "Renderer output + defensive fallback tests",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"

@@ -2388,6 +2388,125 @@ await runCase("M2.T2.S1-g", "§10 dedup: #@api.md + @api.md (on) → api.md ONCE
   assert(!hasBlock(r, "Refs #@api.md"), "the first (dedup-winning) marker must NOT retain #@");
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ── P1.M2.T2.S1 (plan/008): delivery + custom-message + stash lifecycle ──
+// ─────────────────────────────────────────────────────────────────────────────
+// Pins PRD §6.2 (Delivery — the custom message shape) / §6.4 (Assembly & shared state — two returns; the
+// pending stash handoff; clear unconditionally) / §12.20 (Two hooks, one stash — one-shot per prompt) /
+// §11 #33-41 (display/model-input test matrix). The injectFiles return shape (+blocks/+details), the full
+// before_agent_start custom-message contract ({customType, content=blocks.join("\n\n"), display:true,
+// details:{files}}), and the one-shot `pending` stash lifecycle (set by input only when injected>0; read-and-
+// cleared once by before_agent_start; undefined on no-#@ / extension-source / second-fire).
+//
+// REUSES captureAllHandlers (ONE factory → input + before_agent_start share the `pending` closure) + makeMockCtx
+// + FIX/A_TS/B_TS/A_TS_CONTENT/B_TS_CONTENT. Does NOT drive session_start (it UNCONDITIONALLY calls
+// pi.registerMessageRenderer at L1169; captureAllHandlers' mock pi stubs it as a no-op, but cfg is module-level
+// and these prompts use no config → default bareAt:false is correct without driving session_start — cases drive
+// input[0] + before_agent_start[0] only, like existing case 12). EXPANDS case 12 (partial delivery → full
+// custom-message shape) and COMPLEMENTS case 9 (multi-file order → details side + length parity). Case IDs
+// DELIV-1..DELIV-6 (NOT `M2.T2.S1-` — collides with plan-005 residual cases `M2.T2.S1-e/f/g` above).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// DELIV-1 — RETURN SHAPE (direct injectFiles). r.text is stripped-only (no `---`, no `<file`); blocks/details
+// are arrays of len 1 with the FileDetail shape {path, kind:'text', chars, lines}.
+await runCase("DELIV-1", "injectFiles return shape: r.text stripped (no ---/<file>); r.blocks[] + r.details[] len 1", async () => {
+  const r = await mod.injectFiles("Review #@a.ts", [], FIX);
+  assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
+  assert(r.paged === 0, `expected paged===0, got ${r.paged}`);
+  assert(r.text === "Review a.ts", `r.text is the STRIPPED prompt (no blocks); got ${JSON.stringify(r.text)}`);
+  assert(!r.text.includes("---"), "r.text must NOT contain the old '---' separator");
+  assert(!r.text.includes("<file"), "r.text must NOT contain any <file> block (bytes live in r.blocks/the custom message)");
+  assert(Array.isArray(r.blocks) && r.blocks.length === 1, `r.blocks is a string[] of length 1, got ${JSON.stringify(r.blocks)}`);
+  assert(r.blocks[0].includes('<file name="' + A_TS + '">'), "r.blocks[0] is the a.ts <file> block");
+  assert(Array.isArray(r.details) && r.details.length === 1, `r.details is a FileDetail[] of length 1, got ${JSON.stringify(r.details)}`);
+  const d = r.details[0];
+  assert(d.path === A_TS, `details[0].path is the resolved a.ts abs, got ${d.path}`);
+  assert(d.kind === "text", `details[0].kind === 'text', got ${d.kind}`);
+  assert(d.chars === A_TS_CONTENT.length, `details[0].chars is the content length (${A_TS_CONTENT.length}), got ${d.chars}`);
+  const expectedLines = (A_TS_CONTENT.match(/\n/g) || []).length + 1;
+  assert(d.lines === expectedLines, `details[0].lines is newline-count+1 (${expectedLines}), got ${d.lines}`);
+});
+
+// DELIV-2 — CUSTOM MESSAGE (full contract). before_agent_start publishes
+// {customType, content=blocks.join("\n\n"), display:true, details:{files}}. EXPANDS case 12 (which checks
+// customType + content.includes + notify) to also pin display===true, details.files shape, and content === the
+// joined block (exactly ONE <file> for a single-file prompt).
+await runCase("DELIV-2", "custom message: before_agent_start → {customType, content=blocks.join, display:true, details:{files}}", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);
+  const h = captureAllHandlers(); // ONE factory → input + before_agent_start share the `pending` closure
+  const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `input must transform, got '${out.action}'`);
+  assert(out.text === "Review a.ts", `input text is stripped (blocks leave the user message); got ${JSON.stringify(out.text)}`);
+  const msg = await h.before_agent_start[0]({}, ctx); // SAME factory → reads the stashed pending
+  assert(msg && msg.message, `before_agent_start must return {message}, got ${JSON.stringify(msg)}`);
+  const m = msg.message;
+  assert(m.customType === "fileInjector.injected", `customType handshake (the renderer key), got ${m.customType}`);
+  assert(typeof m.content === "string" && m.content.includes('<file name="' + A_TS + '">'),
+    `content carries the a.ts <file> block (the model receives it), got ${JSON.stringify(m.content)}`);
+  // for ONE file, blocks.join("\n\n") === the single block → exactly one <file> opener in content
+  assert((m.content.match(/<file name="/g) || []).length === 1,
+    `content has exactly ONE <file> block (= blocks.join for 1 file), got ${JSON.stringify(m.content)}`);
+  assert(m.display === true, `display===true (TUI render contract; §6.2), got ${m.display}`);
+  assert(m.details && Array.isArray(m.details.files), `details.files is an array, got ${JSON.stringify(m.details)}`);
+  assert(m.details.files.length === 1, `details.files has one entry (one file delivered), got ${m.details.files.length}`);
+  assert(m.details.files[0].path === A_TS && m.details.files[0].kind === "text",
+    `details.files[0] is the a.ts text detail, got ${JSON.stringify(m.details.files[0])}`);
+});
+
+// DELIV-3 — ONE-SHOT STASH. before_agent_start read-and-clears `pending` (file-injector.ts:1202); a 2nd call
+// returns undefined. Pins PRD §12.20 (one-shot per prompt — a later no-#@ prompt never re-delivers a stale stash).
+await runCase("DELIV-3", "one-shot stash: 2nd before_agent_start returns undefined (pending cleared)", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);
+  const h = captureAllHandlers();
+  await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx); // stashes pending
+  const msg1 = await h.before_agent_start[0]({}, ctx);
+  assert(msg1 && msg1.message && msg1.message.customType === "fileInjector.injected",
+    `1st before_agent_start publishes the custom message, got ${JSON.stringify(msg1)}`);
+  const msg2 = await h.before_agent_start[0]({}, ctx);
+  assert(msg2 === undefined,
+    `2nd before_agent_start must return undefined (pending cleared — one-shot per prompt, §12.20), got ${JSON.stringify(msg2)}`);
+});
+
+// DELIV-4 — EMPTY STASH. A no-#@ prompt short-circuits (input returns continue, sets no stash) → before_agent_start
+// returns undefined (no phantom custom message).
+await runCase("DELIV-4", "empty stash: no-#@ input → before_agent_start undefined (no phantom injection)", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);
+  const h = captureAllHandlers();
+  const out = await h.input[0]({ text: "Just a plain prompt with no markers", source: "interactive", images: [] }, ctx);
+  assert(out.action === "continue", `no-#@ input short-circuits to continue (no stash set), got '${out.action}'`);
+  const msg = await h.before_agent_start[0]({}, ctx);
+  assert(msg === undefined, `before_agent_start must return undefined (empty stash → no phantom custom message), got ${JSON.stringify(msg)}`);
+});
+
+// DELIV-5 — SHORT-CIRCUIT. source:'extension' input → continue (PRD §12.1 loop prevention — no stash set) →
+// before_agent_start returns undefined. Even with a #@, no stash is set for extension sources.
+await runCase("DELIV-5", "short-circuit: source:'extension' input → before_agent_start undefined (loop prevention)", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);
+  const h = captureAllHandlers();
+  // source:'extension' is MANDATORY loop prevention (§12.1) — even with a #@, no stash is set.
+  const out = await h.input[0]({ text: "Review #@a.ts", source: "extension", images: [] }, ctx);
+  assert(out.action === "continue", `source:'extension' input short-circuits to continue (loop prevention), got '${out.action}'`);
+  const msg = await h.before_agent_start[0]({}, ctx);
+  assert(msg === undefined, `before_agent_start must return undefined (extension source set no stash), got ${JSON.stringify(msg)}`);
+});
+
+// DELIV-6 — MULTI-FILE details. Two #@ tokens → r.blocks.length===2 AND r.details.length===2; details parallel
+// to blocks in emission (pre-order) order: details[0]=a.ts, details[1]=b.ts. COMPLEMENTS case 9 (which covers
+// block order via findIndex + notify count) by pinning the FileDetail side + length parity.
+await runCase("DELIV-6", "multi-file: r.blocks.length===2 AND r.details.length===2; details parallel to blocks (emission order)", async () => {
+  const r = await mod.injectFiles("Diff #@a.ts vs #@b.ts", [], FIX);
+  assert(r.injected === 2, `expected injected===2, got ${r.injected}`);
+  assert(Array.isArray(r.blocks) && r.blocks.length === 2, `r.blocks is a string[] of length 2, got ${r.blocks.length}`);
+  assert(Array.isArray(r.details) && r.details.length === 2, `r.details is a FileDetail[] of length 2, got ${r.details.length}`);
+  // details are parallel to blocks in emission (pre-order) order: details[0]=a.ts, details[1]=b.ts
+  assert(r.details[0].path === A_TS, `details[0].path===A_TS (emission order), got ${r.details[0].path}`);
+  assert(r.details[1].path === B_TS, `details[1].path===B_TS (emission order), got ${r.details[1].path}`);
+  assert(r.details[0].kind === "text" && r.details[1].kind === "text", `both details kind==='text'`);
+  // cross-check: each detail's path appears as the <file name=…> in the parallel block
+  assert(r.blocks[0].includes('<file name="' + A_TS + '">'), "blocks[0] is the a.ts block (parallel to details[0])");
+  assert(r.blocks[1].includes('<file name="' + B_TS + '">'), "blocks[1] is the b.ts block (parallel to details[1])");
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
