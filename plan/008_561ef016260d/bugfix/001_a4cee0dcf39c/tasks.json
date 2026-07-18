@@ -147,14 +147,14 @@
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Wire all three test harnesses into npm test",
-              "status": "Ready",
+              "status": "Complete",
               "description": "package.json currently runs only file-injector.test.mjs under `npm test`. import-behavior.test.mjs (which encodes the truncation behavior, including the now-fixed test 4f) and relative-imports.test.mjs (BUG CLASS 1 & 2 regression guards) are standalone scripts not gated by CI. Chain all three in the test script so future regressions are caught.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Update package.json test script to chain all three harnesses",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "node ./scripts/typecheck.mjs",
-    "test": "node ./file-injector.test.mjs"
+    "test": "node ./file-injector.test.mjs && node ./import-behavior.test.mjs && node ./relative-imports.test.mjs"
   },
   "pi": {
     "extensions": ["file-injector.ts"]
