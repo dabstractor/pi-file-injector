@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir, type ResizedImage } from "@earendil-works/pi-coding-agent";
+import { resizeImage, formatDimensionNote, highlightCode, getLanguageFromPath, CONFIG_DIR_NAME, getAgentDir, type ResizedImage } from "@earendil-works/pi-coding-agent";
+import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -595,6 +596,102 @@ export function estimateImageTokens(resized: ResizedImage | null): number {
   return tilesW * tilesH * 170 + 85;
 }
 
+// ---------- §6.3 chat renderer (registered for "fileInjector.injected") -------------------------
+// Replicates the read tool's completed-call look: a green (toolSuccessBg) Box, one `read <path>` line per
+// file when collapsed, full/highlighted content when expanded. blocks (message.content) and details.files
+// are co-emitted in the same pre-order emission order (PRD §6.4), so they align by index. DEFENSIVE: never
+// throws (PRD §12.23) — a thrown renderer is caught by CustomMessageComponent → Pi's default purple box
+// (acceptable but not the goal).
+const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
+
+/**
+ * PRD §6.3 — the MessageRenderer for customType "fileInjector.injected". Draws a green (toolSuccessBg) Box
+ * with one `read <tildified-path>` line per file (collapsible), expanding on ctrl+o to the full/highlighted
+ * content.
+ *
+ * theme/message are `any` (item §3c) to avoid importing the full Theme/CustomMessage types and to keep the
+ * test seam simple. The fg/bg discipline is therefore enforced by code review (NOT the compiler):
+ * toolSuccessBg → theme.bg; toolTitle/accent/dim/warning/toolOutput → theme.fg. (To opt into compile-time
+ * enforcement, import Theme from pi-coding-agent and type theme: Theme — then theme.fg("toolSuccessBg")
+ * becomes a compile error.)
+ *
+ * DEFENSIVE (§12.23): `message?.details?.files ?? []` (old/foreign entries with no details → fallback
+ * line); `bodies[i] !== undefined` guard; image expanded-view short-circuit (images already attached to
+ * the user message, §6.4 — don't re-render); `typeof message?.content === "string"` guard. Never throws.
+ *
+ * @param message the CustomMessage (details.files: FileDetail[]; content: the joined <file> blocks string)
+ * @param opts { expanded } — mirrors the global ctrl+o toggle (like [skill] blocks)
+ * @param theme Pi Theme (fg/bg/bold)
+ * @returns a green Box Component (one read line per file; expanded content when opts.expanded)
+ */
+export function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
+  const files: FileDetail[] = message?.details?.files ?? []; // defensive — old/foreign entries
+  // re-derive each file's body from message.content (NOT from details — details is renderer-only metadata, §12.22)
+  const bodies: string[] = [];
+  if (typeof message?.content === "string") {
+    let m: RegExpExecArray | null;
+    FILE_BLOCK_RE.lastIndex = 0; // module regex w/ g flag → reset before the loop
+    while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) {
+      bodies.push(m[2].replace(/^\n|\n$/g, "")); // strip the wrapping newlines from <file>\n…\n</file>
+    }
+  }
+  // green Box — toolSuccessBg is ThemeBg → theme.bg (NOT theme.fg). paddingX/Y=1; bgFn paints every child line.
+  const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));
+  if (files.length === 0) { // defensive fallback (no details — old/foreign entry)
+    box.addChild(new Text(theme.fg("toolTitle", theme.bold("read")) + " " +
+      theme.fg("dim", "(injected files)") + expandHint(theme), 0, 0));
+    if (opts.expanded && typeof message?.content === "string") {
+      box.addChild(new Text(theme.fg("toolOutput", message.content), 0, 0));
+    }
+    return box;
+  }
+  for (let i = 0; i < files.length; i++) {
+    const d = files[i];
+    // one read line per file; expand hint ONCE per box (i===0), matching the [skill] precedent (PRD §6.3)
+    box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
+    if (opts.expanded) {
+      const body = bodies[i];
+      if (body !== undefined && d.kind !== "image") { // images already attached to user msg (§6.4) — skip
+        const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
+        const rendered = lang ? highlightCode(body, lang).join("\n") : body;
+        box.addChild(new Text(theme.fg("toolOutput", rendered), 0, 0));
+      }
+    }
+  }
+  return box;
+}
+
+/**
+ * One collapsed line per file, identical in spirit to the read tool's formatReadCall:
+ *   read <tildified-path><range-or-hint>
+ * toolTitle+bold for "read"; accent for the path; dim/warning for the suffix depending on kind.
+ */
+function readLine(d: FileDetail, theme: any): string {
+  const title = theme.fg("toolTitle", theme.bold("read"));
+  const pathPart = theme.fg("accent", tildify(d.path));
+  if (d.kind === "binary") {
+    return `${title} ${pathPart} ${theme.fg("dim", "(binary — not injected)")}`;
+  }
+  if (d.kind === "image") {
+    return `${title} ${pathPart}${d.dimensionHint ? " " + theme.fg("dim", d.dimensionHint) : ""}`;
+  }
+  if (d.kind === "paged") {
+    return `${title} ${pathPart}${theme.fg("warning", d.range ?? "")}`;
+  }
+  return `${title} ${pathPart}`; // whole text (no suffix)
+}
+
+/** "(ctrl+o to expand)" — the default expand binding (PRD §12.25: keyText() is internal; ctrl+o is hardcoded). */
+function expandHint(theme: any): string {
+  return " " + theme.fg("dim", "(ctrl+o to expand)");
+}
+
+/** §12.25 — tildify an absolute path (leading os.homedir() → ~) for readable display (read-tool parity). */
+function tildify(abs: string): string {
+  const home = os.homedir();
+  return home && abs.startsWith(home + "/") ? "~" + abs.slice(home.length) : abs;
+}
+
 /** Shared ctx type for injectFiles / processTokenStream / injectFile (DRY; jiti erases at runtime). */
 type Ctx = {
   cwd: string;
@@ -1064,7 +1161,14 @@ export default function (pi: ExtensionAPI) {
   // (tryRead → {}), so this can't break the session. A separate handler (not merged into autocomplete)
   // so the autocomplete handler + its A1 test stay byte-for-byte (A1 invokes the autocomplete handler
   // with a minimal ctx that lacks isProjectTrusted — merging would call readConfig there and throw).
-  pi.on("session_start", async (_e, ctx) => { cfg = await readConfig(ctx); });
+  pi.on("session_start", async (_e, ctx) => {
+    cfg = await readConfig(ctx);
+    // §6.3 register the chat renderer ONCE (the display contract T2.S1's before_agent_start set with display:true).
+    // No hasUI guard — renderers are no-ops in print/json (the renderer fn is only invoked by CustomMessageComponent
+    // in TUI mode). customType MUST match before_agent_start's "fileInjector.injected" exactly (the handshake).
+    pi.registerMessageRenderer("fileInjector.injected", (message, opts, theme) =>
+      renderInjectedMessage(message, opts, theme));
+  });
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)

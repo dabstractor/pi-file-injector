@@ -60,6 +60,7 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": PIPKG + "/dist/index.js",
     "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
+    "@earendil-works/pi-tui": PIPKG + "/node_modules/@earendil-works/pi-tui/dist/index.js",
   },
 });
 
@@ -129,6 +130,7 @@ assert(typeof mod.estimateImageTokens === "function", "mod.estimateImageTokens m
 assert(typeof mod.resolveImportPath === "function", "mod.resolveImportPath must be a function (§4.5 exact→.md/.markdown resolution ladder)");
 assert(typeof mod.isRegularFile === "function", "mod.isRegularFile must be a function (stat + isFile, never throws)");
 assert(typeof mod.readConfig === "function", "mod.readConfig must be a function (§4.6 config reader: global+project merge, trust gate, never throws)");
+assert(typeof mod.renderInjectedMessage === "function", "mod.renderInjectedMessage must be a function (§6.3 chat renderer for fileInjector.injected custom messages)");
 
 // ── MODULE-SURFACE COMPLETENESS (S4 sync) ── The 16 asserts above name the MEANINGFUL exports. This guard
 // enforces the FULL contract: every function the module SHIPS is either (a) asserted by name above, or (b) a
@@ -139,7 +141,7 @@ const ASSERTED_EXPORTS = new Set([
   "default", "injectFiles", "cleanToken", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
   "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
   "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
-  "resolveImportPath", "isRegularFile", "readConfig",
+  "resolveImportPath", "isRegularFile", "readConfig", "renderInjectedMessage",
 ]);
 const PURE_HELPERS_NOT_ASSERTED = new Set(["expandTildeAndResolve", "extOf", "isBinary"]); // tested indirectly via injectFiles
 {
@@ -166,9 +168,40 @@ function makeMockCtx(cwd, { hasUI = true, isProjectTrusted = () => true } = {}) 
 
 function captureHandler(event = "input") {
   const cbs = [];
-  const pi = { on: (ev, cb) => { if (ev === event) cbs.push(cb); } }; // capture by event name (factory registers both input + session_start)
+  const pi = {
+    on: (ev, cb) => { if (ev === event) cbs.push(cb); }, // capture by event name (factory registers both input + session_start)
+    registerMessageRenderer: () => {}, // §6.3 no-op stub — the session_start handler registers the chat renderer (T2.S2); tests don't render
+  };
   mod.default(pi); // registers handlers; cbs holds EVERY handler for `event` (input: 1; session_start: 2 after §4.6 config)
   return { cb: cbs[cbs.length - 1], all: cbs }; // .cb = LAST handler (backward compat for ~30 callers); .all = every handler for `event`
+}
+
+// Capture EVERY handler the factory registers (all events) from ONE mod.default(pi) call, so handlers sharing a
+// factory closure (the input→before_agent_start `pending` stash) are driven against the same factory state.
+// (cfg is MODULE-level — persists across factories; pending is CLOSURE-scoped — per factory. The delivery flow
+// needs ONE factory for both.) Returns { event: [cb,…], … } e.g. { input:[fn], session_start:[cfgFn,acFn],
+// before_agent_start:[fn] }. Used by handler delivery tests that assert the before_agent_start custom message.
+function captureAllHandlers() {
+  const handlers = {};
+  const pi = {
+    on: (ev, cb) => { (handlers[ev] ??= []).push(cb); },
+    registerMessageRenderer: () => {}, // §6.3 no-op stub (same as captureHandler)
+  };
+  mod.default(pi);
+  return handlers;
+}
+
+// block-text helpers — under the new injectFiles return shape, r.text is the STRIPPED prompt ONLY (no blocks,
+// no separator); the <file> blocks live in r.blocks (string[]). These read the JOINED block text so content
+// checks (block openers, markdown prose, paged directives, dedup counts) keep working with minimal edits.
+// Positive/negative includes and ordering all operate on the joined blocks (emission order = array order).
+function blocksText(r) { return r.blocks.join("\n\n"); }
+function hasBlock(r, needle) { return r.blocks.some((b) => b.includes(needle)); }
+// countFileBlocks — counts <file name="ABS"> block-openers for `abs` across the JOINED blocks. Dedupes the
+// inline regex-count pattern (escape-special-chars + match length) used across F1/F1c/DUP1/etc. Under the
+// new return shape block openers live in r.blocks (one per block string), so count over blocksText(r).
+function countFileBlocks(text, abs) {
+  return (text.match(new RegExp('<file name="' + abs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -369,12 +402,6 @@ const NOTES_MENTION = path.join(TMPDIR, "notesMention.md");
 const NOTES_MIX_DEDUP = path.join(TMPDIR, "notesMixDedup.md");
 const OTHER_MD = path.join(TMPDIR, "other.md");
 
-// countFileBlocks — counts <file name="ABS"> block-openers for `abs` in `text`. Dedupes the inline
-// regex-count pattern (escape-special-chars + match length) used across F1/F1c/DUP1/etc.
-function countFileBlocks(text, abs) {
-  return (text.match(new RegExp('<file name="' + abs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
-}
-
 // §5.5 paged-delivery mock ctx — a TIGHT budget so oversize text files page. Huge.log (~2 MB,
 // fileCost ~524K) PAGES; a.ts (~97 chars, fileCost ~25) stays WHOLE.
 //   remaining = 50000 - 10000 - 8192 - 8192 = 23616;  PAGED_THRESHOLD * remaining = 14169.6
@@ -389,30 +416,26 @@ const PAGED_FIX = {
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\nfile-injector.ts — PRD §11 acceptance matrix (model-free)\n");
 
-// Case 1 — single text file; original text preserved; block appended after `---`.
+// Case 1 — single text file; original text preserved; block in r.blocks.
 await runCase(1, "single text file injected, original preserved", async () => {
   const r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
-  assert(r.text.startsWith("Review a.ts"), "path stays inline as a reference (#@ trigger stripped on inject)");
-  assert(r.text.includes("\n\n---\n\n"), "blocks must be appended after a '\\n\\n---\\n\\n' separator");
+  assert(r.text === "Review a.ts", `text is the stripped prompt only (no blocks, no ---), got ${JSON.stringify(r.text)}`);
   const expectedBlock = '<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>';
-  assert(r.text.includes(expectedBlock), `expected block to equal the processFileArguments template`);
+  assert(hasBlock(r, expectedBlock), `expected block to equal the processFileArguments template`);
 });
 
 // Case 2 — huge file; ENTIRE content injected, byte-for-byte (no truncation).
 await runCase(2, "huge file injected byte-for-byte (no truncation)", async () => {
   const r = await mod.injectFiles("Summarize #@huge.log", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
-  assert(r.text.includes("\n\n---\n\n"), "separator present");
   const expectedBlock = '<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT + '\n</file>';
   assert(
-    r.text.endsWith(expectedBlock),
+    r.blocks.length === 1 && r.blocks[0] === expectedBlock,
     "block content must equal the ENTIRE fixture byte-for-byte (no truncation)",
   );
   // Explicit length check: proves no silent truncation on a ~2 MB file.
-  const blockStart = r.text.indexOf('<file name="' + HUGE + '">');
-  const block = r.text.slice(blockStart);
-  assert(block.length >= HUGE_LOG_CONTENT.length, "block must contain the full file length");
+  assert(r.blocks[0].length >= HUGE_LOG_CONTENT.length, "block must contain the full file length");
 });
 
 // Case 3 — image: resizeImage→null on tiny PNG → fallback (raw base64, empty-hints block).
@@ -427,10 +450,10 @@ await runCase(3, "image attached as ImageContent + reference block", async () =>
   assert(!img.data.startsWith("data:"), "img.data must NOT have a 'data:' URL prefix (raw base64)");
   // Whole-image parity (fallback path): data === raw base64 of ORIGINAL bytes.
   assert(img.data === PNG_BYTES.toString("base64"), "img.data must equal raw base64 of the original image bytes");
-  // Reference block in text.
-  assert(r.text.includes('<file name="' + PIC + '">'), "text must reference the image in a <file name=…> block");
+  // Reference block in r.blocks.
+  assert(hasBlock(r, '<file name="' + PIC + '">'), "blocks must reference the image in a <file name=…> block");
   const expectedBlock = '<file name="' + PIC + '"></file>'; // empty hints (resizeImage→null)
-  assert(r.text.includes(expectedBlock), "image reference block must have empty hints (resize→null)");
+  assert(hasBlock(r, expectedBlock), "image reference block must have empty hints (resize→null)");
 });
 
 // Case 4 — non-image binary: NUL-byte guard → clear note block (no decoded garbage).
@@ -440,7 +463,7 @@ await runCase(4, "non-image binary → note block (em dash, no garbage)", async 
   const expectedBlock =
     '<file name="' + BIN + '"><binary file \u2014 contents not injected; use the read tool if needed></file>';
   assert(
-    r.text.includes(expectedBlock),
+    hasBlock(r, expectedBlock),
     "binary block body must be exactly the fixed note (em dash U+2014, no decoded garbage bytes)",
   );
 });
@@ -479,8 +502,8 @@ await runCase(8, "markdown heading / #1234 not matched", async () => {
 await runCase(9, "multi-file: both injected in order; notify count", async () => {
   const r = await mod.injectFiles("Diff #@a.ts vs #@b.ts", [], FIX);
   assert(r.injected === 2, `expected injected===2, got ${r.injected}`);
-  const ia = r.text.indexOf('<file name="' + A_TS + '">');
-  const ib = r.text.indexOf('<file name="' + B_TS + '">');
+  const ia = r.blocks.findIndex((b) => b.includes('<file name="' + A_TS + '">'));
+  const ib = r.blocks.findIndex((b) => b.includes('<file name="' + B_TS + '">'));
   assert(ia !== -1 && ib !== -1, "both file blocks must be present");
   assert(ia < ib, "blocks must appear in source order (a.ts before b.ts)");
 
@@ -499,7 +522,7 @@ await runCase(10, "tilde ~/ expanded to os.homedir()", async () => {
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
   const expectedPath = path.join(os.homedir(), HOME_NOTES_NAME);
   assert(
-    r.text.includes('<file name="' + expectedPath + '">'),
+    hasBlock(r, '<file name="' + expectedPath + '">'),
     `block path must be the tilde-expanded home path (${expectedPath})`,
   );
 });
@@ -508,19 +531,22 @@ await runCase(10, "tilde ~/ expanded to os.homedir()", async () => {
 await runCase(11, "trailing punctuation trimmed", async () => {
   const r = await mod.injectFiles("See #@a.ts.", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
-  assert(r.text.includes('<file name="' + A_TS + '">'), "must resolve to a.ts (trailing '.' trimmed)");
-  assert(!r.text.includes('<file name="' + A_TS + '.">'), "must NOT resolve to 'a.ts.' (punctuation must be trimmed)");
+  assert(hasBlock(r, '<file name="' + A_TS + '">'), "must resolve to a.ts (trailing '.' trimmed)");
+  assert(!hasBlock(r, '<file name="' + A_TS + '.">'), "must NOT resolve to 'a.ts.' (punctuation must be trimmed)");
 });
 
 // Case 12 — initial -p message: the input event fires for -p too (structural via handler mock),
 //           PLUS a documented live-pi integration command.
 await runCase(12, "handler transforms interactive input (input event fires for -p)", async () => {
   const { ctx, rec } = makeMockCtx(TMPDIR);
-  const slot = captureHandler();
+  const h = captureAllHandlers(); // ONE factory → shared `pending` closure (input stashes; before_agent_start publishes)
   // source:"interactive" mirrors the -p path (the input event fires inside prompt() for ALL contexts).
-  const out = await slot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
+  const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform an interactive #@ prompt, got '${out.action}'`);
-  assert(out.text && out.text.includes('<file name="' + A_TS + '">'), "transformed text must contain the injected block");
+  assert(out.text === "Review a.ts", `handler text is the stripped prompt (blocks now live in the before_agent_start custom message), got ${JSON.stringify(out.text)}`);
+  const msg = await h.before_agent_start[0]({}, ctx); // SAME factory → reads the stashed pending
+  assert(msg && msg.message && msg.message.customType === "fileInjector.injected", `before_agent_start must publish the custom message, got ${JSON.stringify(msg)}`);
+  assert(msg.message.content.includes('<file name="' + A_TS + '">'), "the a.ts block must be in the custom message content");
   assert(rec.notify && rec.notify.m === "#@ injected 1 whole", "notify must fire for the interactive path");
 });
 integrationCase(
@@ -538,7 +564,7 @@ await runCase(13, "format parity with pi @file (per-block template)", async () =
   const r = await mod.injectFiles("Review #@a.ts", [], FIX);
   // Expected from the processFileArguments template: `<file name="${abs}">\n${content}\n</file>` (no trailing \n).
   const expectedBlock = '<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>';
-  assert(r.text.includes(expectedBlock), "our #@ text block must be byte-identical to the pi @file block template");
+  assert(hasBlock(r, expectedBlock), "our #@ text block must be byte-identical to the pi @file block template");
   // Also assert the pure helper produces the same template (defensive: parity at the formatter level).
   assert(mod.formatTextFileBlock(A_TS, A_TS_CONTENT) === expectedBlock, "formatTextFileBlock must match the template");
 });
@@ -574,13 +600,13 @@ await runCase("E1", "empty 0-byte file → injected as <file>\\n\\n</file>", asy
   const r = await mod.injectFiles("See #@empty.txt", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
   const expectedBlock = '<file name="' + EMPTY + '">\n\n</file>';
-  assert(r.text.includes(expectedBlock), "empty file must be injected as <file name=…>\\n\\n</file> (NOT skipped)");
+  assert(hasBlock(r, expectedBlock), "empty file must be injected as <file name=…>\\n\\n</file> (NOT skipped)");
 });
 
 await runCase("E2", "parenthesized token → trimmed, resolved", async () => {
   const r = await mod.injectFiles("(#@a.txt)", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
-  assert(r.text.includes('<file name="' + A_TXT + '">'), "token 'a.txt)' must trim to 'a.txt' and resolve");
+  assert(hasBlock(r, '<file name="' + A_TXT + '">'), "token 'a.txt)' must trim to 'a.txt' and resolve");
 });
 
 await runCase("E3", "fenced-code-block #@ (documented limitation)", async () => {
@@ -634,11 +660,11 @@ await runCase("E5", "markdown import of unreadable file → marker verbatim", as
     // (a) only the PARENT markdown (perm_notes.md) counts as injected.
     assert(r.injected === 1, `expected injected===1 (parent only), got ${r.injected}`);
     // (b) the unreadable import's marker must be LEFT VERBATIM in the parent's emitted block (PRD §5.4/§12.5).
-    assert(r.text.includes("#@perm_api.md") === true, "unreadable markdown-import marker must be left verbatim");
+    assert(hasBlock(r, "#@perm_api.md") === true, "unreadable markdown-import marker must be left verbatim");
     // (c) no block may be appended for the unreadable import target.
-    assert(!r.text.includes('<file name="' + api + '">'), "no block must be appended for the unreadable import");
+    assert(!hasBlock(r, '<file name="' + api + '">'), "no block must be appended for the unreadable import");
     // (d) the parent's own block IS delivered.
-    assert(r.text.includes('<file name="' + notes + '">'), "parent markdown block must be delivered");
+    assert(hasBlock(r, '<file name="' + notes + '">'), "parent markdown block must be delivered");
   } finally {
     fsSync.chmodSync(api, 0o644); // restore so cleanup can remove it
   }
@@ -747,8 +773,8 @@ await runCase("F1", "F1 — per-token dedup prevents re-injection", async () => 
   assert(out.action === "continue", `second copy must short-circuit to continue (got '${out.action}')`);
   assert(rec.notify === undefined, "second copy must NOT notify (nothing re-injected)");
 
-  // Exactly ONE <file> block for a.ts in the injected text — the dedup prevented a duplicate.
-  const aCount = (dedup.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  // Exactly ONE <file> block for a.ts in the injected blocks — the dedup prevented a duplicate.
+  const aCount = countFileBlocks(blocksText(first), A_TS);
   assert(aCount === 1, `injected text must contain exactly 1 <file> block for a.ts (got ${aCount})`);
 });
 
@@ -774,11 +800,12 @@ await runCase("F1c", "F1c — structural dedup: prior @file block doesn't block 
   const priorText = `Review #@a.ts\n\n---\n\n<file name="${A_TS}">\n${A_TS_CONTENT}\n</file>`;
   const r = await mod.injectFiles(`${priorText}\nAlso review #@b.ts`, [], FIX);
   assert(r.injected === 1, `must inject ONLY the new b.ts (a.ts already present), got ${r.injected}`);
-  assert(r.text.includes('<file name="' + B_TS + '">'), "must contain the NEW b.ts block");
-  // Exactly ONE a.ts block (the pre-existing one) — not re-injected, not duplicated.
+  assert(hasBlock(r, '<file name="' + B_TS + '">'), "must contain the NEW b.ts block");
+  // Exactly ONE a.ts block (the pre-existing one) — not re-injected, not duplicated. The prior block is
+  // in the user-supplied text; our run injects only b.ts into r.blocks, so count b.ts in r.blocks.
   const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
-  assert(aCount === 1, `a.ts must appear exactly once (dedup), got ${aCount}`);
-  const bCount = (r.text.match(new RegExp('<file name="' + B_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `a.ts must appear exactly once (the pre-existing block; dedup keeps it), got ${aCount}`);
+  const bCount = countFileBlocks(blocksText(r), B_TS);
   assert(bCount === 1, `b.ts must appear exactly once (newly injected), got ${bCount}`);
 });
 
@@ -818,21 +845,25 @@ await runCase("F1d", "F1d — co-load: stripping #@ post-inject makes dedup bidi
   // trigger → cannot re-inject. Dedup is now effectively bidirectional for any pair involving a
   // current copy.
   assert(legacyAfter.injected === 0, `legacy copy cannot re-inject — #@ was stripped on the dedup pass (got ${legacyAfter.injected})`);
-  const aCount = (legacyAfter.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  // The dedup copy's single a.ts block is the ONLY one (legacy added nothing — it found no #@ trigger
+  // in the stripped text). Count it in first.blocks (the call that produced it).
+  const aCount = countFileBlocks(blocksText(first), A_TS);
   assert(aCount === 1, `order dedup→legacy now yields exactly 1 a.ts block (got ${aCount}); F-NEW-1 gap closed by #@ stripping`);
   // REVERSE order (legacy FIRST, dedup SECOND) MUST stay clean — the dedup copy suppresses the dup.
   const legacyFirst = await legacyInject("Review #@a.ts", [], FIX);
   assert(legacyFirst.injected === 1, `legacy copy alone injects a.ts once (got ${legacyFirst.injected})`);
   const dedupAfter = await mod.injectFiles(legacyFirst.text, legacyFirst.images, FIX);
   assert(dedupAfter.injected === 0, `dedup copy must suppress the legacy dup (got ${dedupAfter.injected})`);
-  const aCountRev = (dedupAfter.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  // legacyFirst.text carries the legacy-assembled a.ts block (legacy shape: text + --- + blocks);
+  // the dedup pass suppressed re-injection. Count the single block in the legacy-assembled text.
+  const aCountRev = (legacyFirst.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
   assert(aCountRev === 1, `reverse order (legacy→dedup) yields exactly 1 a.ts block (got ${aCountRev})`);
 });
 
 await runCase("DUP1", "DUP1 — within-prompt same-path repeat injects ONCE (text) (Issue 1)", async () => {
   const r = await mod.injectFiles("Compare #@a.ts with #@a.ts", [], FIX);
   assert(r.injected === 1, `same path twice must inject ONCE, got injected=${r.injected}`);
-  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const aCount = countFileBlocks(blocksText(r), A_TS);
   assert(aCount === 1, `must contain exactly ONE <file> block for a.ts, got ${aCount}`);
 });
 
@@ -840,14 +871,14 @@ await runCase("DUP2", "DUP2 — two path forms of the same file inject ONCE (Iss
   // 'a.ts' and './a.ts' both resolve to the same absolute path → dedup to one injection.
   const r = await mod.injectFiles("Diff #@a.ts against #@./a.ts", [], FIX);
   assert(r.injected === 1, `two path forms (same file) must inject ONCE, got injected=${r.injected}`);
-  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const aCount = countFileBlocks(blocksText(r), A_TS);
   assert(aCount === 1, `must contain exactly ONE <file> block for a.ts, got ${aCount}`);
 });
 
 await runCase("DUP3", "DUP3 — within-prompt same-image repeat attaches ONCE (Issue 1)", async () => {
   const r = await mod.injectFiles("See #@pic.png and #@pic.png", [], FIX);
   assert(r.images.length === 1, `same image twice must attach ONCE, got images.length=${r.images.length}`);
-  const picCount = (r.text.match(new RegExp('<file name="' + PIC.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const picCount = countFileBlocks(blocksText(r), PIC);
   assert(picCount === 1, `must contain exactly ONE <file> reference block for pic.png, got ${picCount}`);
 });
 
@@ -861,9 +892,9 @@ await runCase("F2", "F2 — sentinel string in prompt no longer gates injection 
   const r = await mod.injectFiles(prompt, [], FIX);
   assert(r.injected === 1, `a.ts must be injected despite the sentinel string in the prompt (got ${r.injected})`);
   assert(r.text.startsWith('<!--#@file-injected--> Review a.ts'), "only the injected #@a.ts is stripped (→ a.ts); the failed sentinel token keeps its #@ verbatim (Issue 2 fix)");
-  assert(r.text.includes('<file name="' + A_TS + '">'), "injected text must contain the a.ts <file> block");
+  assert(hasBlock(r, '<file name="' + A_TS + '">'), "injected blocks must contain the a.ts <file> block");
   // Exactly ONE block (a.ts) — no spurious block from the ghost `#@file-injected-->` token.
-  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const aCount = countFileBlocks(blocksText(r), A_TS);
   assert(aCount === 1, `exactly 1 <file> block (a.ts); no ghost block from the sentinel token (got ${aCount})`);
 
   // Handler-level: the input event transforms (does NOT short-circuit on the sentinel substring).
@@ -878,7 +909,7 @@ await runCase("FS1", "FS1 — mixed success+missing: failed token keeps #@ (Issu
   assert(r.injected === 1, `a.ts injected (count=1), got injected=${r.injected}`);
   assert(r.text.startsWith("Review a.ts"), "the injected #@a.ts is stripped to a.ts");
   assert(r.text.includes("#@missing.ts") === true, `the FAILED #@missing.ts must keep its #@ verbatim (PRD §6.2), got text=${JSON.stringify(r.text.slice(0, 60))}`);
-  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const aCount = countFileBlocks(blocksText(r), A_TS);
   assert(aCount === 1, `exactly 1 <file> block (a.ts only); missing.ts injected nothing (got ${aCount})`);
 });
 
@@ -895,7 +926,7 @@ await runCase("FS3", "FS3 — Issue1×Issue2: deduped repeat keeps #@ (first str
   const r = await mod.injectFiles("Compare #@a.ts with #@a.ts", [], FIX);
   assert(r.injected === 1, `same path twice injects ONCE (Issue 1), got injected=${r.injected}`);
   assert(r.text.startsWith("Compare a.ts with #@a.ts"), `first stripped, deduped second keeps #@ (Issue 2), got text=${JSON.stringify(r.text.slice(0, 40))}`);
-  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const aCount = countFileBlocks(blocksText(r), A_TS);
   assert(aCount === 1, `exactly ONE <file> block for a.ts (got ${aCount})`);
 });
 
@@ -907,7 +938,7 @@ await runCase("F3a", "F3 — mislabeled image (text body, .png ext) → text pat
   // Must inject the text content as a normal text <file> block (content includes its own trailing \n,
   // so the block is `<file>\n<content>\n</file>` = `<file>\n...text\n\n</file>`).
   const expected = '<file name="' + FAKE_PNG + '">\nthis is not really a PNG, just text\n\n</file>';
-  assert(r.text.includes(expected), "mislabeled image must fall through to the text <file> block (its actual content)");
+  assert(hasBlock(r, expected), "mislabeled image must fall through to the text <file> block (its actual content)");
 });
 
 await runCase("F3b", "F3 — hasValidImageMagic accepts real PNG, rejects text/random bytes", async () => {
@@ -925,7 +956,7 @@ await runCase("F5", "F5 — 0-byte image file → note block, NO empty ImageCont
   assert(r.images.length === 0, `0-byte image must attach NO image, got ${r.images.length}`);
   // Must emit a note block referencing the file (consistent with the binary/empty-text conventions).
   const expected = '<file name="' + EMPTY_PNG + '"><empty image file \u2014 0 bytes; nothing to attach></file>';
-  assert(r.text.includes(expected), "0-byte image must produce the empty-image note block");
+  assert(hasBlock(r, expected), "0-byte image must produce the empty-image note block");
 });
 
 await runCase("F4", "F4 — notify wording (1 whole / N whole)", async () => {
@@ -958,11 +989,11 @@ await runCase("U1", "U1 — Unicode word-boundary: #@ does not fire mid-word in 
   r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `(c) Review #@a.ts must inject (space before #@ is a boundary), got ${r.injected}`);
   assert(r.text.startsWith("Review a.ts"), `(c) path stays inline as a reference (#@ trigger stripped on successful inject)`);
-  assert(r.text.includes('<file name="' + A_TS + '">'), `(c) injected text must contain the a.ts <file> block`);
+  assert(hasBlock(r, '<file name="' + A_TS + '">'), `(c) injected text must contain the a.ts <file> block`);
   // (d) REGRESSION GUARD: start-of-string (^ alternation) → #@a.ts still injects → injected===1.
   r = await mod.injectFiles("#@a.ts", [], FIX);
   assert(r.injected === 1, `(d) #@a.ts must inject (start-of-string boundary), got ${r.injected}`);
-  assert(r.text.includes('<file name="' + A_TS + '">'), `(d) injected text must contain the a.ts <file> block`);
+  assert(hasBlock(r, '<file name="' + A_TS + '">'), `(d) injected text must contain the a.ts <file> block`);
   // (e) REGRESSION GUARD: ASCII mid-word is STILL blocked → foo#@bar → NO match → injected===0, text verbatim.
   r = await mod.injectFiles("foo#@bar", [], FIX);
   assert(r.injected === 0, `(e) foo#@bar must NOT inject (ASCII mid-word, still blocked), got ${r.injected}`);
@@ -1029,7 +1060,7 @@ await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + direct
   assert(r.paged === 1, `huge.log must be PAGED under PAGED_FIX, got paged=${r.paged}`);
   // head block = first HEAD_CHARS (8192) of the content (UTF-16 code units; surrogate-safe)
   const expectedHead = '<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>';
-  assert(r.text.includes(expectedHead), "paged head block must contain the first 8192 chars");
+  assert(hasBlock(r, expectedHead), "paged head block must contain the first 8192 chars");
   // directive block = the exported helper's output. startLine = (newlines in head) + 1 and
   // injectedLines = (newlines in head) — complete lines only; a partial trailing line is re-read,
   // never lost. Finding 1: the directive must resume at exactly the line AFTER the complete head
@@ -1039,8 +1070,8 @@ await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + direct
   const injectedLines = nl;
   const expectedStart = nl + 1;
   const expectedDirective = mod.formatPagedDirectiveBlock(HUGE, HUGE_LOG_CONTENT.length, expectedStart, injectedLines);
-  assert(r.text.includes(expectedDirective),
-    `paged directive must resume at offset:${expectedStart} (head=${injectedLines} complete lines), got directive=${JSON.stringify((r.text.match(/<file name="[^"]*huge.log"><paged:[\s\S]*?<\/file>/) || [])[0])}`);
+  assert(hasBlock(r, expectedDirective),
+    `paged directive must resume at offset:${expectedStart} (head=${injectedLines} complete lines), got directive=${JSON.stringify((blocksText(r).match(/<file name="[^"]*huge.log"><paged:[\s\S]*?<\/file>/) || [])[0])}`);
   // CORRECTNESS PROBE (closes Coverage Gap #1): simulate the model following the directive and assert
   // ZERO lines are skipped. Union {complete head lines ∪ offset-stepped reads of READ_LIMIT} must cover
   // all lines. This is what validate.sh's discovery probe does — it is how Finding 1 was caught. The
@@ -1062,11 +1093,11 @@ await runCase("PD2", "§5.5 mixed: small whole + large paged under tight budget"
   assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
   assert(r.paged === 1, `exactly one paged (huge.log), got paged=${r.paged}`);
   // a.ts WHOLE (its full content block present), huge.log paged (head + directive present)
-  assert(r.text.includes('<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>'),
+  assert(hasBlock(r, '<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>'),
     "a.ts must be injected WHOLE (fits budget)");
-  assert(r.text.includes('<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>'),
+  assert(hasBlock(r, '<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT.slice(0, 8192) + '\n</file>'),
     "huge.log must be paged (head block)");
-  assert(r.text.includes((function(){const h=HUGE_LOG_CONTENT.slice(0,8192);let nl=0;for(let i=0;i<h.length;i++)if(h.charCodeAt(i)===10)nl++;return mod.formatPagedDirectiveBlock(HUGE,HUGE_LOG_CONTENT.length,nl+1,nl);})()),
+  assert(hasBlock(r, (function(){const h=HUGE_LOG_CONTENT.slice(0,8192);let nl=0;for(let i=0;i<h.length;i++)if(h.charCodeAt(i)===10)nl++;return mod.formatPagedDirectiveBlock(HUGE,HUGE_LOG_CONTENT.length,nl+1,nl);})()),
     "huge.log directive block present (startLine + injectedLines derived from actual head line count)");
 });
 
@@ -1076,7 +1107,7 @@ await runCase("PD3", "§5.5 O-1 fallback: budget unknown (FIX) → huge.log inje
   const r = await mod.injectFiles("Summarize #@huge.log", [], FIX);
   assert(r.injected === 1, `huge.log delivered whole under no budget, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging when budget unknown (O-1 fallback), got paged=${r.paged}`);
-  assert(r.text.includes('<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT + '\n</file>'),
+  assert(hasBlock(r, '<file name="' + HUGE + '">\n' + HUGE_LOG_CONTENT + '\n</file>'),
     "huge.log must be the FULL content block (not a head slice) under the O-1 fallback");
 });
 
@@ -1086,7 +1117,7 @@ await runCase("PD4", "§5.5 images unaffected by budget: pic.png attaches under 
   assert(r.injected === 1, `image delivered, got injected=${r.injected}`);
   assert(r.paged === 0, `images are never paged, got paged=${r.paged}`);
   assert(r.images.length === 1, `image attached under PAGED_FIX, got ${r.images.length}`);
-  assert(r.text.includes('<file name="' + PIC + '">'), "image reference block present");
+  assert(hasBlock(r, '<file name="' + PIC + '">'), "image reference block present");
 });
 
 await runCase("PD5", "§5.5 binaries unaffected by budget: data.bin note under PAGED_FIX", async () => {
@@ -1096,7 +1127,7 @@ await runCase("PD5", "§5.5 binaries unaffected by budget: data.bin note under P
   assert(r.paged === 0, `binaries are never paged, got paged=${r.paged}`);
   assert(r.images.length === 0, `binary attaches NO image, got ${r.images.length}`);
   const expectedNote = '<file name="' + BIN + '"><binary file \u2014 contents not injected; use the read tool if needed></file>';
-  assert(r.text.includes(expectedNote), "binary note block present (unaffected by budget)");
+  assert(hasBlock(r, expectedNote), "binary note block present (unaffected by budget)");
 });
 
 // ── PAGED DIRECTIVERY (Findings 1–3 from the validation report) ───────────────────────
@@ -1125,9 +1156,9 @@ await runCase("PD6", "§5.5 Finding 2: sub-head-sized file under tight budget �
     assert(r.paged === 0, `small.txt must NOT page (content fits head) — no spurious directive, got paged=${r.paged}`);
     // The WHOLE content is injected inline (head block = full content).
     const expectedBlock = '<file name="' + small + '">\n' + "AB".repeat(2000) + '\n</file>';
-    assert(r.text.includes(expectedBlock), "whole content must be injected inline (no head slice)");
+    assert(hasBlock(r, expectedBlock), "whole content must be injected inline (no head slice)");
     // And NO directive block is emitted (would point past EOF).
-    assert(!r.text.includes("<paged:"), "no paged directive for a sub-head-sized file (Finding 2)");
+    assert(!hasBlock(r, "<paged:"), "no paged directive for a sub-head-sized file (Finding 2)");
   } finally {
     fsSync.rmSync(small, { force: true });
   }
@@ -1171,8 +1202,8 @@ await runCase("PD7", "§5.5 Finding 1: long-lined file (head < 1 line) → direc
     assert(r.paged === 1, `longlines.log must be PAGED, got paged=${r.paged}`);
     // The head ends mid-first-line → 0 complete lines (no newline in head) → injectedLines=0,
     // startLine=1 (model re-reads from line 1; line 1's tail is redundant, lines 2–300 are new).
-    assert(r.text.includes("offset:1, limit:2000"),
-      `long-lined file: directive must resume at offset:1 (head ends mid-first-line), not offset:2001; got text=${JSON.stringify((r.text.match(/<file name="[^"]*longlines.log"><paged:[\s\S]*?<\/file>/) || [])[0])}`);
+    assert(hasBlock(r, "offset:1, limit:2000"),
+      `long-lined file: directive must resume at offset:1 (head ends mid-first-line), not offset:2001; got text=${JSON.stringify((blocksText(r).match(/<file name="[^"]*longlines.log"><paged:[\s\S]*?<\/file>/) || [])[0])}`);
     // CORRECTNESS PROBE: following the directive covers every line (0 lost). The old code lost all 301.
     const total = LL_CONTENT.split("\n").length; // 301 (trailing empty after final \n)
     const seen = new Set();
@@ -1204,7 +1235,7 @@ await runCase("PD8", "§5.5 Finding 3: head slice is surrogate-safe (no lone tra
     assert(r.injected === 1, `emoji.txt delivered, got injected=${r.injected}`);
     assert(r.paged === 1, `emoji.txt must be PAGED, got paged=${r.paged}`);
     // Extract the head block content and assert its last code unit is NOT a lone high surrogate.
-    const m = r.text.match(new RegExp('<file name="' + emojiFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">\\n([\\s\\S]*?)\\n</file>'));
+    const m = blocksText(r).match(new RegExp('<file name="' + emojiFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">\\n([\\s\\S]*?)\\n</file>'));
     assert(m, "head block must be present");
     const head = m[1];
     const last = head.charCodeAt(head.length - 1);
@@ -1534,8 +1565,8 @@ await runCase("BG1", "§5.6.2 — image + huge.log under PAGED_FIX: image consum
   assert(r.images.length === 1, `pic.png attached (never paged), got images=${r.images.length}`);
   // Emission order: the image reference block appears BEFORE the huge.log head block (pic.png was
   // decided first, budget consumed, THEN huge.log decided against the reduced remaining).
-  const imgIdx = r.text.indexOf('<file name="' + PIC + '">');
-  const hugeHeadIdx = r.text.indexOf('<file name="' + HUGE + '">\n');
+  const imgIdx = r.blocks.findIndex((b) => b.includes('<file name="' + PIC + '">'));
+  const hugeHeadIdx = r.blocks.findIndex((b) => b.includes('<file name="' + HUGE + '">\n'));
   assert(imgIdx !== -1, "image reference block must be present");
   assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
   assert(imgIdx < hugeHeadIdx, `image block must precede the huge.log head block (emission order), got img=${imgIdx} huge=${hugeHeadIdx}`);
@@ -1549,8 +1580,8 @@ await runCase("BG2", "§5.6.2 — binary + huge.log under PAGED_FIX: binary note
   assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
   assert(r.paged === 1, `exactly one paged (huge.log), got paged=${r.paged}`);
   assert(r.images.length === 0, `binary attaches NO image, got images=${r.images.length}`);
-  const binIdx = r.text.indexOf('<file name="' + BIN + '">');
-  const hugeHeadIdx = r.text.indexOf('<file name="' + HUGE + '">\n');
+  const binIdx = r.blocks.findIndex((b) => b.includes('<file name="' + BIN + '">'));
+  const hugeHeadIdx = r.blocks.findIndex((b) => b.includes('<file name="' + HUGE + '">\n'));
   assert(binIdx !== -1, "binary note block must be present");
   assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
   assert(binIdx < hugeHeadIdx, `binary note block must precede the huge.log head block (emission order), got bin=${binIdx} huge=${hugeHeadIdx}`);
@@ -1563,8 +1594,8 @@ await runCase("BG3", "§5.6.2 — empty-image (F5) + huge.log under PAGED_FIX: e
   assert(r.injected === 2, `both files delivered, got injected=${r.injected}`);
   assert(r.paged === 1, `exactly one paged (huge.log), got paged=${r.paged}`);
   assert(r.images.length === 0, `F5 attaches NO image (0-byte), got images=${r.images.length}`);
-  const emptyIdx = r.text.indexOf('<file name="' + EMPTY_PNG + '">');
-  const hugeHeadIdx = r.text.indexOf('<file name="' + HUGE + '">\n');
+  const emptyIdx = r.blocks.findIndex((b) => b.includes('<file name="' + EMPTY_PNG + '">'));
+  const hugeHeadIdx = r.blocks.findIndex((b) => b.includes('<file name="' + HUGE + '">\n'));
   assert(emptyIdx !== -1, "empty-image note block must be present");
   assert(hugeHeadIdx !== -1, "huge.log paged head block must be present");
   assert(emptyIdx < hugeHeadIdx, `empty-image note block must precede the huge.log head block (emission order), got empty=${emptyIdx} huge=${hugeHeadIdx}`);
@@ -1581,22 +1612,22 @@ await runCase(15, "md import: notes.md imports api.md → both blocks (pre-order
   assert(r.injected === 2, `expected injected===2 (notes.md + api.md), got ${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notes.md"), "top-level #@notes.md marker stripped to notes.md");
-  const iNotes = r.text.indexOf('<file name="' + NOTES + '">');
-  const iApi = r.text.indexOf('<file name="' + API + '">');
+  const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES + '">'));
+  const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both notes.md and api.md blocks must be present");
   assert(iNotes < iApi, "notes.md block must appear BEFORE api.md block (pre-order depth-first: parent then import)");
   // the import marker inside notes.md is stripped to the bare path (the fenced #@example.ts is left verbatim)
-  assert(r.text.includes("Imports api.md here."), "notes.md block: resolved import marker stripped to api.md");
-  assert(!r.text.includes("Imports #@api.md here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "Imports api.md here."), "notes.md block: resolved import marker stripped to api.md");
+  assert(!hasBlock(r, "Imports #@api.md here."), "the resolved import marker must NOT retain #@");
 });
 
 await runCase(16, "md code-exempt: fenced #@example.ts left verbatim; only api.md imported", async () => {
   const r = await mod.injectFiles("Review #@notes.md", [], FIX);  // same notes.md as #15
   assert(r.injected === 2, `only notes.md + api.md injected (example.ts is code-exempt), got ${r.injected}`);
   // the fenced #@example.ts is left VERBATIM in the notes.md block (code-region exemption, §5.6.1)
-  assert(r.text.includes("#@example.ts"), "the fenced #@example.ts must be left VERBATIM (code-exempt, not stripped)");
+  assert(hasBlock(r, "#@example.ts"), "the fenced #@example.ts must be left VERBATIM (code-exempt, not stripped)");
   // example.ts is never imported (code-exempt → never resolved, never stat'd; it is not even a fixture)
-  assert(!r.text.includes('<file name="' + path.join(TMPDIR, "example.ts") + '">'),
+  assert(!hasBlock(r, '<file name="' + path.join(TMPDIR, "example.ts") + '">'),
     "example.ts must NOT be injected (inside a fenced block → code-exempt)");
 });
 
@@ -1613,25 +1644,25 @@ await runCase("CRLF-E2E", "§5.6 — CRLF markdown: fenced block + #@ import →
   assert(r.injected === 2, `CRLF spec + crlf_after.md both injected (import after the fence resolved), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Read crlf_spec.md"), "top-level #@crlf_spec.md marker stripped to crlf_spec.md");
-  assert(r.text.indexOf('<file name="' + crlfSpec + '">') !== -1, "crlf_spec.md block present");
-  assert(r.text.indexOf('<file name="' + crlfAfter + '">') !== -1, "crlf_after.md block present (import after the CRLF fence resolved)");
+  assert(r.blocks.some((b) => b.includes('<file name="' + crlfSpec + '">')), "crlf_spec.md block present");
+  assert(r.blocks.some((b) => b.includes('<file name="' + crlfAfter + '">')), "crlf_after.md block present (import after the CRLF fence resolved)");
   // The import marker is STRIPPED to the bare path — proving the #@ was recognized as an import (NOT code).
-  assert(r.text.includes("See crlf_after.md"), "crlf_spec.md block: CRLF-path import marker stripped to crlf_after.md");
-  assert(!r.text.includes("See #@crlf_after.md"), "the resolved CRLF-path import marker must NOT retain #@");
+  assert(hasBlock(r, "See crlf_after.md"), "crlf_spec.md block: CRLF-path import marker stripped to crlf_after.md");
+  assert(!hasBlock(r, "See #@crlf_after.md"), "the resolved CRLF-path import marker must NOT retain #@");
 });
 
 await runCase(17, "md cycle: a.md↔b.md → each once, b.md's #@a.md verbatim, no loop, injected=2", async () => {
   const r = await mod.injectFiles("Start #@a.md", [], FIX);
   assert(r.injected === 2, `a.md + b.md injected once each (cycle terminates via dedup), got ${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  const iA = r.text.indexOf('<file name="' + A_MD + '">');
-  const iB = r.text.indexOf('<file name="' + B_MD + '">');
+  const iA = r.blocks.findIndex((b) => b.includes('<file name="' + A_MD + '">'));
+  const iB = r.blocks.findIndex((b) => b.includes('<file name="' + B_MD + '">'));
   assert(iA !== -1 && iB !== -1, "both a.md and b.md blocks present");
   assert(iA < iB, "a.md block before b.md block (pre-order: a.md then its import b.md)");
-  assert(countFileBlocks(r.text, A_MD) === 1, `a.md must appear exactly ONCE (dedup), got ${countFileBlocks(r.text, A_MD)}`);
-  assert(countFileBlocks(r.text, B_MD) === 1, `b.md must appear exactly ONCE (dedup), got ${countFileBlocks(r.text, B_MD)}`);
+  assert(countFileBlocks(blocksText(r), A_MD) === 1, `a.md must appear exactly ONCE (dedup), got ${countFileBlocks(blocksText(r), A_MD)}`);
+  assert(countFileBlocks(blocksText(r), B_MD) === 1, `b.md must appear exactly ONCE (dedup), got ${countFileBlocks(blocksText(r), B_MD)}`);
   // b.md's #@a.md is LEFT VERBATIM: a.md was claimed (in injectFile) before b.md scanned it → dedup → verbatim.
-  assert(r.text.includes("Back #@a.md."), "b.md's #@a.md must be left VERBATIM (a.md already injected → deduped, NOT stripped)");
+  assert(hasBlock(r, "Back #@a.md."), "b.md's #@a.md must be left VERBATIM (a.md already injected → deduped, NOT stripped)");
 });
 
 await runCase(18, "md abs rejected: #@/etc/hosts ignored (relative-only), verbatim, only notesAbs.md injected", async () => {
@@ -1639,8 +1670,8 @@ await runCase(18, "md abs rejected: #@/etc/hosts ignored (relative-only), verbat
   assert(r.injected === 1, `only notesAbs.md injected (absolute import ignored), got ${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   // the #@/etc/hosts marker is left VERBATIM (relative-only rule fires BEFORE resolution/stat)
-  assert(r.text.includes("#@/etc/hosts"), "the absolute #@/etc/hosts must be left VERBATIM (relative-only, not resolved)");
-  assert(!r.text.includes('<file name="/etc/hosts">'), "/etc/hosts must NOT be injected (relative-only rule)");
+  assert(hasBlock(r, "#@/etc/hosts"), "the absolute #@/etc/hosts must be left VERBATIM (relative-only, not resolved)");
+  assert(!hasBlock(r, '<file name="/etc/hosts">'), "/etc/hosts must NOT be injected (relative-only rule)");
 });
 
 await runCase(19, "md relative base: sub/notes.md's #@api.md → sub/api.md (md's dir, not cwd), injected=2", async () => {
@@ -1648,16 +1679,16 @@ await runCase(19, "md relative base: sub/notes.md's #@api.md → sub/api.md (md'
   assert(r.injected === 2, `sub/notes.md + sub/api.md injected, got ${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Read sub/notes.md"), "top-level #@sub/notes.md marker stripped to sub/notes.md");
-  const iSubNotes = r.text.indexOf('<file name="' + SUB_NOTES + '">');
-  const iSubApi = r.text.indexOf('<file name="' + SUB_API + '">');
+  const iSubNotes = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_NOTES + '">'));
+  const iSubApi = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_API + '">'));
   assert(iSubNotes !== -1 && iSubApi !== -1, "both sub/notes.md and sub/api.md blocks present");
   assert(iSubNotes < iSubApi, "sub/notes.md block before sub/api.md block (pre-order)");
   // CRITICAL: api.md resolved as sub/api.md (relative to the markdown's dir), NOT TMPDIR/api.md.
-  assert(r.text.includes("Sibling API in sub/."), "sub/api.md's DISTINCT content present (proves resolution relative to md dir)");
-  assert(!r.text.includes("Top-level API surface."), "the top-level api.md must NOT be injected (resolution is relative to the md's dir)");
+  assert(hasBlock(r, "Sibling API in sub/."), "sub/api.md's DISTINCT content present (proves resolution relative to md dir)");
+  assert(!hasBlock(r, "Top-level API surface."), "the top-level api.md must NOT be injected (resolution is relative to the md's dir)");
   // sub/notes.md's #@api.md marker stripped to api.md
-  assert(r.text.includes("See api.md."), "sub/notes.md's import marker stripped to api.md");
-  assert(!r.text.includes("See #@api.md."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "See api.md."), "sub/notes.md's import marker stripped to api.md");
+  assert(!hasBlock(r, "See #@api.md."), "the resolved import marker must NOT retain #@");
 });
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1679,23 +1710,23 @@ await runCase(20, "§5.6.2 shared budget: bigdoc.md + 3 imports whole, huge.log 
   assert(r.paged === 1, `exactly huge.log paged, got paged=${r.paged}`);
   assert(r.injected - r.paged === 4, `4 whole (bigdoc + 3 parts), got whole=${r.injected - r.paged}`);
   // Pre-order DFS block order: bigdoc.md < part1 < part2 < part3 < huge.log(head).
-  const iB = r.text.indexOf('<file name="' + BIGDOC + '">');
-  const i1 = r.text.indexOf('<file name="' + PART1 + '">');
-  const i2 = r.text.indexOf('<file name="' + PART2 + '">');
-  const i3 = r.text.indexOf('<file name="' + PART3 + '">');
-  const iH = r.text.indexOf('<file name="' + HUGE + '">\n'); // head block (content follows the '>\n')
+  const iB = r.blocks.findIndex((b) => b.includes('<file name="' + BIGDOC + '">'));
+  const i1 = r.blocks.findIndex((b) => b.includes('<file name="' + PART1 + '">'));
+  const i2 = r.blocks.findIndex((b) => b.includes('<file name="' + PART2 + '">'));
+  const i3 = r.blocks.findIndex((b) => b.includes('<file name="' + PART3 + '">'));
+  const iH = r.blocks.findIndex((b) => b.includes('<file name="' + HUGE + '">\n')); // head block (content follows the '>\n')
   assert(iB !== -1 && i1 !== -1 && i2 !== -1 && i3 !== -1 && iH !== -1, "all 5 files have blocks");
   assert(iB < i1 && i1 < i2 && i2 < i3 && i3 < iH,
     `pre-order DFS: bigdoc<part1<part2<part3<huge.log, got iB=${iB},i1=${i1},i2=${i2},i3=${i3},iH=${iH}`);
   // huge.log PAGED: a head block + a directive block (2 occurrences of its <file name> tag). The directive
   // uses the PRD §6.1 format '<paged: ... chars; head delivered ... complete lines; read the rest with the read tool ...>'.
-  const hugeTags = (r.text.match(new RegExp('<file name="' + HUGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  const hugeTags = countFileBlocks(blocksText(r), HUGE);
   assert(hugeTags === 2, `huge.log must have a HEAD block + a DIRECTIVE block (2 tags), got ${hugeTags}`);
-  assert(r.text.includes("<paged:"), "huge.log paged directive present (PRD §6.1 '<paged: ...>' format)");
-  assert(r.text.includes("with the read tool"), "huge.log paged directive references the read tool (§6.1 'read the rest with the read tool')");
+  assert(hasBlock(r, "<paged:"), "huge.log paged directive present (PRD §6.1 '<paged: ...>' format)");
+  assert(hasBlock(r, "with the read tool"), "huge.log paged directive references the read tool (§6.1 'read the rest with the read tool')");
   // bigdoc.md's import markers are STRIPPED (all 4 imports resolved+exist → injectable → stripped).
-  assert(r.text.slice(iB, i1).includes("Logs: huge.log"), "bigdoc.md block: the #@huge.log marker stripped to huge.log");
-  assert(!r.text.slice(iB, i1).includes("#@"), "bigdoc.md block must contain NO '#@' markers (all imports resolved+stripped)");
+  assert(r.blocks[iB].includes("Logs: huge.log"), "bigdoc.md block: the #@huge.log marker stripped to huge.log");
+  assert(!r.blocks[iB].includes("#@"), "bigdoc.md block must contain NO '#@' markers (all imports resolved+stripped)");
 
   // (2) NOTIFY — merged ctx (makeMockCtx ui + PAGED_FIX budget) via the handler. Counts come from the message.
   const { ctx: base, rec } = makeMockCtx(TMPDIR);
@@ -1714,11 +1745,11 @@ await runCase("MD1", "§10 md edge: notesMissing.md imports missing ghost.md →
   assert(r.injected === 1, `only notesMissing.md injected (ghost.md is missing), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notesMissing.md"), "top-level #@notesMissing.md marker stripped to notesMissing.md");
-  assert(r.text.includes('<file name="' + NOTES_MISSING + '">'), "notesMissing.md block present");
+  assert(hasBlock(r, '<file name="' + NOTES_MISSING + '">'), "notesMissing.md block present");
   // THE §10 FIX: the missing import marker is LEFT VERBATIM (not stripped) — nothing was injected for it.
-  assert(r.text.includes("Refs #@ghost.md here."), "the MISSING import marker #@ghost.md must be left VERBATIM (§10)");
-  assert(!r.text.includes("Refs ghost.md here."), "the missing import marker must NOT be stripped (no bare 'ghost.md' reference)");
-  assert(!r.text.includes('<file name="' + path.join(TMPDIR, "ghost.md") + '">'), "ghost.md must NOT be injected (it does not exist)");
+  assert(hasBlock(r, "Refs #@ghost.md here."), "the MISSING import marker #@ghost.md must be left VERBATIM (§10)");
+  assert(!hasBlock(r, "Refs ghost.md here."), "the missing import marker must NOT be stripped (no bare 'ghost.md' reference)");
+  assert(!hasBlock(r, '<file name="' + path.join(TMPDIR, "ghost.md") + '">'), "ghost.md must NOT be injected (it does not exist)");
 });
 
 // MD2 — §10 EDGE: a markdown import resolving OUTSIDE cwd (via ../) is ALLOWED (relative to the md's dir).
@@ -1728,15 +1759,15 @@ await runCase("MD2", "§10 md edge: sub/outsider.md imports #@../shared/api.md �
   assert(r.injected === 2, `sub/outsider.md + shared/api.md injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Read sub/outsider.md"), "top-level #@sub/outsider.md marker stripped to sub/outsider.md");
-  assert(r.text.includes('<file name="' + OUTSIDER + '">'), "sub/outsider.md block present");
-  assert(r.text.includes('<file name="' + SHARED_API + '">'), "shared/api.md block present (resolved via ../, outside cwd)");
+  assert(hasBlock(r, '<file name="' + OUTSIDER + '">'), "sub/outsider.md block present");
+  assert(hasBlock(r, '<file name="' + SHARED_API + '">'), "shared/api.md block present (resolved via ../, outside cwd)");
   // shared/api.md is OUTSIDE cwd (TMPDIR) but INSIDE the markdown's parent — explicitly ALLOWED (§10).
   assert(path.relative(TMPDIR, SHARED_API) === path.join("shared", "api.md"),
     `shared/api.md resolves under TMPDIR/shared (the md's parent's sibling), got rel=${path.relative(TMPDIR, SHARED_API)}`);
-  assert(r.text.includes("Outside cwd."), "shared/api.md's DISTINCT content present (proves the outside-cwd file was injected)");
+  assert(hasBlock(r, "Outside cwd."), "shared/api.md's DISTINCT content present (proves the outside-cwd file was injected)");
   // the import marker is STRIPPED (the import resolved + exists → injectable → stripped).
-  assert(r.text.includes("See ../shared/api.md here."), "sub/outsider.md block: the #@../shared/api.md marker stripped to ../shared/api.md");
-  assert(!r.text.includes("#@../shared/api.md"), "the resolved outside-cwd import marker must NOT retain #@");
+  assert(hasBlock(r, "See ../shared/api.md here."), "sub/outsider.md block: the #@../shared/api.md marker stripped to ../shared/api.md");
+  assert(!hasBlock(r, "#@../shared/api.md"), "the resolved outside-cwd import marker must NOT retain #@");
 });
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1803,7 +1834,7 @@ await runCase("T1.S1-7", "scanTokens is async: returns a Promise<array> after th
     "text with no resolvable tokens",
     TMPDIR,
     { allowAbsTilde: true, skipCode: false, tryMdExt: false },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(p instanceof Promise, `scanTokens must return a Promise after going async, got ${Object.prototype.toString.call(p)}`);
   const arr = await p;
@@ -1825,12 +1856,12 @@ await runCase(21, "md ext-shorthand: #@api (no bare api) → api.md; marker→ap
   assert(r.injected === 2, `notesShorthand.md + api.md injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notesShorthand.md"), "top-level #@notesShorthand.md marker stripped to notesShorthand.md");
-  const iNotes = r.text.indexOf('<file name="' + NOTES_SHORTHAND + '">');
-  const iApi = r.text.indexOf('<file name="' + API + '">');   // reuses the existing top-level api.md
+  const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_SHORTHAND + '">'));
+  const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));   // reuses the existing top-level api.md
   assert(iNotes !== -1 && iApi !== -1, "both notesShorthand.md and api.md blocks must be present");
   assert(iNotes < iApi, "notesShorthand.md block must appear BEFORE api.md block (pre-order depth-first)");
-  assert(r.text.includes("Imports api here."), "notesShorthand.md block: extensionless import marker stripped to api");
-  assert(!r.text.includes("Imports #@api here."), "the resolved extensionless import marker must NOT retain #@");
+  assert(hasBlock(r, "Imports api here."), "notesShorthand.md block: extensionless import marker stripped to api");
+  assert(!hasBlock(r, "Imports #@api here."), "the resolved extensionless import marker must NOT retain #@");
 });
 
 // Case 22 — §11: EXACT BEATS SHORTHAND. notesExactWins.md imports "#@guide"; BOTH a bare "guide" AND
@@ -1840,15 +1871,15 @@ await runCase(22, "md ext exact-wins: #@guide (bare guide + guide.md) → bare g
   assert(r.injected === 2, `notesExactWins.md + bare guide injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notesExactWins.md"), "top-level #@notesExactWins.md marker stripped to notesExactWins.md");
-  const iNotes = r.text.indexOf('<file name="' + NOTES_EXACT_WINS + '">');
-  const iGuide = r.text.indexOf('<file name="' + GUIDE_BARE + '">');
+  const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_EXACT_WINS + '">'));
+  const iGuide = r.blocks.findIndex((b) => b.includes('<file name="' + GUIDE_BARE + '">'));
   assert(iNotes !== -1 && iGuide !== -1, "both notesExactWins.md and bare guide blocks must be present");
   assert(iNotes < iGuide, "notesExactWins.md block before bare guide block (pre-order)");
   // CRITICAL: exact-match wins — the bare "guide" is injected; guide.md is NOT.
-  assert(r.text.includes("bare guide"), "the bare guide's content is present (exact match injected)");
-  assert(countFileBlocks(r.text, GUIDE_MD) === 0, `guide.md must have ZERO blocks (exact-match wins over shorthand), got ${countFileBlocks(r.text, GUIDE_MD)}`);
-  assert(r.text.includes("Refs guide here."), "notesExactWins.md block: import marker stripped to guide");
-  assert(!r.text.includes("Refs #@guide here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "bare guide"), "the bare guide's content is present (exact match injected)");
+  assert(countFileBlocks(blocksText(r), GUIDE_MD) === 0, `guide.md must have ZERO blocks (exact-match wins over shorthand), got ${countFileBlocks(blocksText(r), GUIDE_MD)}`);
+  assert(hasBlock(r, "Refs guide here."), "notesExactWins.md block: import marker stripped to guide");
+  assert(!hasBlock(r, "Refs #@guide here."), "the resolved import marker must NOT retain #@");
 });
 
 // Case 23 — §11: .markdown FALLBACK. sub/ext/notes.md imports "#@api"; in sub/ext/ ONLY api.markdown exists
@@ -1858,13 +1889,13 @@ await runCase(23, "md ext .markdown: #@api (only api.markdown) → api.markdown;
   assert(r.injected === 2, `sub/ext/notes.md + sub/ext/api.markdown injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Read sub/ext/notes.md"), "top-level #@sub/ext/notes.md marker stripped to sub/ext/notes.md");
-  const iNotes = r.text.indexOf('<file name="' + EXT_NOTES + '">');
-  const iApi = r.text.indexOf('<file name="' + EXT_API_MARKDOWN + '">');
+  const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + EXT_NOTES + '">'));
+  const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + EXT_API_MARKDOWN + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both sub/ext/notes.md and sub/ext/api.markdown blocks must be present");
   assert(iNotes < iApi, "sub/ext/notes.md block before sub/ext/api.markdown block (pre-order)");
-  assert(r.text.includes("Markdown API"), "sub/ext/api.markdown's DISTINCT content present (proves .markdown fallback)");
-  assert(r.text.includes("See api here."), "sub/ext/notes.md block: import marker stripped to api");
-  assert(!r.text.includes("See #@api here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "Markdown API"), "sub/ext/api.markdown's DISTINCT content present (proves .markdown fallback)");
+  assert(hasBlock(r, "See api here."), "sub/ext/notes.md block: import marker stripped to api");
+  assert(!hasBlock(r, "See #@api here."), "the resolved import marker must NOT retain #@");
 });
 
 // Case 24 — §11: TOP-LEVEL EXACT-ONLY. Top-level "#@specdoc" with ONLY specdoc.md present (NO bare specdoc)
@@ -1884,10 +1915,10 @@ await runCase("EDG-1", "§10 md edge: #@ghost (no ghost/.md/.markdown) → verba
   assert(r.injected === 1, `only notesGhost.md injected (ghost has no match), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notesGhost.md"), "top-level #@notesGhost.md marker stripped to notesGhost.md");
-  assert(r.text.includes('<file name="' + NOTES_GHOST + '">'), "notesGhost.md block present");
-  assert(r.text.includes("Refs #@ghost here."), "the no-match import marker #@ghost must be left VERBATIM (§10)");
-  assert(!r.text.includes("Refs ghost here."), "the no-match import marker must NOT be stripped");
-  assert(r.text.indexOf('<file name="' + path.join(TMPDIR, "ghost.md") + '">') === -1, "ghost.md must NOT be injected (no match)");
+  assert(hasBlock(r, '<file name="' + NOTES_GHOST + '">'), "notesGhost.md block present");
+  assert(hasBlock(r, "Refs #@ghost here."), "the no-match import marker #@ghost must be left VERBATIM (§10)");
+  assert(!hasBlock(r, "Refs ghost here."), "the no-match import marker must NOT be stripped");
+  assert(!hasBlock(r, '<file name="' + path.join(TMPDIR, "ghost.md") + '">'), "ghost.md must NOT be injected (no match)");
 });
 
 // EDG-2 — §10: ALREADY-EXTENDED, MISSING. notesAbsent.md imports "#@absent.md"; absent.md is MISSING → the
@@ -1897,10 +1928,10 @@ await runCase("EDG-2", "§10 md edge: #@absent.md (missing) → exact-only (neve
   assert(r.injected === 1, `only notesAbsent.md injected (absent.md missing), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notesAbsent.md"), "top-level #@notesAbsent.md marker stripped to notesAbsent.md");
-  assert(r.text.includes('<file name="' + NOTES_ABSENT + '">'), "notesAbsent.md block present");
-  assert(r.text.includes("Refs #@absent.md here."), "the missing already-extended marker #@absent.md must be left VERBATIM (exact-only, never .md.md)");
-  assert(!r.text.includes("Refs absent.md here."), "the missing import marker must NOT be stripped");
-  assert(r.text.indexOf('<file name="' + path.join(TMPDIR, "absent.md") + '">') === -1, "absent.md must NOT be injected (missing)");
+  assert(hasBlock(r, '<file name="' + NOTES_ABSENT + '">'), "notesAbsent.md block present");
+  assert(hasBlock(r, "Refs #@absent.md here."), "the missing already-extended marker #@absent.md must be left VERBATIM (exact-only, never .md.md)");
+  assert(!hasBlock(r, "Refs absent.md here."), "the missing import marker must NOT be stripped");
+  assert(!hasBlock(r, '<file name="' + path.join(TMPDIR, "absent.md") + '">'), "absent.md must NOT be injected (missing)");
 });
 
 // EDG-3 — §10: DEDUP ACROSS SHORTHAND. notesDedup.md imports BOTH "#@specdoc" and "#@specdoc.md"; specdoc.md
@@ -1912,10 +1943,10 @@ await runCase("EDG-3", "§10 md edge: #@specdoc + #@specdoc.md (specdoc.md exist
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Review notesDedup.md"), "top-level #@notesDedup.md marker stripped to notesDedup.md");
   // specdoc.md injected EXACTLY ONCE (dedup on the resolved abs — both #@specdoc and #@specdoc.md collapse)
-  assert(countFileBlocks(r.text, SPECDOC_MD) === 1, `specdoc.md must appear exactly ONCE (dedup across shorthand forms), got ${countFileBlocks(r.text, SPECDOC_MD)}`);
+  assert(countFileBlocks(blocksText(r), SPECDOC_MD) === 1, `specdoc.md must appear exactly ONCE (dedup across shorthand forms), got ${countFileBlocks(blocksText(r), SPECDOC_MD)}`);
   // first marker #@specdoc stripped to "specdoc"; second #@specdoc.md left VERBATIM (deduped → not recorded → not stripped)
-  assert(r.text.includes("Imports: specdoc and #@specdoc.md"), "first marker #@specdoc stripped to specdoc; second #@specdoc.md left VERBATIM (deduped)");
-  assert(!r.text.includes("Imports: #@specdoc and"), "the first (dedup-winning) marker must NOT retain #@");
+  assert(hasBlock(r, "Imports: specdoc and #@specdoc.md"), "first marker #@specdoc stripped to specdoc; second #@specdoc.md left VERBATIM (deduped)");
+  assert(!hasBlock(r, "Imports: #@specdoc and"), "the first (dedup-winning) marker must NOT retain #@");
 });
 
 // EDG-4 — §10: SHORTHAND WITH PATH PREFIX. notesSubPrefix.md imports "#@sub/notes"; sub/notes.md already
@@ -1929,14 +1960,14 @@ await runCase("EDG-4", "§10 md edge: #@sub/notes (sub/notes.md exists) → sub/
   assert(r.injected === 3, `notesSubPrefix.md + sub/notes.md + sub/api.md (transitive) injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   assert(r.text.startsWith("Read notesSubPrefix.md"), "top-level #@notesSubPrefix.md marker stripped to notesSubPrefix.md");
-  const iNotes = r.text.indexOf('<file name="' + NOTES_SUB_PREFIX + '">');
-  const iSub = r.text.indexOf('<file name="' + SUB_NOTES + '">');   // reuses the existing sub/notes.md
-  const iSubApi = r.text.indexOf('<file name="' + SUB_API + '">');   // sub/notes.md's transitive #@api.md → sub/api.md
+  const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_SUB_PREFIX + '">'));
+  const iSub = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_NOTES + '">'));   // reuses the existing sub/notes.md
+  const iSubApi = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_API + '">'));   // sub/notes.md's transitive #@api.md → sub/api.md
   assert(iNotes !== -1 && iSub !== -1 && iSubApi !== -1, "notesSubPrefix.md + sub/notes.md + sub/api.md blocks all present");
   assert(iNotes < iSub && iSub < iSubApi, "pre-order: notesSubPrefix.md before sub/notes.md before sub/api.md");
-  assert(r.text.includes("Sub Notes"), "sub/notes.md's DISTINCT content present (proves shorthand resolved the prefixed path)");
-  assert(r.text.includes("See sub/notes here."), "notesSubPrefix.md block: import marker stripped to sub/notes");
-  assert(!r.text.includes("See #@sub/notes here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "Sub Notes"), "sub/notes.md's DISTINCT content present (proves shorthand resolved the prefixed path)");
+  assert(hasBlock(r, "See sub/notes here."), "notesSubPrefix.md block: import marker stripped to sub/notes");
+  assert(!hasBlock(r, "See #@sub/notes here."), "the resolved import marker must NOT retain #@");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1955,7 +1986,7 @@ await runCase("T1.S1-8", "scanTokens bare-@ off: 'Review @api.md here' → [] (n
     "Review @api.md here",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: false },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(Array.isArray(arr) && arr.length === 0, `bareAt:false must ignore bare @, got ${JSON.stringify(arr)}`);
 });
@@ -1966,7 +1997,7 @@ await runCase("T1.S1-9", "scanTokens bare-@ on: '@api.md and #@b.md' → 2 recor
     "@api.md and #@b.md",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 2, `expected 2 records (bare @ + #@), got ${arr.length}: ${JSON.stringify(arr)}`);
   const bare = arr.find((r) => r.prefixLen === 1);
@@ -1985,7 +2016,7 @@ await runCase("T1.S1-10", "scanTokens no-double-match: '#@a.md' (bareAt:true) �
     "#@a.md",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 1, `#@a.md must yield exactly ONE record (no double-match), got ${arr.length}: ${JSON.stringify(arr)}`);
   assert(arr[0].prefixLen === 2, `the surviving record must be the #@ form (prefixLen 2), got ${arr[0].prefixLen}`);
@@ -2000,7 +2031,7 @@ await runCase("T1.S1-11", "scanTokens bare-@ mid-word excluded: 'email user@host
     "email user@host.com",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 0, `mid-word @ must be excluded, got ${JSON.stringify(arr)}`);
 });
@@ -2013,7 +2044,7 @@ await runCase("T1.S1-12", "scanTokens dedup: '#@api.md @api.md' → ONE record (
     "#@api.md @api.md",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 1, `dedup must collapse to ONE record, got ${arr.length}: ${JSON.stringify(arr)}`);
   assert(arr[0].abs === API, `record must resolve to api.md, got ${arr[0].abs}`);
@@ -2028,7 +2059,7 @@ await runCase("T1.S1-13", "scanTokens bare-@ code-exempt: fenced '@api.md' (skip
     "```\n@api.md\n```",
     TMPDIR,
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: true },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 0, `bare-@ inside a fenced block must be skipped (code-exempt), got ${JSON.stringify(arr)}`);
 });
@@ -2207,22 +2238,21 @@ await runCase("T2.S1-h", "readConfig malformed settings.json + trusted → key {
 // session_start handler with cwd=TMPDIR + trusted → cfg.markdownBareAtImports:true; then an input with #@a.ts
 // must transform and inject a.ts. Proves the config→handler→injectFiles wiring runs end-to-end without error.
 await runCase("M2.T1.S1-a", "session_start loads config (trusted) + input pipeline runs (regression)", async () => {
-  const sslot = captureHandler("session_start");
-  await sslot.all[0]({}, makeMockCtx(TMPDIR).ctx); // cfg = readConfig({cwd:TMPDIR, trusted}) → markdownBareAtImports:true
-  const islot = captureHandler("input");
-  const out = await islot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
+  const h = captureAllHandlers(); // ONE factory → shared `pending` closure (input stashes; before_agent_start publishes)
+  await h.session_start[0]({}, makeMockCtx(TMPDIR).ctx); // cfg = readConfig({cwd:TMPDIR, trusted}) → markdownBareAtImports:true
+  const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
   assert(out.action === "transform", `#@a.ts must inject with config loaded; got ${JSON.stringify(out)}`);
-  assert(out.text.includes(`<file name="${A_TS}">`), "a.ts block present");
+  const msg = await h.before_agent_start[0]({}, makeMockCtx(TMPDIR).ctx); // SAME factory → reads the stashed pending
+  assert(msg && msg.message && msg.message.content.includes(`<file name="${A_TS}">`), "a.ts block present in the custom message");
 });
 
 // M2.T1.S1-b — trust-gate path runs (untrusted) — smoke, no crash; #@ still injects. Driving the config
 // session_start handler with isProjectTrusted:()=>false skips the project config → cfg.markdownBareAtImports
 // undefined → bareAt false. But top-level #@ is unaffected (always bareAt:false anyway) → #@a.ts still injects.
 await runCase("M2.T1.S1-b", "trust-gate path runs (untrusted) — smoke, no crash; #@ still injects", async () => {
-  const sslot = captureHandler("session_start");
-  await sslot.all[0]({}, makeMockCtx(TMPDIR, { isProjectTrusted: () => false }).ctx); // project skipped → bareAt undefined
-  const islot = captureHandler("input");
-  const out = await islot.cb({ text: "Review #@a.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
+  const h = captureAllHandlers();
+  await h.session_start[0]({}, makeMockCtx(TMPDIR, { isProjectTrusted: () => false }).ctx); // project skipped → bareAt undefined
+  const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
   assert(out.action === "transform", `#@a.ts must inject even when untrusted (top-level unaffected); got ${JSON.stringify(out)}`);
 });
 
@@ -2231,13 +2261,13 @@ await runCase("M2.T1.S1-b", "trust-gate path runs (untrusted) — smoke, no cras
 // prompt must inject ONLY a.ts (the #@ token) — the bare @b.ts must NOT inject. Both files exist; if the top-level
 // scan wrongly passed bareAt:true, @b.ts WOULD inject → b.ts block present → FAIL. This pins the §4.6 invariant.
 await runCase("M2.T1.S1-c", "TOP-LEVEL SAFETY — bare @ NEVER injects at top level (even with bareAt config on)", async () => {
-  const sslot = captureHandler("session_start");
-  await sslot.all[0]({}, makeMockCtx(TMPDIR).ctx); // markdownBareAtImports:true → bareAt derived true
-  const islot = captureHandler("input");
-  const out = await islot.cb({ text: "Diff #@a.ts and @b.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
+  const h = captureAllHandlers();
+  await h.session_start[0]({}, makeMockCtx(TMPDIR).ctx); // markdownBareAtImports:true → bareAt derived true
+  const out = await h.input[0]({ text: "Diff #@a.ts and @b.ts", source: "interactive", images: [] }, makeMockCtx(TMPDIR).ctx);
   assert(out.action === "transform", `#@a.ts must inject; got ${JSON.stringify(out)}`);
-  assert(out.text.includes(`<file name="${A_TS}">`), "a.ts block present (the #@ token injected)");
-  assert(!out.text.includes(`<file name="${B_TS}">`),
+  const msg = await h.before_agent_start[0]({}, makeMockCtx(TMPDIR).ctx); // SAME factory → reads the stashed pending
+  assert(msg && msg.message && msg.message.content.includes(`<file name="${A_TS}">`), "a.ts block present (the #@ token injected)");
+  assert(!msg.message.content.includes(`<file name="${B_TS}">`),
     `bare @b.ts must NOT inject at top level even with bareAt config on; b.ts block must be absent`);
 });
 
@@ -2255,7 +2285,7 @@ await runCase("M2.T1.S1-d", "direct injectFiles bareAt:true param does NOT break
 await runCase("M2.T1.S1-e", "direct injectFiles — top-level bareAt:false regardless of param (unit)", async () => {
   const r = await mod.injectFiles("Diff #@a.ts and @b.ts", [], FIX, true); // bareAt param true, top-level scan hardcodes false
   assert(r.injected === 1, `top-level bare @ must NOT inject even with bareAt:true param; expected injected===1, got ${r.injected}`);
-  assert(!r.text.includes(`<file name="${B_TS}">`), "bare @b.ts block must be absent");
+  assert(!hasBlock(r, `<file name="${B_TS}">`), "bare @b.ts block must be absent");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2276,9 +2306,9 @@ await runCase(25, "§4.6 default-off: bare @api.md in notesBare.md NOT imported 
   assert(r.injected === 1, `bareAt off → only notesBare.md injected (bare-@ not scanned), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   // the bare @api.md marker is left VERBATIM (bareAt:false → BARE_AT_RE not run → not a record → not stripped)
-  assert(r.text.includes("Refs @api.md here."), "the bare @api.md must be left VERBATIM (bareAt off, not scanned)");
-  assert(!r.text.includes('<file name="' + API + '">'), "api.md must NOT be injected (bare-@ not scanned when bareAt off)");
-  assert(countFileBlocks(r.text, API) === 0, `api.md must appear ZERO times, got ${countFileBlocks(r.text, API)}`);
+  assert(hasBlock(r, "Refs @api.md here."), "the bare @api.md must be left VERBATIM (bareAt off, not scanned)");
+  assert(!hasBlock(r, '<file name="' + API + '">'), "api.md must NOT be injected (bare-@ not scanned when bareAt off)");
+  assert(countFileBlocks(blocksText(r), API) === 0, `api.md must appear ZERO times, got ${countFileBlocks(blocksText(r), API)}`);
 });
 
 // #26 — BARE-@ ON, prefixLen-1 STRIP (the smoking-gun +2-bug guard). bareAt:true → BARE_AT_RE runs in
@@ -2288,15 +2318,15 @@ await runCase(26, "§4.6 on: bare @api.md imported + stripped to api.md (prefixL
   const r = await mod.injectFiles("Review #@notesBare.md", [], FIX, true); // bareAt on
   assert(r.injected === 2, `bareAt on → notesBare.md + api.md injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  const iNotes = r.text.indexOf('<file name="' + NOTES_BARE + '">');
-  const iApi = r.text.indexOf('<file name="' + API + '">');
+  const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_BARE + '">'));
+  const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both notesBare.md and api.md blocks must be present");
   assert(iNotes < iApi, "notesBare.md block before api.md block (pre-order depth-first)");
   // prefixLen-1 strip: the '@' is removed, leaving `api.md` (1 char stripped, NOT 2)
-  assert(r.text.includes("Refs api.md here."), "prefixLen-1 strip: bare @api.md → api.md (the '@' removed)");
-  assert(!r.text.includes("Refs @api.md here."), "the bare @api.md marker must NOT retain the '@' (stripped)");
+  assert(hasBlock(r, "Refs api.md here."), "prefixLen-1 strip: bare @api.md → api.md (the '@' removed)");
+  assert(!hasBlock(r, "Refs @api.md here."), "the bare @api.md marker must NOT retain the '@' (stripped)");
   // SMOKING-GUN +2-bug GUARD: a wrong +2 strip would remove '@a' leaving 'pi.md'. Assert the bug's fingerprint ABSENT.
-  assert(!r.text.includes("Refs pi.md here."), "SMOKING-GUN: '+2' bug would strip '@a' → 'pi.md'; must be ABSENT (prefixLen-1 strip works)");
+  assert(!hasBlock(r, "Refs pi.md here."), "SMOKING-GUN: '+2' bug would strip '@a' → 'pi.md'; must be ABSENT (prefixLen-1 strip works)");
 });
 
 // #27 — bareAt ON + existing #@notes.md (no double-match). The existing notes.md has `#@api.md` (prefixLen 2)
@@ -2307,12 +2337,12 @@ await runCase(27, "§4.6 on+#@: #@api.md matched ONCE (no double-match), injecte
   assert(r.injected === 2, `notes.md + api.md injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   // api.md matched EXACTLY ONCE (BARE_AT_RE forbids preceding '#' → #@api.md never double-matched)
-  assert(countFileBlocks(r.text, API) === 1, `api.md must appear exactly ONCE (no double-match), got ${countFileBlocks(r.text, API)}`);
+  assert(countFileBlocks(blocksText(r), API) === 1, `api.md must appear exactly ONCE (no double-match), got ${countFileBlocks(blocksText(r), API)}`);
   // prefixLen-2 strip for the #@ form (unchanged behavior; the +r.prefixLen edit == +2 here)
-  assert(r.text.includes("Imports api.md here."), "#@api.md stripped to api.md (prefixLen 2)");
-  assert(!r.text.includes("Imports #@api.md here."), "the #@api.md marker must NOT retain #@");
+  assert(hasBlock(r, "Imports api.md here."), "#@api.md stripped to api.md (prefixLen 2)");
+  assert(!hasBlock(r, "Imports #@api.md here."), "the #@api.md marker must NOT retain #@");
   // the fenced #@example.ts is STILL verbatim (code-exempt even with bareAt on)
-  assert(r.text.includes("#@example.ts"), "fenced #@example.ts must be left VERBATIM (code-exempt, bareAt-independent)");
+  assert(hasBlock(r, "#@example.ts"), "fenced #@example.ts must be left VERBATIM (code-exempt, bareAt-independent)");
 });
 
 // #28 — TOP-LEVEL UNAFFECTED (the §4.6 markdown-only invariant). A top-level bare @other.md (other.md EXISTS)
@@ -2323,7 +2353,7 @@ await runCase(28, "§4.6 on+top-level: bare @other.md (exists) NOT injected (inj
   const r = await mod.injectFiles("Read @other.md", [], FIX, true); // bareAt param true; top-level scan hardcodes false
   assert(r.injected === 0, `top-level bare @ must NOT inject even with bareAt:true; expected injected===0, got ${r.injected}`);
   assert(r.text === "Read @other.md", `count===0 returns the ORIGINAL text byte-for-byte; got ${JSON.stringify(r.text)}`);
-  assert(!r.text.includes('<file name="' + OTHER_MD + '">'), "other.md block must be absent (top-level is #@-only)");
+  assert(!hasBlock(r, '<file name="' + OTHER_MD + '">'), "other.md block must be absent (top-level is #@-only)");
 });
 
 // §10(e) — MID-WORD @ EXCLUDED. `user@host.com` in a markdown (bareAt on) is left VERBATIM: BARE_AT_RE forbids
@@ -2332,7 +2362,7 @@ await runCase("M2.T2.S1-e", "§10 email: user@host.com in markdown (on) left VER
   const r = await mod.injectFiles("Read #@notesEmail.md", [], FIX, true);
   assert(r.injected === 1, `only notesEmail.md injected (mid-word @ not matched), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.includes("Contact user@host.com."), "user@host.com must be left VERBATIM (BARE_AT_RE word-char lookbehind excludes mid-word @)");
+  assert(hasBlock(r, "Contact user@host.com."), "user@host.com must be left VERBATIM (BARE_AT_RE word-char lookbehind excludes mid-word @)");
 });
 
 // §10(f) — UNRESOLVED @ MENTION. `@username` in prose (bareAt on, no username.md) is recorded by BARE_AT_RE
@@ -2341,7 +2371,7 @@ await runCase("M2.T2.S1-f", "§10 mention: @username (on, no username.md) left V
   const r = await mod.injectFiles("Read #@notesMention.md", [], FIX, true);
   assert(r.injected === 1, `only notesMention.md injected (no username.md → not resolved), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.includes("Ping @username now."), "@username must be left VERBATIM (Step 3.5 existence pre-check: no username.md → not stripped)");
+  assert(hasBlock(r, "Ping @username now."), "@username must be left VERBATIM (Step 3.5 existence pre-check: no username.md → not stripped)");
 });
 
 // §10(g) — DEDUP on resolved abs. notesMixDedup.md has BOTH `#@api.md` (prefixLen 2) and `@api.md` (prefixLen 1)
@@ -2352,10 +2382,10 @@ await runCase("M2.T2.S1-g", "§10 dedup: #@api.md + @api.md (on) → api.md ONCE
   assert(r.injected === 2, `notesMixDedup.md + api.md (deduped) injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   // api.md injected EXACTLY ONCE (dedup on resolved abs — both #@api.md and @api.md collapse)
-  assert(countFileBlocks(r.text, API) === 1, `api.md must appear exactly ONCE (dedup on resolved abs), got ${countFileBlocks(r.text, API)}`);
+  assert(countFileBlocks(blocksText(r), API) === 1, `api.md must appear exactly ONCE (dedup on resolved abs), got ${countFileBlocks(blocksText(r), API)}`);
   // first marker #@api.md stripped to api.md (prefixLen 2); second @api.md left VERBATIM (deduped → not a record → not stripped)
-  assert(r.text.includes("Refs api.md and @api.md."), "first #@api.md stripped to api.md; second @api.md left VERBATIM (deduped)");
-  assert(!r.text.includes("Refs #@api.md"), "the first (dedup-winning) marker must NOT retain #@");
+  assert(hasBlock(r, "Refs api.md and @api.md."), "first #@api.md stripped to api.md; second @api.md left VERBATIM (deduped)");
+  assert(!hasBlock(r, "Refs #@api.md"), "the first (dedup-winning) marker must NOT retain #@");
 });
 
 // 10. Summary + cleanup + exit.

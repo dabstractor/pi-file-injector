@@ -56,6 +56,12 @@ fs.writeFileSync(
         "@earendil-works/pi-coding-agent": [PI_TYPES],
         // pi-ai .d.ts falls back to index.d.ts then compat.d.ts (both shipped by pi-ai).
         "@earendil-works/pi-ai": fs.existsSync(PIAI_TYPES) ? [PIAI_TYPES] : [path.join(PIPKG, "node_modules/@earendil-works/pi-ai/dist/compat.d.ts")],
+        // pi-tui .d.ts (a NESTED dep under pi-coding-agent/node_modules). Needed since P1.M1.T2.S2 added
+        // `import { Box, Text, type Component } from "@earendil-works/pi-tui"` for the §6.3 MessageRenderer.
+        // tsc Bundler resolution does NOT walk up to the global node_modules for a project-root `files:`
+        // entry, so without this paths mapping tsc errors with TS2307 Cannot find module '@earendil-works/pi-tui'.
+        // (The test-harness jiti alias for pi-tui is a SEPARATE concern — owned by P1.M2.T2.S2.)
+        "@earendil-works/pi-tui": [path.join(PIPKG, "node_modules/@earendil-works/pi-tui/dist/index.d.ts")],
       },
     },
     files: [path.join(ROOT, "file-injector.ts")],

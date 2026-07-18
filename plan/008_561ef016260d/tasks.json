@@ -118,14 +118,14 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Migrate existing test assertions to the new injectFiles return shape",
-              "status": "Planned",
+              "status": "Ready",
               "description": "Update all three test suites so assertions read r.blocks/r.details instead of r.text for file block content. The injection logic assertions (regex, cleanup, resolution, paging, imports, dedup, config) stay valid — only the container changes from text-embedded blocks to separate blocks/details arrays.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Migrate file-injector.test.mjs (~170 assertions) to r.blocks/r.details",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S2"
@@ -141,7 +141,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "Migrate relative-imports.test.mjs and import-behavior.test.mjs return-shape reads",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
@@ -166,7 +166,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Delivery + custom-message + stash lifecycle tests",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
