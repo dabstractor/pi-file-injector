@@ -62,14 +62,14 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Fix Minor Issues 2 & 3: FileDetail byte duplication (§12.22) + paged directive display (§6.3)",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Both issues live in the FileDetail → emitText → renderInjectedMessage data path and are coupled (same interface, same renderer expanded branch), so they are fixed together in one milestone. Issue 2: FileDetail.body duplicates ~100% of every deliverable file's bytes into persisted details, violating §12.22/§6.2 and roughly doubling session storage — fix by storing content offsets (slice from message.content) instead of the body string, keeping the BUG-1 (nested </file>) correctness guarantee. Issue 3: the paged expanded view shows only the head; the <paged: ...> directive text that §6.3 mandates is never surfaced — fix by storing the directive text in the paged detail and rendering it after the head.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Eliminate FileDetail.body byte duplication (§12.22) via content offsets",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Stop embedding the full file body in each FileDetail. Add contentStart/contentLen (char offset+length into the assembled message.content) so the renderer slices the exact body from content (BUG-1 safe — slice by known length, not regex) without duplicating bytes. Keep `body?` as a deprecated fallback field for old/foreign/test entries (REND-* unit tests, §6.3 defensive rendering). Compute offsets post-hoc in the before_agent_start handler where content is assembled.",
               "subtasks": [
                 {
@@ -92,7 +92,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "renderInjectedMessage consumes content offsets (keep body/regex fallback)",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S1"
@@ -111,14 +111,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Surface paged-directive text in the expanded view (§6.3)",
-              "status": "Planned",
+              "status": "Ready",
               "description": "PRD §6.3 requires paged files to show their head block PLUS the paged-directive text verbatim in the expanded view. Currently the expanded branch reads only the head body and the `<paged: ...>` directive (which reaches the model via content) is never surfaced. Store the directive text in the paged FileDetail and render it after the head when expanded.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Store directive in paged FileDetail + render after head in expanded branch",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S2"

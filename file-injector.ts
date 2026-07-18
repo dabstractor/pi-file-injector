@@ -641,11 +641,15 @@ const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
  */
 export function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
   const files: FileDetail[] = message?.details?.files ?? []; // defensive — old/foreign entries
-  // FALLBACK body derivation: re-parse message.content with the block regex ONLY when a detail lacks a
-  // stored `body` (old/foreign/test entries). BUG-1: a file whose own content contains a literal `</file>`
-  // truncates the lazy `([\s\S]*?)` at the INNER `</file>`, so we must NOT rely on re-parsing for real
-  // injected files. emitText now stores the EXACT body in `detail.body`; the renderer prefers it and only
-  // falls back to the regex for entries without one (e.g. the REND-* unit tests, which pass crafted details).
+  // BODY derivation (3 tiers, expanded view): (1) offset slice — real injected files (post-P1.M2.T1.S1) carry
+  // contentStart/contentLen (char offsets into message.content), so message.content.slice(start, start+len)
+  // recovers the EXACT body WITHOUT duplicating file bytes into details (§12.22); (2) stored `body` — old/
+  // foreign/test entries (and pre-offset persisted messages) carry the deprecated body field; (3) the regex
+  // below — last-resort fallback for entries with neither (§6.3/§12.23 defensive rendering). The regex re-parse
+  // is computed UNCONDITIONALLY (cheap; needed for tier 3) but is only USED when tiers 1+2 miss. BUG-1: a file
+  // whose own content contains a literal `</file>` truncates the lazy `([\s\S]*?)` at the INNER `</file>`, so
+  // tiers 1+2 (length-derived offset / stored body) are the BUG-1-safe paths; tier 3 is regex-vulnerable but
+  // only fires for entries without offsets/body (test-crafted / old), where BUG-1 is not a real-world risk.
   const bodies: string[] = [];
   if (typeof message?.content === "string") {
     let m: RegExpExecArray | null;
@@ -669,8 +673,15 @@ export function renderInjectedMessage(message: any, opts: { expanded: boolean },
     // one read line per file; expand hint ONCE per box (i===0), matching the [skill] precedent (PRD §6.3)
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
     if (opts.expanded) {
-      // Prefer the EXACT stored body (BUG-1 fix); fall back to the regex-derived body for entries without one.
-      const body = typeof d.body === "string" ? d.body : bodies[i];
+      // 3-tier body resolution (§12.22 offset → stored body → regex fallback). Real emission (P1.M2.T1.S1)
+      // carries contentStart/contentLen (no duplicated bytes); tier-1 slices message.content EXACTLY — BUG-1-safe
+      // because the offsets are length-derived (block.length − header − footer), NOT regex: a body containing a
+      // literal </file> (which truncates FILE_BLOCK_RE's lazy capture) slices whole. Tier-2 (d.body) covers
+      // old/foreign/test entries still carrying the deprecated body field. Tier-3 (bodies[i]) is the last-resort
+      // regex fallback for entries with neither (§6.3/§12.23 defensive rendering).
+      const body = (d.contentStart != null && d.contentLen != null && typeof message?.content === "string")
+        ? message.content.slice(d.contentStart, d.contentStart + d.contentLen)
+        : (typeof d.body === "string" ? d.body : bodies[i]);
       if (body !== undefined && d.kind !== "image") { // images already attached to user msg (§6.4) — skip
         const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
         const rendered = lang ? highlightCode(body, lang).join("\n") : body;

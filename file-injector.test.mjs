@@ -2704,22 +2704,45 @@ await runCase("REND-11", "BUG-1: a file whose content has a nested </file> rende
   assert(bodyChild.includes("DONE"), `expanded body must include text AFTER the inner </file> ('DONE'); got ${JSON.stringify(bodyChild.slice(0, 80))}`);
   assert(!bodyChild.endsWith("nested"), `expanded body must NOT be truncated at the inner </file>; got ${JSON.stringify(bodyChild.slice(0, 80))}`);
 
-  // (b) E2E (injectFiles → render): a REAL file with a nested </file> produces a detail whose stored body
-  //     is exact, and the renderer shows the full content (DONE present), and the model-facing content is
-  //     also intact (the delivery contract is unaffected — this bug is display-only per the report).
+  // (b) E2E (injectFiles → render): a REAL file with a nested </file> renders its FULL body (DONE present) via
+  //     the renderer's 3-tier resolution. After P1.M2.T1.S1, injectFiles carries contentStart/contentLen (no body);
+  //     offsets are computed in before_agent_start via computeDetailOffsets — simulate that here (injectFiles itself
+  //     does not compute them). The `typeof … === "function"` guard makes this pass pre-S1 (body → tier-2) AND
+  //     post-S1 (offsets → tier-1). Model-facing content is intact regardless (delivery is unaffected — display-only).
   const r = await mod.injectFiles("Review #@nest.ts", [], FIX);
   assert(r.injected === 1, `nest.ts was injected, got injected=${r.injected}`);
   assert(Array.isArray(r.details) && r.details.length === 1, `one detail for nest.ts, got ${JSON.stringify(r.details?.length)}`);
-  const d = r.details[0];
-  assert(typeof d.body === "string" && d.body.includes("DONE"),
-    `detail.body carries the full content (incl. 'DONE' after the inner </file>), got ${JSON.stringify(d.body)}`);
-  // model-facing content is the full block (delivery unaffected):
-  assert(r.blocks[0].includes("DONE"), `the model-facing block carries the full content ('DONE' present), got ${JSON.stringify(r.blocks[0])}`);
+  // simulate before_agent_start's offset pass (P1.M2.T1.S1) so the renderer's offset tier is exercised post-S1:
+  if (typeof mod.computeDetailOffsets === "function") mod.computeDetailOffsets(r.blocks, r.details);
+  // model-facing content is the full block (delivery unaffected — this bug is display-only per the report):
+  assert(r.blocks[0].includes("DONE"), `the model-facing block carries the full content ('DONE' present), got ${JSON.stringify(r.blocks[0].slice(0, 80))}`);
   // renderer (as published by before_agent_start: content=blocks.join) shows DONE in the expanded view:
   const published = { details: { files: r.details }, content: r.blocks.join("\n\n") };
   const exp = mod.renderInjectedMessage(published, { expanded: true }, REND_THEME);
   const shown = textOf(exp.children[exp.children.length - 1]);
-  assert(shown.includes("DONE"), `expanded view of a real nested-</file> file shows the full body ('DONE'), got ${JSON.stringify(shown.slice(0, 80))}`);
+  assert(shown.includes("DONE"), `expanded view of a real nested-</file> file shows the full body ('DONE') via the renderer's offset/body tier, got ${JSON.stringify(shown.slice(0, 80))}`);
+});
+
+// REND-OFFSET — §12.22 offset tier (P1.M2.T1.S2). A detail carrying contentStart/contentLen (NOT body) — the
+// post-S1 shape for real injected files — must render the EXACT body via message.content.slice in the expanded
+// view. Pins tier-1 of the renderer's 3-tier body resolution (offset → body → regex) in isolation, incl. a
+// nested-</file> body (BUG-1-safe: the slice is length-derived, not regex — the lazy regex would truncate at
+// the inner tag). Independent of S1 state (offsets crafted directly in the test).
+await runCase("REND-OFFSET", "offset tier: detail with contentStart/contentLen (no body) renders the exact slice incl. nested </file> (§12.22)", async () => {
+  const fullBody = "a</file>b";                                                    // BUG-1 body — a literal </file>
+  const block = '<file name="/abs/o.ts">\n' + fullBody + '\n</file>';
+  const content = block;                                                           // single block → content === block
+  const headerLen = '<file name="/abs/o.ts">\n'.length;                            // 15 + 9 = 24
+  const contentStart = headerLen;
+  const contentLen = fullBody.length;                                              // 8
+  const msg = { details: { files: [{ path: "/abs/o.ts", kind: "text", contentStart, contentLen }] }, content };
+  const expanded = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME);
+  const bodyChild = textOf(expanded.children[expanded.children.length - 1]);
+  assert(bodyChild.includes("a</file>b"),
+    `offset slice (tier-1) shows the EXACT body incl. the inner </file> (BUG-1-safe), got ${JSON.stringify(bodyChild.slice(0, 80))}`);
+  // sanity: tier-1 fired (not the regex). The regex alone would yield "a" (truncated at the inner </file>).
+  assert(!bodyChild.endsWith("a") || bodyChild.length > 1,
+    `tier-1 slice is the FULL body (not the regex-truncated 'a'), got ${JSON.stringify(bodyChild.slice(0, 80))}`);
 });
 
 // 10. Summary + cleanup + exit.
