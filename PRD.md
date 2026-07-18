@@ -16,7 +16,7 @@ Pi has no simple, consistent way to say **"put this entire file into the model's
 ### Solution
 A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery** trigger: whatever file the user names, the model receives all of it. When the user writes `#@filename.txt` anywhere in a prompt and submits, the extension reads the file and delivers it to the model **before** the model sees it. If the file fits the model's remaining context it is delivered whole; if it exceeds the remaining context it is delivered in pages the model reads through the `read` tool (see §5.5). No configuration either way.
 
-**How delivery works (and how it looks).** Files are *not* pasted into the user's prompt text. Instead the extension delivers them as a single **custom message** (`customType: "fileInjector.injected"`) that a `before_agent_start` handler returns after the user message is built (§6.2). That custom message **participates in LLM context** — Pi's `convertToLlm()` maps `role:"custom"` to a user-role message — so the model receives every `<file name="/abs/path">…</file>` block it always did, byte-identical in content (§13.7 documents the one consequence: the model's input is now two user messages instead of one). Simultaneously the extension **registers a `MessageRenderer`** for that `customType` (§6.3) that draws the injected files in the chat exactly like the built-in `read` tool: a green box (theme color `toolSuccessBg`) showing **one `read <path>` line per file** when collapsed, expanding on `ctrl+o` to the full file contents — the same collapse/expand affordance the `[skill]` block uses, but green and one-line-per-file. To the end user it is indistinguishable from the agent having called `read` on each file itself; the only difference is that the files are attached at submit time instead of after a model round-trip. The user's own message bubble shows only what they typed (the `#@` triggers are stripped to bare paths, §6.4) — never the raw file contents.
+**How delivery works (and how it looks).** Files are *not* pasted into the user's prompt text. Instead the extension delivers them as a single **custom message** (`customType: "fileInjector.injected"`) that a `before_agent_start` handler returns after the user message is built (§6.2). That custom message **participates in LLM context** — Pi's `convertToLlm()` maps `role:"custom"` to a user-role message — so the model receives every `<file name="/abs/path">…</file>` block it always did, byte-identical in content (§13.7 documents the one consequence: the model's input is now two user messages instead of one). Simultaneously the extension **registers a `MessageRenderer`** for that `customType` (§6.3) that draws the injected files in the chat exactly like the built-in `read` tool: a green box (theme color `toolSuccessBg`) showing **one `read <path>` line per file** when collapsed, expanding on `ctrl+o` to the full file contents — the same collapse/expand affordance the `[skill]` block uses, but green and one-line-per-file. To the end user it is indistinguishable from the agent having called `read` on each file itself; the only difference is that the files are attached at submit time instead of after a model round-trip. The user's own message bubble shows exactly what they typed — the `#@<path>` triggers are **preserved verbatim** (§6.4), so cancelling and re-opening the request, forking, or re-submitting the prompt re-triggers injection — and never the raw file contents (those render as the green `read` lines below).
 
 `#@` is deliberately a **different symbol** from `@` so there is zero ambiguity:
 - `@file` → Pi's existing behavior (autocomplete interactively; inject at CLI). Left untouched.
@@ -28,7 +28,7 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - **One syntax, every context.** Because the extension hooks the `input` event (which fires for *every* prompt — interactive typed messages *and* the initial CLI/`-p` message), `#@file` works identically whether you launch with it or type it mid-session. (See §3.)
 - **Explicit intent.** `#@` can't be confused with a path-completion trigger or an email-style `@mention`. The user is saying "give the model this whole file," and that's exactly what happens.
 - **Composable for docs.** `#@spec.md` pulls in everything `spec.md` references with the *same* `#@` directive — spec-and-its-dependencies in one token, loop-safe via dedup (§5.6).
-- **Reads like a `read`, not like a paste.** Injected files render in the chat as compact, green, collapsible `read <path>` lines (one per file) — visually identical to the built-in `read` tool's completed-call rendering and to how `[skill]` blocks collapse/expand — while the model still receives the full `<file>` contents. The user's message bubble stays clean (§6.3). No config; it is how `#@` always looks.
+- **Reads like a `read`, not like a paste.** Injected files render in the chat as compact, green, collapsible `read <path>` lines (one per file) — visually identical to the built-in `read` tool's completed-call rendering and to how `[skill]` blocks collapse/expand — while the model still receives the full `<file>` contents. The user's message bubble shows the prompt verbatim (`#@` preserved so cancel/fork/re-open re-trigger injection; §6.4); the file bytes never appear in the bubble. No config; it is how `#@` always looks.
 - **Zero config by default.** No setup is required — `#@` works out of the box. The inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5), and there are no knobs for format, image handling, paging, budget, or display. The single user-facing setting is the opt-in `markdownBareAtImports` (§4.6), off by default.
 
 ### Tagline
@@ -46,7 +46,7 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 5. **Non-destructive & loop-safe.** Leaves the user's original prompt intact; never breaks a prompt on an error; never re-expands its own or other extensions' injected messages.
 6. **Markdown transitive imports.** A delivered markdown file (`.md`/`.markdown`) is scanned for further `#@<path>` directives; each resolves **relative to that markdown file's directory**, is delivered as its own block, and is itself scanned if markdown. **An import may omit its `.md`/`.markdown` extension** — an extensionless token (e.g. `#@PRD`) resolves to `PRD.md` or `PRD.markdown` when no bare file of that name exists, treated as an exact match (markdown imports only; top-level tokens stay exact-match, §4.4). Recursion is bounded by **dedup — each absolute path is injected at most once across the whole prompt** (including paths already present as `<file>` blocks). Absolute/tilde paths inside markdown are ignored; `#@` inside fenced or inline code is ignored. An opt-in setting (`markdownBareAtImports`, §4.6) additionally treats a bare `@<path>` (no `#`) as a markdown import, with all the same rules. All other rules (file-type handling, paging, budget) apply to imported files unchanged.
 7. **Total-size context accounting.** A single shared context-budget accumulator spans the entire prompt — every top-level token **and every transitive import** — with each delivered file (text whole/head, image, binary note) subtracting its cost *before* the next file is decided, so the inline-vs-paged decision is made against the running total of all files injected so far, not per-file in isolation (§5.6.2).
-8. **Compact, read-tool-style chat display.** Injected files render in the chat as collapsible green `read <path>` lines — one per file — indistinguishable from the built-in `read` tool's completed-call rendering, expanding on `ctrl+o` to the full contents (the same affordance `[skill]` blocks use). This is achieved with **no core changes to Pi**: files are delivered as a single custom message returned from a `before_agent_start` handler (model still receives every `<file>` block), and a registered `MessageRenderer` draws the green box (§6). The user's message bubble shows only what they typed.
+8. **Compact, read-tool-style chat display.** Injected files render in the chat as collapsible green `read <path>` lines — one per file — indistinguishable from the built-in `read` tool's completed-call rendering, expanding on `ctrl+o` to the full contents (the same affordance `[skill]` blocks use). This is achieved with **no core changes to Pi**: files are delivered as a single custom message returned from a `before_agent_start` handler (model still receives every `<file>` block), and a registered `MessageRenderer` draws the green box (§6). The user's message bubble shows the prompt **verbatim** — exactly what they typed (`#@` preserved so cancel/fork/re-open re-trigger injection; §6.4).
 
 ### Non-Goals
 - **No silent truncation.** `#@` never drops or caps file contents without telling the model. A file is either injected whole (when it fits remaining context) or delivered in full through paged reads (§5.5).
@@ -152,14 +152,15 @@ user submits prompt with #@file
         ├─► ★ input event ★  (this extension)
         │      • detect #@ tokens, read+classify each file
         │      • build the <file> blocks + per-file details
-        │      • strip #@ from the prompt (paths remain)
+        │      • leave the prompt text VERBATIM (decorators preserved
+        │        so re-open/fork re-trigger injection; §6.4)
         │      • STASH {blocks, details} in instance state
-        │      • return { action:"transform", text: strippedPrompt, images }
-        │            (user message = ONLY what the user typed; no file bytes)
+        │      • return { action:"transform", text: event.text, images }
+        │            (user message = the prompt verbatim; no file bytes)
         │
-        ├─► skill/template expansion on the (already stripped) text
+        ├─► skill/template expansion on the (verbatim) text
         │
-        ├─► build user message from stripped text + images
+        ├─► build user message from the verbatim text + images
         │
         ├─► ★ before_agent_start event ★  (this extension)
         │      • read the stashed {blocks, details}
@@ -171,12 +172,12 @@ user submits prompt with #@file
         │          as a user-role message. The model sees every <file> block.
         │
         └─► agent loop  ──►  TUI renders messages in order:
-              [user bubble: stripped prompt]  then
+              [user bubble: verbatim prompt]  then
               [★ renderer for "fileInjector.injected" ★ → green box,
                 one `read <path>` per file, collapsible]
 ```
 
-**Why two hooks, not one.** The `input` event is the *only* place an extension can rewrite the user's prompt text (so `#@` is stripped there). But the `input` handler's job is to return a transform; it cannot append *separate* messages in the right position, and it cannot register display. Pi appends a `before_agent_start` handler's returned `message` **after** the user message (verified in `prompt()`), persists it, and routes it to the LLM (`convertToLlm`, `role:"custom"`→user) — which is exactly the position and lifecycle injected files need. The stash is the handoff: `input` produces the work, `before_agent_start` publishes it. Full spec in §6; pseudocode in §9.
+**Why two hooks, not one.** The `input` event is the *only* place an extension can attach images / react to the submitted prompt (it deliberately leaves the prompt **text** untouched — §6.4 — so cancel/fork/re-open re-trigger injection). But the `input` handler's job is to return a transform; it cannot append *separate* messages in the right position, and it cannot register display. Pi appends a `before_agent_start` handler's returned `message` **after** the user message (verified in `prompt()`), persists it, and routes it to the LLM (`convertToLlm`, `role:"custom"`→user) — which is exactly the position and lifecycle injected files need. The stash is the handoff: `input` produces the work, `before_agent_start` publishes it. Full spec in §6; pseudocode in §9.
 
 **Why this is the only extension-level path to compact display.** The TUI collapses only `<skill>` blocks inside a user message — `parseSkillBlock()` is hard-coded in Pi core's `case "user"` renderer. There is **no** extension hook to collapse arbitrary `<file>` blocks that live *inside* user-message text. Therefore compact display *requires* the file bytes to live somewhere the TUI renders via a registered renderer — i.e. a custom message. Keeping the bytes in the user message (the old design) forces the full contents into the user bubble with no way to hide them. See §13.7 for the tradeoff.
 
@@ -235,7 +236,7 @@ A markdown file (`.md`/`.markdown`) may contain `#@<path>` directives using **ex
 1. **Relative only.** An import whose cleaned token starts with `/` or `~` is **ignored** (left verbatim in the injected content, not resolved). Only relative tokens are resolved.
 2. **Resolution base = the importing markdown file's directory.** `path.resolve(dirname(importingMarkdownAbs), token)`. (Top-level user tokens still resolve against `ctx.cwd`, §4.4.)
 3. **Extension shorthand.** When the cleaned token has no file extension (`path.extname(token) === ""` — e.g. `PRD`, `sub/notes`), resolution tries `<exact>.md` then `<exact>.markdown` if the exact path is not an existing regular file: `#@PRD` → `PRD.md` (or `PRD.markdown`). Exact-match wins (a bare `PRD` file beats `PRD.md`); tokens already ending in `.md`/`.markdown` or any other extension are exact-only, so `#@PRD.md` never becomes `PRD.md.md`. Top-level user tokens do **not** get this fallback (exact-match only, §4.4).
-4. **Code is exempt.** A `#@<path>` occurring inside a fenced code block or inline code is **not** an import — it is left verbatim and never stripped. This is the escape hatch for markdown that documents the `#@` syntax itself. Detection is approximate-CommonMark (§5.6.1).
+4. **Code is exempt.** A `#@<path>` occurring inside a fenced code block or inline code is **not** an import — it is left verbatim. This is the escape hatch for markdown that documents the `#@` syntax itself. Detection is approximate-CommonMark (§5.6.1). (Resolved imports are likewise never stripped from surrounding text — see §6.4.)
 
 5. **Depth-uniform, no cwd fallback.** These rules apply identically at **every** recursion level — the markdown file a top-level `#@` token points directly at is not special-cased relative to files deeper in the chain. Resolution is *always* `dirname(importingMarkdownAbs)`; `ctx.cwd` is never consulted for an in-file import. Consequently a same-named file in **both** the importing file's directory and `ctx.cwd` resolves to the importing file's directory (the cwd copy is never chosen, never falls back), and a token that is missing in the importing file's directory stays verbatim even if a same-named file happens to exist under `ctx.cwd`.
 
@@ -266,7 +267,7 @@ By default a markdown import **requires** the `#@` prefix (§4.5). Some doc conv
 { "markdownBareAtImports": true }
 ```
 
-**Effect.** When `markdownBareAtImports === true`, markdown import scanning (§5.6) matches **both** `#@<path>` *and* a bare `@<path>`. The bare match uses `BARE_AT_RE = /(^|(?<=[^\w#]))@(\S+)/g` — an `@` at start-of-string or after a non-word char that is **not `#`**, so `#@file` is matched once (by `#@`), never twice. Every other rule — relative-only resolution, extension shorthand (§4.5 rule 3), code-exempt (rule 4), dedup, paging, budget — applies identically. The marker is stripped to its path just like `#@` (stripping 1 char instead of 2).
+**Effect.** When `markdownBareAtImports === true`, markdown import scanning (§5.6) matches **both** `#@<path>` *and* a bare `@<path>`. The bare match uses `BARE_AT_RE = /(^|(?<=[^\w#]))@(\S+)/g` — an `@` at start-of-string or after a non-word char that is **not `#`**, so `#@file` is matched once (by `#@`), never twice. Every other rule — relative-only resolution, extension shorthand (§4.5 rule 3), code-exempt (rule 4), dedup, paging, budget — applies identically. As with `#@`, the bare marker is **detected** to resolve the import but **never stripped** from the content (§6.4).
 
 **Depth-uniform (no first-file asymmetry).** Bare-`@` matching applies at **every** recursion depth, including the very first file a top-level `#@` token pulls in. There is no level at which a delivered markdown file must use `#@` while deeper files may use `@`; the scan in §5.6 step 3 runs `BARE_AT_RE` for every markdown file it processes, and the resolution base is always `dirname(abs)` of *that* file (§4.5 rule 2/5) — never `ctx.cwd` — regardless of depth.
 
@@ -374,13 +375,11 @@ A delivered file whose lowercased extension is `md` or `markdown` is, in additio
 
 **Step 2 — claim self.** Add the markdown file's own absolute path to the global `injectedSet` *before* scanning, so a self-import (`notes.md` containing `#@notes.md`) dedups to verbatim and cannot recurse into itself.
 
-**Step 3 — scan for imports.** Compute the file's **code regions** (fenced blocks + inline code, approximate-CommonMark — see §5.6.1), then run `FILE_INJECT_RE` over the content and **drop any match whose start index lies inside a code region**. For each surviving match, clean the token (§4.3); if empty or if it starts with `/` or `~` → ignore (leave verbatim, no strip). **Resolve** the rest via `resolveImportPath(token, dirname(abs), tryMdExt=true)` (§4.5): try the exact path; if it is not an existing regular file **and** the token is extensionless (`path.extname(token) === ""`), try `<exact>.md` then `<exact>.markdown` — first existing regular file wins (`#@PRD` → `PRD.md`). If nothing resolves → ignore (leave verbatim). The scan helper is `async` (it stats candidate paths) and maintains a per-file `localSeen` set, checked alongside the global `injectedSet` **on the resolved abs**: if already in either → leave verbatim (no strip); otherwise add it to `localSeen` and record `{ index, abs }` as a **resolved import**. (Dedup keys on the *resolved* abs, so `#@PRD` and `#@PRD.md` in the same file collapse to one injection. The per-file set stops two imports of the same file within one markdown from both being stripped; the global set handles cross-file and self-import dedup.) When `markdownBareAtImports` is on (§4.6), the scan additionally runs `BARE_AT_RE` over the content and unions its matches in; each recorded import then carries a `prefixLen` (2 for `#@`, 1 for a bare `@`) so Step 4 strips the right number of marker characters. `#@file` is matched once (the bare regex forbids a preceding `#`), and dedup still keys on the resolved abs.
+**Step 3 — scan for imports.** Compute the file's **code regions** (fenced blocks + inline code, approximate-CommonMark — see §5.6.1), then run `FILE_INJECT_RE` over the content and **drop any match whose start index lies inside a code region**. For each surviving match, clean the token (§4.3); if empty or if it starts with `/` or `~` → ignore (leave verbatim). **Resolve** the rest via `resolveImportPath(token, dirname(abs), tryMdExt=true)` (§4.5): try the exact path; if it is not an existing regular file **and** the token is extensionless (`path.extname(token) === ""`), try `<exact>.md` then `<exact>.markdown` — first existing regular file wins (`#@PRD` → `PRD.md`). If nothing resolves → ignore (leave verbatim). The scan helper is `async` (it stats candidate paths) and maintains a per-file `localSeen` set, checked alongside the global `injectedSet` **on the resolved abs**: if already in either → leave verbatim; otherwise add it to `localSeen` and record the resolved `abs` as a **resolved import** (encounter order is preserved for the depth-first recursion in Step 5). (Dedup keys on the *resolved* abs, so `#@PRD` and `#@PRD.md` in the same file collapse to one injection. The per-file set stops two imports of the same file within one markdown from both being injected; the global set handles cross-file and self-import dedup.) When `markdownBareAtImports` is on (§4.6), the scan additionally runs `BARE_AT_RE` over the content and unions its matches in. `#@file` is matched once (the bare regex forbids a preceding `#`), and dedup still keys on the resolved abs. **Markers are detected here only to resolve imports — they are never stripped from the content** (see §6.4 for why the extension never modifies delivered text), so no `index`/`prefixLen` bookkeeping is recorded.
 
-**Step 4 — strip resolved markers from this file's content.** Remove the literal `#@` (two chars) from each recorded marker, highest index first, leaving the **path** as a readable reference — identical to how resolved markers are stripped from the user prompt (§6.2). The result is the **block content** for this markdown file.
+**Step 4 — emit this file's block (paged decision).** Apply the §5.5 inline-vs-paged decision to the **verbatim** content (the file exactly as read from disk — import markers are *not* stripped; §6.4): inject whole (`formatTextFileBlock(abs, content)`) if it fits, or head + directive if it exceeds. Subtract the block's cost from the shared `remaining`. Bump `paged` if paged. Imports are resolved from the **full** content regardless of whether the parent is paged (we already read all of it).
 
-**Step 5 — emit this file's block (paged decision).** Apply the §5.5 inline-vs-paged decision to the *stripped* content (so directive text the model won't see doesn't bias the budget): inject whole (`formatTextFileBlock(abs, stripped)`) if it fits, or head + directive if it exceeds. Subtract the block's cost from the shared `remaining`. Bump `paged` if paged. Imports are resolved from the **full** content regardless of whether the parent is paged (we already read all of it).
-
-**Step 6 — recurse into imports (depth-first).** For each recorded `{ abs }` in **encounter order**, call the shared file injector on `abs`. Because each abs passed dedup at scan time and the injector re-checks the global `injectedSet`, every import is injected at most once across the whole prompt. Ordering is **pre-order depth-first**: this file's block, then each import's subtree, before the next sibling — so the model sees a parent's context before the detail it pulls in.
+**Step 5 — recurse into imports (depth-first).** For each recorded `abs` in **encounter order**, call the shared file injector on it. Because each abs passed dedup at scan time and the injector re-checks the global `injectedSet`, every import is injected at most once across the whole prompt. Ordering is **pre-order depth-first**: this file's block, then each import's subtree, before the next sibling — so the model sees a parent's context before the detail it pulls in.
 
 **Budget sharing.** `remaining` is a single mutable accumulator shared across the entire prompt — top-level tokens and every transitive import. Each emitted block (text whole/head, image, binary note) subtracts its cost *before* the next file is decided, so the inline-vs-paged decision is made against the **running total of all files injected so far**, not per-file in isolation (§5.6.2). This is what "account for the total filesize of all files" means in practice.
 
@@ -480,7 +479,7 @@ Details carry *only* metadata the renderer needs to draw lines and expansion; th
 
 **What the model receives** (after `convertToLlm`):
 ```
-[ user:   "<stripped prompt — what the user typed, #@ removed, paths kept>"  + <injected images> ]
+[ user:   "<verbatim prompt — exactly what the user typed, #@ preserved>"  + <injected images> ]
 [ user:   "<file name="/abs/a.ts">\n…\n</file>\n\n<file name="/abs/b.md">\n…\n</file>" ]
                      └─ the custom message, mapped to a user-role message ─┘
 ```
@@ -533,17 +532,21 @@ Maintain as **shared, mutable state across the entire prompt** (top-level tokens
 - `paged: number` — subset of `count` delivered via the §5.5 page path.
 - `remaining: number | null` — the single context-budget accumulator (§5.6.2); every emitted block subtracts from it.
 
-**User-message text (the `input` transform).** **Strip the trigger** (`#@`, or a bare `@` when `markdownBareAtImports` is on — §4.6) from each resolved marker — the **path** stays as a readable reference (the model gets the bytes from the custom-message `<file>` blocks, so the trigger is pure noise; and the user's bubble now shows a clean `a.ts` reference instead of `#@a.ts`). This stripping happens in two places: (a) resolved **top-level** markers in the user prompt, and (b) resolved **import** markers inside each markdown file's content, *before* that content becomes its block (§5.6 step 4). Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are left byte-for-byte verbatim, `#@` included. The user message is **never** appended with file bytes (that was the old design); it is just the stripped prompt:
+**User-message text (the `input` transform).** **The prompt is never modified.** The `input` handler performs all file I/O, classification, block/detail building, and image attachment, but it leaves `event.text` byte-for-byte intact — the `#@<path>` triggers (and bare `@<path>` imports when `markdownBareAtImports` is on, §4.6) stay exactly where the user typed them. The file *bytes* live only in the custom message (§6.2); the prompt carries nothing but the user's original text.
+
+This matters for **re-submission robustness**. When the user cancels a request (ESC), forks the conversation, or navigates the session tree (`/tree`) back to a user message and re-submits, Pi re-feeds the **stored** user-message text into `prompt()` as the new input (verified in `agent-session.ts`: `navigateTree()` derives the editor prefill from `_extractUserMessageText(targetEntry.message.content)` and the interactive layer then calls `editor.setText(editorText)`; there is **no** extension hook to override that prefill — `session_before_tree` can cancel or alter the summary but not the editor text, and `session_tree` fires *before* `editor.setText`, so `ctx.ui.setEditorText()` there is silently clobbered). The same stored-content replay applies to follow-up/steer dequeue (`restoreQueuedMessagesToEditor`) and to forks. If the extension had stripped `#@`, the stored text would be bare paths with no triggers, the re-submitted prompt would contain no `#@`, the `input` handler would inject nothing, and **the files would silently vanish on every re-open.** Preserving the prompt verbatim means a re-submitted prompt is identical to the original, so injection re-triggers automatically across cancel + re-open, `/tree` navigate, `/fork`, and queued-message dequeue. Stripping's only real effect was deleting two characters per marker — negligible — and never any file bytes (those were always in the custom message). See §13.8.
+
+Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are of course also left verbatim (they always were). The user message is **never** appended with file bytes (that was the old design):
 ```
-<original prompt text, #@ stripped to paths, otherwise unchanged>
+<the user's prompt, exactly as typed — verbatim, #@ preserved>
 ```
 
-> **Why strip-and-reference instead of append?** Two reasons. (1) The bytes now live in the custom message (§6.2), so appending them to the prompt too would duplicate them for the model. (2) Keeping the user's prose clean in the bubble is the whole point of the display feature. The bare path left behind is a useful, honest reference ("the model has `a.ts`"); failed tokens keep their `#@` so the user can see nothing was injected.
+> **Why verbatim instead of strip-and-reference?** The earlier design stripped `#@` to a bare path for two stated reasons: (1) the bytes "now live in the custom message, so appending them to the prompt too would duplicate them" — but nothing is ever appended to the prompt in either design (the bytes are always in the custom message), so this never applied to the *marker*; and (2) a "cleaner" bubble. Both collapse: the only real effect of stripping was deleting two characters per marker (a handful of tokens), at the cost of breaking every re-submission path. Verbatim delivery is strictly better — honest (model and bubble both show exactly what the user typed), simpler (no marker-index/`prefixLen` bookkeeping anywhere), and re-open-safe.
 
-**Images** are returned on the `input` transform (`images: finalImages`) so they attach to the user message (as today); the custom message carries only their text reference tag.
+**Images** are returned on the `input` transform (`images: state.images`) so they attach to the user message (as today); the custom message carries only their text reference tag.
 
 **Two returns (not one).**
-- `input` handler: `count > 0` → stash `{ blocks, details }`, notify, and `return { action: "transform", text: strippedPrompt, images: finalImages }`; else `return { action: "continue" }` (prompt preserved byte-for-byte, no stash).
+- `input` handler: `count > 0` → stash `{ blocks, details }`, notify, and `return { action: "transform", text: event.text, images: state.images }` (text **verbatim** — unchanged; images seeded from `event.images` plus any injected images); else `return { action: "continue" }` (nothing injected, no stash).
 - `before_agent_start` handler: if a stash exists → `return { message: { customType: "fileInjector.injected", content: blocks.join("\n\n"), display: true, details: { files: details } } }` and clear the stash; else `return undefined`.
 
 The renderer is registered once on `session_start` (§6.3).
@@ -675,9 +678,9 @@ Internal sections (in order):
 2. Constants: `FILE_INJECT_RE`, `BARE_AT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, `SETTINGS_KEY` (settings.json key), budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
 3. Pure/IO helpers: `cleanToken`, `isAbsoluteOrTilde`, `expandTildeAndResolve`, `resolveImportPath` (exact → `.md`/`.markdown`), `isRegularFile`, `readConfig` (§4.6), `extOf`, `isBinary`, `headSlice`, `headStartLine`, `headCompleteLineCount`, `estimateImageTokens`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`, `formatPagedDirectiveBlock`
 4. Markdown helpers: `computeCodeRanges(content)` → sorted `[start,end][]`; `inCode(index, ranges)` → boolean
-5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,prefixLen,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`; plus `FileDetail` type and detail-push helpers (`pushTextDetail`, `pushPagedDetail`, `pushImageDetail`, `pushBinaryDetail`).
+5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `string[]` (resolved abs paths, encounter order; markers detected but **never stripped**, §6.4); `processTokenStream(...)` → injects (no return); `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`; plus `FileDetail` type and detail-push helpers (`pushTextDetail`, `pushPagedDetail`, `pushImageDetail`, `pushBinaryDetail`).
 6. Renderer: `renderInjectedMessage(message, { expanded }, theme)` → `Component` (§6.3); small display helpers (`tildify(abs)`, `readLine(detail, theme)`).
-7. Factory: `export default function (pi: ExtensionAPI) { let pending: { blocks; details } | null = null; pi.on("session_start", …) (load `cfg`, §4.6; **register the `MessageRenderer`** for `"fileInjector.injected"`, §6.3); pi.on("input", …) (read+classify+build blocks/details, strip `#@`, **stash `pending`**, return transform); pi.on("before_agent_start", …) (consume `pending` → return `{ message }`, §6.2) }`
+7. Factory: `export default function (pi: ExtensionAPI) { let pending: { blocks; details } | null = null; pi.on("session_start", …) (load `cfg`, §4.6; **register the `MessageRenderer`** for `"fileInjector.injected"`, §6.3); pi.on("input", …) (read+classify+build blocks/details, **leave the prompt verbatim**, **stash `pending`**, return transform with `text: event.text`); pi.on("before_agent_start", …) (consume `pending` → return `{ message }`, §6.2) }`
 
 Target ~300–380 lines.
 
@@ -770,21 +773,19 @@ export default function (pi: ExtensionAPI) {
       bareAt: cfg.markdownBareAtImports === true,
     };
 
-    // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping, bare-@ off
-    const resolvedIdx = await processTokenStream(
+    // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping, bare-@ off.
+    // The prompt text is NEVER modified (§6.4) — stripping #@ would break cancel/fork/re-open re-injection.
+    await processTokenStream(
       event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
     if (state.count === 0) return { action: "continue" };   // nothing delivered → byte-for-byte, no stash
 
-    // strip '#@' from resolved top-level markers (high→low); the user message is JUST the stripped prompt (§6.4)
-    let stripped = event.text;
-    for (const i of [...resolvedIdx].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
-
-    // §6.2 hand the built blocks+details to before_agent_start; do NOT append blocks to the prompt text.
+    // §6.2 hand the built blocks+details to before_agent_start. Do NOT append blocks to, or strip #@ from,
+    // the prompt text — it is returned verbatim so a re-submitted prompt re-triggers injection.
     pending = { blocks: state.blocks, details: state.details };
 
     const whole = state.count - state.paged;                 // §5.5 mode-aware notify
     if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${state.paged > 0 ? `, ${state.paged} paged` : ""}`, "info");
-    return { action: "transform" as const, text: stripped, images: state.images };
+    return { action: "transform" as const, text: event.text, images: state.images };   // text VERBATIM (§6.4)
   });
 
   // §6.2 publish the stashed files as ONE custom message, appended after the user message.
@@ -808,19 +809,22 @@ export default function (pi: ExtensionAPI) {
 // async because resolution stats candidate path(s); markdown also tries .md/.markdown (§4.5).
 // opts.bareAt (markdown only, §4.6) additionally matches a bare "@path" via BARE_AT_RE.
 // Per-text dedup via localSeen on the RESOLVED abs; global injectedSet skips already-claimed paths.
+// Returns resolved abs paths in ENCOUNTER ORDER (depth-first recursion relies on this). Markers are
+// detected here only to resolve imports — they are NEVER stripped from the text (§6.4) — so no
+// index/prefixLen bookkeeping is returned.
 async function scanTokens(
   text: string, baseDir: string,
   opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt: boolean },
   state: State,
-): Promise<{ index: number; prefixLen: number; abs: string }[]> {
+): Promise<string[]> {
   const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;
   const localSeen = new Set<string>();
-  const out: { index: number; prefixLen: number; abs: string }[] = [];
-  // candidate markers: "#@" always (prefixLen 2); bare "@" when opts.bareAt (prefixLen 1).
+  const out: string[] = [];
+  // candidate markers: "#@" always; bare "@" when opts.bareAt.
   // BARE_AT_RE forbids a "#" before the "@", so "#@file" matches once, not twice.
-  const cands: { idx: number; token: string; prefixLen: number }[] = [];
-  for (const m of text.matchAll(FILE_INJECT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 2 });
-  if (opts.bareAt) for (const m of text.matchAll(BARE_AT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 1 });
+  const cands: { idx: number; token: string }[] = [];
+  for (const m of text.matchAll(FILE_INJECT_RE)) cands.push({ idx: m.index!, token: m[2] });
+  if (opts.bareAt) for (const m of text.matchAll(BARE_AT_RE)) cands.push({ idx: m.index!, token: m[2] });
   cands.sort((a, b) => a.idx - b.idx);
   for (const c of cands) {
     if (codeRanges && inCode(c.idx, codeRanges)) continue;             // §5.6.1 — code is exempt
@@ -831,29 +835,26 @@ async function scanTokens(
     if (!abs) continue;                                                // nothing resolved → leave verbatim
     if (state.injectedSet.has(abs) || localSeen.has(abs)) continue;    // dedup on resolved abs
     localSeen.add(abs);
-    out.push({ index: c.idx, prefixLen: c.prefixLen, abs });
+    out.push(abs);
   }
   return out;
 }
 
-// Top-level processor: scan the user prompt, inject each resolved token (depth-first),
-// return the start indices of markers that resolved (for '#@' stripping).
+// Top-level processor: scan the user prompt, inject each resolved token (depth-first).
+// The prompt text is NOT modified (§6.4) — this only resolves markers and injects their files.
 async function processTokenStream(
   text: string, baseDir: string,
   opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt: boolean },
   state: State, ctx: any,
-): Promise<number[]> {
-  const records = await scanTokens(text, baseDir, opts, state);   // scan once, before any injection
-  const resolved: number[] = [];
-  for (const r of records) {
-    if (state.injectedSet.has(r.abs)) continue;             // cross-subtree dedup since scan
-    const ok = await injectFile(r.abs, state, ctx);         // claims abs, emits block(s), recurses
-    if (ok) resolved.push(r.index);
+): Promise<void> {
+  const absPaths = await scanTokens(text, baseDir, opts, state);   // scan once, before any injection
+  for (const abs of absPaths) {
+    if (state.injectedSet.has(abs)) continue;               // cross-subtree dedup since scan
+    await injectFile(abs, state, ctx);                      // claims abs, emits block(s), recurses
   }
-  return resolved;
 }
 
-// stat → classify → emit block → (if markdown) scan+strip+recurse. Claims abs on success.
+// stat → classify → emit block → (if markdown) scan+recurse (content delivered verbatim, §6.4). Claims abs on success.
 async function injectFile(abs: string, state: State, ctx: any): Promise<boolean> {
   let st;
   try { st = await fs.stat(abs); } catch { return false; }             // missing → leave verbatim
@@ -895,25 +896,21 @@ async function injectFile(abs: string, state: State, ctx: any): Promise<boolean>
   }
 }
 
-// §5.6 markdown branch: scan → strip resolved markers → emit this block → recurse imports.
+// §5.6 markdown branch: scan for imports → emit this block (VERBATIM) → recurse imports.
+// Content is delivered exactly as read from disk (import markers preserved; §6.4) — nothing is stripped.
 async function injectMarkdown(abs: string, content: string, state: State, ctx: any): Promise<void> {
   const dir = path.dirname(abs);
 
   // Step 3: scan for imports (relative only, outside code; extension shorthand on; bare-@ per state.bareAt)
-  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
+  const absPaths = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
 
-  // Step 4: strip '#@' from resolved import markers (high→low) → block content
-  let stripped = content;
-  for (const r of [...records].sort((a, b) => b.index - a.index))
-    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + r.prefixLen);
+  // Step 4: emit this file's block (paged decision on VERBATIM content — markers are NOT stripped, §6.4)
+  emitText(abs, content, state);
 
-  // Step 5: emit this file's block (paged decision on STRIPPED content)
-  emitText(abs, stripped, state);
-
-  // Step 6: recurse into imports, depth-first, encounter order (pre-order)
-  for (const r of records) {
-    if (state.injectedSet.has(r.abs)) continue;           // belt-and-suspenders (cross-file dedup)
-    await injectFile(r.abs, state, ctx);
+  // Step 5: recurse into imports, depth-first, encounter order (pre-order)
+  for (const abs2 of absPaths) {
+    if (state.injectedSet.has(abs2)) continue;            // belt-and-suspenders (cross-file dedup)
+    await injectFile(abs2, state, ctx);
   }
 }
 
@@ -1148,14 +1145,14 @@ function tildify(abs: string): string {
 
 ## 10. Edge Cases (implementer checklist)
 
-> **Terminology note (post-display feature):** throughout this table, “a block is delivered / appended” now means *the `<file>` block is added to the single custom message* (§6.2) and *rendered as one green `read <path>` line* (§6.3) — **not** appended into the user's prompt text. The user message is always just the stripped prompt. Dedup, ordering, paging, and file-type semantics are unchanged.
+> **Terminology note (post-display feature):** throughout this table, “a block is delivered / appended” now means *the `<file>` block is added to the single custom message* (§6.2) and *rendered as one green `read <path>` line* (§6.3) — **not** appended into the user's prompt text. The user message is always the user's prompt verbatim (`#@` preserved; §6.4). Dedup, ordering, paging, and file-type semantics are unchanged.
 
 | Case | Expected behavior |
 |---|---|
 | No `#@` in prompt | `continue` (no work); `before_agent_start` returns `undefined` (no stash). |
 | `#@nonexistent.txt` | Token left verbatim; no block; no error. |
 | `#@some/dir/` (directory) | Token left verbatim. |
-| `text #@a.txt more` | File delivered (green `read a.txt` line below the bubble); inline marker becomes `a.txt` (`#@` stripped, path stays). |
+| `text #@a.txt more` | File delivered (green `read a.txt` line below the bubble); the prompt is stored **verbatim** — `#@a.txt` stays in place, so re-open re-triggers (§6.4). |
 | Multiple `#@a.txt #@b.md` | Both delivered (two `read` lines, in order); notify `2 whole`. |
 | Same path twice (`#@a.ts` + `#@./a.ts`, or `#@a.md` that imports `a.ts`) | Injected once across the **whole prompt** (shared `injectedSet`, including imports); repeats left verbatim. |
 | `#@huge.log` (50 MB) | If it fits remaining context: injected whole. If it exceeds it: head block + paged directive (§5.5). Never silently truncated. |
@@ -1176,17 +1173,17 @@ function tildify(abs: string): string {
 | Mid-stream steering | Skipped entirely (latency). |
 | RPC / print mode (`ctx.hasUI === false`) | Still injects; skip the `notify`. |
 | Initial CLI/`-p` message containing `#@file` | **Also injected** (input event fires in `prompt()`). |
-| `#@spec.md` that imports `#@api.md` | Both injected: `spec.md` block (import marker stripped to `api.md`), then `api.md` block. Notify `2 whole`. |
+| `#@spec.md` that imports `#@api.md` | Both injected: `spec.md` block delivered **verbatim** (import marker `#@api.md` preserved), then `api.md` block. Notify `2 whole`. |
 | Markdown import is itself markdown (`a.md`→`b.md`→`c.md`) | All three injected, pre-order: `a.md`, `b.md`, `c.md`. Each once. |
 | Cycle (`a.md`→`b.md`→`a.md`) | `a.md` injected once (claimed before its own scan); `b.md`'s `#@a.md` left verbatim. No infinite loop. |
 | Markdown import with absolute/tilde (`#@/etc/hosts` inside `a.md`) | Ignored (relative-only); left verbatim as `#@/etc/hosts` in injected content. |
 | `#@path` inside fenced/inline code in `a.md` | Not an import; left verbatim. (Escape hatch for documenting `#@`.) |
-| `#@notes.md` where `notes.md` imports a missing `api.md` | `notes.md` injected (marker stripped); `#@api.md` left verbatim in `notes.md` content. |
+| `#@notes.md` where `notes.md` imports a missing `api.md` | `notes.md` injected (verbatim); `#@api.md` left verbatim in `notes.md` content (unresolved). |
 | `#@notes.md` where `notes.md` imports a 50 MB `big.log` | `big.log` evaluated against the shared budget; paged if it exceeds remaining. Counted in notify. |
 | Markdown import resolves outside cwd (`#@../shared/api.md` inside `notes.md`) | Allowed (relative to the markdown's dir); injected. |
 | Markdown import with a same-named file in BOTH the md's dir AND cwd (`#@b.md` inside `dir/a.md`; both `dir/b.md` and `./b.md` exist) | `dir/b.md` injected (md's dir wins); cwd-root `./b.md` never chosen. Resolution is file-relative at every depth. |
 | Markdown import missing in the md's dir but present under cwd (`#@ghost.md` inside `dir/a.md`; only `./ghost.md` exists) | Left verbatim (`#@ghost.md`); **no** cwd fallback — the cwd copy is never injected. |
-| Markdown import w/o extension (`#@PRD` in `a.md`; `PRD.md` exists) | Resolves to `PRD.md` (extension shorthand); injected & scanned. Marker stripped to `PRD`. |
+| Markdown import w/o extension (`#@PRD` in `a.md`; `PRD.md` exists) | Resolves to `PRD.md` (extension shorthand); injected & scanned. The `#@PRD` marker stays verbatim in `a.md`'s block. |
 | Markdown import w/o extension, `.markdown` (`#@PRD`; only `PRD.markdown`) | Resolves to `PRD.markdown`; injected. |
 | Markdown import, exact beats shorthand (`#@readme`; both `readme` and `readme.md`) | Bare `readme` (exact) wins; `readme.md` not imported. |
 | Markdown import w/o extension, no match (`#@ghost`; no `ghost`/`ghost.md`/`ghost.markdown`) | Not resolved; left verbatim (`#@ghost`). |
@@ -1196,7 +1193,7 @@ function tildify(abs: string): string {
 | Missing `.md` at top level (`#@nope.md`) | Token left verbatim (missing); no scanning. |
 | Markdown imports push total over budget | Later files page against the running total; never silently exceed (§5.6.2). |
 | `markdownBareAtImports` off (default); `@api.md` in `a.md` | Bare `@` not matched; left verbatim. Only `#@` imports. |
-| `markdownBareAtImports` on; `@api.md` in `a.md` (file exists) | Imported (bare-`@`); marker stripped to `api.md`. Same rules as `#@`. |
+| `markdownBareAtImports` on; `@api.md` in `a.md` (file exists) | Imported (bare-`@`); marker stays verbatim in `a.md`'s block. Same rules as `#@`. |
 | `markdownBareAtImports` on; bare `@` in the FIRST imported file (prompt `#@a.md`; `a.md` contains `@b.md`) | `b.md` imported — the first file is not special-cased; bare-`@` is honored at depth 0→1 just like deeper levels. No `#@` required inside `a.md`. |
 | `markdownBareAtImports` on; bare-`@` chain across depths (prompt `#@a.md`; `a.md`→`@b.md`→`@c.md`) | `a.md`, `b.md`, `c.md` all injected; every level honored (no asymmetry between first and deeper files). |
 | `#@api.md` with the option on | Matched once by `#@` (bare regex skips a `#`-preceded `@`); never double-matched. |
@@ -1207,7 +1204,7 @@ function tildify(abs: string): string {
 | Missing/malformed config (settings key or `file-injector.json`) | Defaults to `false`; no error, no behavior change. |
 | `markdownBareAtImports` under `fileInjector` in `settings.json` | Read like the dedicated file; co-located with the user's other Pi settings. |
 | Both `settings.json` key and `file-injector.json` set in the same scope | Dedicated `file-injector.json` wins within that scope; project overrides global. |
-| **Chat display — single file** | User bubble = stripped prompt (e.g. `Review a.ts`); directly below, one green (`toolSuccessBg`) `read a.ts (ctrl+o to expand)` line. Model receives prompt + `<file name="/abs/a.ts">…</file>` custom message. |
+| **Chat display — single file** | User bubble = verbatim prompt (e.g. `Review #@a.ts`); directly below, one green (`toolSuccessBg`) `read a.ts (ctrl+o to expand)` line. Model receives the verbatim prompt + `<file name="/abs/a.ts">…</file>` custom message. |
 | **Chat display — multiple files** | One green `read <path>` line per file, in emission order, under the user bubble; `ctrl+o` expands all (unit expand, like `[skill]`). Notify still says `N whole`. |
 | **Chat display — image** | Green `read img.png (resized to 1568×1044)` line; the image itself is attached to the user message above (as today). Expanded view repeats the reference line only (no double image). |
 | **Chat display — binary** | Green `read data.bin (binary — not injected)` line; expanded shows the same note text. |
@@ -1215,6 +1212,9 @@ function tildify(abs: string): string {
 | **Chat display — markdown imports** | One `read <path>` line per file across the whole transitive set (parent before children, pre-order); all in the single green box. |
 | `ctrl+o` expand/collapse | Toggles the whole injected-files box between the read lines and full contents (mirrors `[skill]` block behavior). |
 | Session reload | The custom message is persisted; on reload it re-renders via the same renderer (green read lines) and is re-sent to the model on continuation (same as old appended text). |
+| **Cancel + re-open** | Submit `Review #@a.ts`, cancel (ESC) mid-reply, re-open via `/tree` (select the user message). The editor is prefilled with the **verbatim** `Review #@a.ts` (decorators preserved); resubmit re-triggers injection and re-creates the custom message. No files lost (§6.4, §13.8). |
+| **Fork at a user message** | Fork at the `Review #@a.ts` user message. The forked session's prompt retains `#@a.ts` (stored verbatim), so the first turn in the fork injects `a.ts` as normal — no manual re-`#@` needed. |
+| **Queued follow-up dequeue** | A queued (steer/followUp) message that contained `#@` is restored to the editor verbatim on dequeue; re-submit re-triggers injection. |
 | `#@` in print / JSON mode (`-p`, `--mode json`) | No TUI, so the renderer is never called; the custom message still delivers the `<file>` blocks to the model (files are *not* lost in non-interactive modes). |
 | `before_agent_start` registered by another extension | Independent; our handler consumes only our stash. Other extensions' messages render separately. Our stash is empty unless our `input` handler ran and found `#@`. |
 | `input` short-circuits (extension source / steering) but `before_agent_start` still fires | Stash empty → `before_agent_start` returns `undefined`; no phantom injection. |
@@ -1237,9 +1237,9 @@ pi -e .                             # quick test (directory — resolves via pac
 
 | # | Setup | Input | Expected |
 |---|---|---|---|
-| 1 | small `a.ts` (~50 words) | `Review #@a.ts` | Model receives the prompt plus a `<file name="/abs/a.ts">…</file>` custom message (no `read` tool call). In the TUI the user bubble reads `Review a.ts` (`#@` stripped) and a green `read a.ts (ctrl+o to expand)` line appears below it. |
+| 1 | small `a.ts` (~50 words) | `Review #@a.ts` | Model receives the prompt plus a `<file name="/abs/a.ts">…</file>` custom message (no `read` tool call). In the TUI the user bubble reads `Review #@a.ts` (verbatim — `#@` preserved, §6.4) and a green `read a.ts (ctrl+o to expand)` line appears below it. |
 | 2 | `huge.log` (50 MB) | `Summarize #@huge.log` | If it fits remaining context: injected whole, no `read` call. If it exceeds it: head block + paged directive (§5.5); the model pages the rest via `read`. Notify reflects the mode. |
-| 3 | `pic.png` | `Describe #@pic.png` | `ImageContent` attached; `<file name="…">…</file>` reference appended; inline marker becomes `pic.png` (`#@` stripped). |
+| 3 | `pic.png` | `Describe #@pic.png` | `ImageContent` attached; `<file name="…">…</file>` reference appended; inline marker `#@pic.png` stays verbatim in the prompt (§6.4). |
 | 4 | `data.bin` (binary) | `Inspect #@data.bin` | Binary note block appended; no decoded garbage. |
 | 5 | missing | `Fix #@nope.ts` | Token left verbatim; prompt otherwise unchanged; model handles. |
 | 6 | directory | `List #@src/` | Token left verbatim. |
@@ -1251,33 +1251,34 @@ pi -e .                             # quick test (directory — resolves via pac
 | 12 | initial CLI message | `pi -p "Review #@a.ts"` (extension loaded) | `a.ts` injected in the `-p` run too (input event fires for initial message). |
 | 13 | format parity | compare `#@a.ts` output vs `pi @a.ts "x"` CLI output | Both emit `<file name="/abs/a.ts">\n<content>\n</file>` with identical content. |
 | 14 | `@` unaffected | `Review @a.ts` (interactive) | `@a.ts` left as literal text (Pi's existing behavior preserved); no injection by this extension. |
-| 15 | md import | `notes.md` containing `#@api.md`; `#@notes.md` | `notes.md` block (marker→`api.md`) then `api.md` block; notify `2 whole`; no `read` calls. |
+| 15 | md import | `notes.md` containing `#@api.md`; `#@notes.md` | `notes.md` block delivered verbatim (marker `#@api.md` preserved) then `api.md` block; notify `2 whole`; no `read` calls. |
 | 16 | md code-exempt | `notes.md` with `` `#@example.ts` `` in a fenced block + a real `#@api.md` | Only `api.md` imported; `#@example.ts` left verbatim in code. |
 | 17 | md cycle | `a.md`→`#@b.md`, `b.md`→`#@a.md`; `#@a.md` | `a.md` + `b.md` injected once each; `b.md`'s `#@a.md` verbatim; no loop; notify `2 whole`. |
 | 18 | md abs rejected | `notes.md` with `#@/etc/hosts`; `#@notes.md` | `/etc/hosts` not imported; marker verbatim; only `notes.md` injected. |
 | 19 | md relative base | `sub/notes.md` imports `api.md` (sibling); `#@sub/notes.md` | `api.md` resolved as `sub/api.md` (relative to the md's dir), injected. |
 | 20 | budget total | `#@a.md` importing 3 files + `#@big.log` (huge) | Imports share budget with top-level; `big.log` pages when total exceeds remaining; notify counts all delivered files. |
-| 21 | md ext-shorthand | `notes.md` imports `#@api` (`api.md` exists); `#@notes.md` | `notes.md` block (marker→`api`) then `api.md` block; notify `2 whole`. |
+| 21 | md ext-shorthand | `notes.md` imports `#@api` (`api.md` exists); `#@notes.md` | `notes.md` block (verbatim; `#@api` preserved) then `api.md` block; notify `2 whole`. |
 | 22 | md ext exact-wins | `notes.md` imports `#@readme` where both `readme` and `readme.md` exist; `#@notes.md` | Bare `readme` (exact) injected, not `readme.md`; notify `2 whole`. |
 | 23 | md ext `.markdown` | `#@api` where only `api.markdown` exists; `#@notes.md` | Resolves to `api.markdown`; injected. |
 | 24 | top-level no fallback | `#@PRD` at top level, only `PRD.md` exists | Left verbatim (exact-only at top level); no injection. |
 | 25 | bare-`@` off (default) | `notes.md` with `@api.md` (exists); `#@notes.md` | `api.md` **not** imported (default); only `notes.md`; `@api.md` left verbatim. |
-| 26 | bare-`@` on | config `markdownBareAtImports:true`; `notes.md` with `@api.md` (exists); `#@notes.md` | `notes.md` block (marker→`api.md`) then `api.md` block; notify `2 whole`. |
+| 26 | bare-`@` on | config `markdownBareAtImports:true`; `notes.md` with `@api.md` (exists); `#@notes.md` | `notes.md` block (verbatim; `@api.md` preserved) then `api.md` block; notify `2 whole`. |
 | 27 | bare-`@` on, `#@` still works | config on; `notes.md` with `#@api.md`; `#@notes.md` | `#@api.md` matched once, injected once; notify `2 whole`. |
 | 28 | bare-`@` on, top-level unaffected | config on; prompt `#@notes.md` (notes imports `@x.md`); also type `@other.md` in prompt | `@other.md` at top level left as Pi's `@` behavior (not injected); only the `#@` chain runs. |
 | 29 | bare-`@` via settings.json | `markdownBareAtImports:true` under `fileInjector` in settings.json; `notes.md` with `@api.md` (exists); `#@notes.md` | Same as #26 but via the settings.json key: `api.md` imported (bare), notify `2 whole`. |
 | 30 | md relative disambiguation | `dir/a.md` imports `#@b.md`; **both** `dir/b.md` and `./b.md` exist; `#@dir/a.md` | `dir/b.md` injected (the md's dir wins); cwd-root `./b.md` has zero blocks. Proves resolution is file-relative, not cwd-relative. |
 | 31 | md relative, deep + cwd-indep. | `directory/otherdir/some/file.md` imports `#@file2.md`; only `…/some/file2.md` exists; also a stray `./file2.md`; `#@directory/otherdir/some/file.md` | `…/some/file2.md` injected (the importing file's dir), never `./file2.md`. |
 | 32 | bare-`@` first-file + chain | config on; prompt `#@a.md`; `a.md`→`@b.md`→`@c.md` (all bare `@`) | `a.md`, `b.md`, `c.md` all injected; the first imported file's bare-`@` is honored (no asymmetry vs. deeper files); notify `3 whole`. |
-| 33 | **display — single file** | `Review #@a.ts` | User bubble: `Review a.ts`. Below it: one green box line `read a.ts (ctrl+o to expand)`. `ctrl+o` shows the full highlighted contents; `ctrl+o` again collapses. Indistinguishable from a completed `read a.ts` tool call. |
-| 34 | **display — multi-file** | `Diff #@a.ts vs #@b.ts` | User bubble: `Diff a.ts vs b.ts`. Below: two green lines `read a.ts` / `read b.ts` (one hint). Both expand together on `ctrl+o`. Notify `2 whole`. |
+| 33 | **display — single file** | `Review #@a.ts` | User bubble: `Review #@a.ts` (verbatim). Below it: one green box line `read a.ts (ctrl+o to expand)`. `ctrl+o` shows the full highlighted contents; `ctrl+o` again collapses. Indistinguishable from a completed `read a.ts` tool call except the prompt retains `#@`. |
+| 34 | **display — multi-file** | `Diff #@a.ts vs #@b.ts` | User bubble: `Diff #@a.ts vs #@b.ts` (verbatim). Below: two green lines `read a.ts` / `read b.ts` (one hint). Both expand together on `ctrl+o`. Notify `2 whole`. |
 | 35 | **display — image** | `Describe #@pic.png` | Green line `read pic.png (resized to WxH)`; image renders via the user-message attachment. Expanded view does **not** duplicate the image. |
 | 36 | **display — binary** | `Inspect #@data.bin` | Green line `read data.bin (binary — not injected)`; expanded shows the note. |
 | 37 | **display — paged** | `Summarize #@huge.log` (over budget) | Green line `read huge.log:<startLine>-`; expanded shows head + directive; model pages the rest via `read`. Notify `0 whole, 1 paged`. |
 | 38 | **display — color parity** | side-by-side: `#@a.ts` vs a real agent `read a.ts` | Both green boxes use identical `toolSuccessBg`; both `read` titles use `toolTitle`+bold; both paths use `accent`. Visually identical (the only difference: `#@` line appears at submit, no spinner). |
 | 39 | **display — reload** | inject `#@a.ts`, reply, `/exit`, reopen session | The green `read a.ts` line re-renders from the persisted custom message; the model still has the `<file>` content on continuation. |
 | 40 | **display — print mode** | `pi -p "Review #@a.ts"` | No TUI rendering; model still receives the `<file>` block via the custom message (verify in `--mode json` that a user-role message carries the `<file>` block after the prompt). |
-| 41 | **model input — structure** | `#@a.ts` with extension loaded; inspect provider request (`before_provider_request`) | Two user-role messages: `[prompt]` then `[<file name="/abs/a.ts">…</file>]`. Content byte-identical to the old single-message form (§13.7). |
+| 41 | **model input — structure** | `#@a.ts` with extension loaded; inspect provider request (`before_provider_request`) | Two user-role messages: `[verbatim prompt — #@a.ts preserved]` then `[<file name="/abs/a.ts">…</file>]`. The prompt text is byte-identical to what the user typed (§6.4). |
+| 42 | **re-open re-injection** | `Review #@a.ts`; cancel (ESC); `/tree` → select the user message → resubmit unchanged | Editor prefilled with `Review #@a.ts` (verbatim); resubmit re-creates the `<file>` custom message (no `read` call); model receives `a.ts` again. Confirms decorators survive cancel/re-open (§13.8). |
 
 ### Automated sanity check (optional)
 
@@ -1312,16 +1313,16 @@ pi.registerCommand("sharp-at-test", {
 7. **Images are base64, no data-URL prefix.** `ImageContent.data` is raw base64.
 8. **Image resize is a necessity, not a config.** Providers reject oversized images; `resizeImage` (2000×2000 default) is hardcoded so injection actually succeeds. This does not contradict "no config" — it's required for correctness, and the user still gets "the whole image" (downscaled to fit).
 9. **Binary detection is for routing, not gating.** Use the NUL-byte heuristic *only* to avoid injecting decoded garbage from non-image binaries. Image files skip this check entirely (handled by MIME type first). Markdown skips it too (always treated as text so import scanning runs).
-10. **Deliver as a custom message, not appended prompt text; strip the trigger.** Files go into ONE custom message returned from `before_agent_start` (§6.2); the user message is just the stripped prompt. Strip `#@` from each resolved marker (the path stays as a readable reference in the bubble). Never append `<file>` blocks to the prompt text — that would both duplicate the bytes for the model and defeat the compact display. Failed tokens stay verbatim, `#@` included.
+10. **Deliver as a custom message, not appended prompt text; preserve the prompt verbatim.** Files go into ONE custom message returned from `before_agent_start` (§6.2); the user message is the user's text exactly as typed. **Never strip `#@`** (never modify `event.text`) — stripping discards the decorators from the stored message, and since Pi re-feeds the stored text on cancel/fork/`/tree`-navigate (`navigateTree` prefills the editor from `targetEntry.message.content`, with no extension override hook; `session_tree` fires before `editor.setText`), a stripped prompt would never re-trigger injection (§6.4, §13.8). Never append `<file>` blocks to the prompt text either — that would duplicate the bytes for the model and defeat the compact display. Failed tokens stay verbatim, `#@` included.
 11. **Whole file always reaches the model.** Never silently truncate or cap a file. When it fits remaining context, inject inline; when it exceeds it, page via §5.5. The contract is "the model gets all of it," not "all of it in one block."
 12. **Don't touch `@`.** This extension must not match or transform bare `@path`. Only `#@path`. Verify with test #14.
 13. **Markdown recursion is bounded by dedup, not depth.** Each absolute path is claimed in `injectedSet` *before* its content is scanned (self-imports dedup to verbatim). Termination is guaranteed because the set of injectable files is finite and each is processed at most once. No separate depth limit is needed.
 14. **Code-region detection is approximate CommonMark.** Only fenced blocks and inline code are exempted (§5.6.1). The failure modes are benign (a verbatim token left, or an unexpected import) and never corrupt data. Don't pull in a full MD parser.
 15. **Budget is one shared accumulator.** `remaining` is mutated in emission order across top-level tokens and every transitive import; every block (text/image/binary) subtracts its cost. The inline-vs-paged decision is greedy against the running total — that is how the total filesize of all files is accounted for (§5.6.2).
-16. **Strip resolved markers in both scopes.** Top-level resolved markers are stripped from the user prompt; resolved import markers are stripped from each markdown file's content *before* it becomes a block (§5.6 step 4). Failed/deduped/absolute/inside-code markers keep `#@` verbatim everywhere.
-17. **Scan before inject (top-level).** `processTokenStream` runs `scanTokens` once over the whole prompt *before* injecting anything, so a later top-level token whose path an earlier token's import already claimed is left verbatim (cross-subtree dedup). Markdown does its own scan+strip+emit+recurse in `injectMarkdown`.
+16. **Never strip markers — verbatim delivery everywhere.** Neither the user prompt nor a delivered markdown file's content is modified (§6.4). Resolved markers stay in place as honest references (the model has the bytes from the custom-message `<file>` blocks); failed/deduped/absolute/inside-code markers stay verbatim too. This is what makes cancel/fork/re-open re-trigger injection, and it removes all marker-index/`prefixLen` bookkeeping.
+17. **Scan before inject (top-level).** `processTokenStream` runs `scanTokens` once over the whole prompt *before* injecting anything, so a later top-level token whose path an earlier token's import already claimed is deduped (left as a verbatim reference; cross-subtree dedup). Markdown does its own scan+emit+recurse in `injectMarkdown` (no stripping).
 18. **Extension shorthand is markdown-only and keyed on the resolved abs.** `resolveImportPath` tries exact → `.md` → `.markdown` only for *extensionless* markdown-import tokens (`tryMdExt: true`); top-level tokens pass `tryMdExt: false` (exact-only — the user has §14 autocomplete and types the full name). Dedup runs on the *resolved* abs, so `#@PRD` and `#@PRD.md` in one file collapse to one injection — which is why `scanTokens` is `async` (it stats candidate paths before checking `injectedSet`/`localSeen`).
-19. **The bare-`@` option is markdown-only, opt-in, and never double-matches `#@`.** `markdownBareAtImports` (default `false`, read from `file-injector.json` or the `fileInjector` key in `settings.json` (§4.6) on `session_start`, project sources honored only when `ctx.isProjectTrusted()`) adds bare-`@` matching to markdown scanning only — never the top-level prompt (Pi's `@` is left untouched, §3.2). `BARE_AT_RE` uses `(?<=[^\w#])` so an `@` preceded by `#` is not matched, hence `#@file` fires once. Each match carries `prefixLen` (2 for `#@`, 1 for `@`); Step 4 strips `slice(index, index + prefixLen)`. Non-resolving bare tokens (prose `@mentions`) stay verbatim.
+19. **The bare-`@` option is markdown-only, opt-in, and never double-matches `#@`.** `markdownBareAtImports` (default `false`, read from `file-injector.json` or the `fileInjector` key in `settings.json` (§4.6) on `session_start`, project sources honored only when `ctx.isProjectTrusted()`) adds bare-`@` matching to markdown scanning only — never the top-level prompt (Pi's `@` is left untouched, §3.2). `BARE_AT_RE` uses `(?<=[^\w#])` so an `@` preceded by `#` is not matched, hence `#@file` fires once. Markers are detected to resolve imports but never stripped (§6.4), so no `prefixLen` is tracked. Non-resolving bare tokens (prose `@mentions`) stay verbatim.
 20. **Two hooks, one stash.** File I/O and classification happen in the `input` handler (the only place to rewrite the prompt); publishing the result happens in `before_agent_start` (the only hook whose returned `message` lands after the user message, persists, and reaches the LLM). The closure variable `pending` is the handoff — set in `input`, read-and-cleared in `before_agent_start`. Because `prompt()` runs `input` → … → `before_agent_start` → `runAgentPrompt` sequentially in one awaited call, there is no race and no need for locking. Clear `pending` unconditionally in `before_agent_start` (one-shot per prompt) so a later non-`#@` prompt never re-delivers a stale stash.
 21. **One custom message per prompt; the renderer decomposes it.** `BeforeAgentStartEventResult.message` is singular (one per handler), so all files pack into one custom message; the `MessageRenderer` reads `details.files` and draws one `read <path>` line per file (§6.3). Expand/collapse is unit-level for the whole box (matches the `[skill]` precedent); independent per-file expansion is not supported under this API.
 22. **`details` is renderer-only — never sent to the model.** `convertToLlm()` maps a custom message to a user-role message using only `content`; `details` is ignored. So `FileDetail` metadata (paths, kinds, line counts, ranges, dimension hints) costs zero model tokens. Do **not** duplicate file bytes into `details` — the renderer re-parses them from `content` (§6.3 `FILE_BLOCK_RE`), keeping `details` cheap and the model input uncontaminated.
@@ -1377,7 +1378,7 @@ The user asked that injected files appear in the chat **exactly like the `read` 
 **The mechanism we use (all public API, zero core changes).** Move the bytes into a **custom message**:
 - A `before_agent_start` handler returns `{ message: { customType, content, display:true, details } }`. Pi appends it **after** the user message, **persists** it, and — via `convertToLlm()` (`role:"custom"` → user-role message) — **sends it to the LLM**. So the model still receives every `<file name="…">…</file>` block, byte-identical in content.
 - A `MessageRenderer` registered for that `customType` returns a green `Box` (`toolSuccessBg`) with one `read <path>` line per file (collapsible/expandable), replicating the `read` tool's look using the same theme keys (`toolTitle`, `accent`, `dim`).
-- The `input` handler still does all file I/O and strips `#@`; it hands the built blocks+details to `before_agent_start` through a one-shot closure stash (§6.2).
+- The `input` handler still does all file I/O (it attaches images and stashes the built blocks+details for `before_agent_start` through a one-shot closure stash, §6.2) but **leaves the prompt text verbatim** (§6.4) so cancel/fork/re-open re-trigger injection.
 
 **The one tradeoff (be honest about it).** The model's input changes from **one** user message (`prompt` + appended `<file>` blocks) to **two** user messages (`prompt`, then the custom→user message with the `<file>` blocks). The *content* is byte-identical; only the message *boundary* differs. In practice this is benign-to-better: providers treat consecutive user messages fine, the files are still clearly associated with the prompt, and nothing is lost, added, or rewritten. It is **not** a change to what the model is told — only to how it is parcelled. This is the unavoidable cost of compact display at the extension level: the bytes must live where the TUI renders via a registered renderer, and that is a separate message.
 
@@ -1387,6 +1388,16 @@ The user asked that injected files appear in the chat **exactly like the `read` 
 - *Wait for Pi core to add `<file>` collapsing.* Out of scope (this is an extension) and unbounded (may never ship).
 
 **Why green / read-tool styling, not purple / skill styling.** The user's explicit model is the `read` tool ("exactly as though the read tool were called"), and the example shows green lines. `toolSuccessBg` + `toolTitle` is the literal color/bold recipe the `read` tool's completed call uses; `customMessageBg` (purple) would make injected files look like skills instead. We keep only the collapse/expand affordance in common with skills, because it is the right UX for "summary line → full content."
+
+### 13.8 Why the prompt is preserved verbatim (no `#@` stripping)
+
+The first draft of this spec stripped `#@` from the user prompt (leaving a bare path) and from delivered markdown import markers, on the theory that a "cleaner" bubble was worth it. That was a mistake: **stripping breaks every re-submission path.**
+
+When the user cancels a request (ESC), forks the conversation, or navigates the session tree (`/tree`) back to a user message and re-submits, Pi does **not** replay the original typed text — it re-feeds the **stored** user-message content. This was verified in `agent-session.ts`: `navigateTree()` computes the editor prefill as `_extractUserMessageText(targetEntry.message.content)` and the interactive layer then calls `editor.setText(editorText)`. There is **no** extension hook to override that prefill — `session_before_tree` can cancel or alter the summary but not the editor text, and `session_tree` fires *before* `editor.setText`, so calling `ctx.ui.setEditorText()` there is silently clobbered (and deferring it via `setTimeout` is a racy hack, not a design). The same stored-content replay applies to follow-up/steer dequeue (`restoreQueuedMessagesToEditor`) and to forks.
+
+Consequence: if the extension had transformed `Review #@a.ts` → `Review a.ts` before storing, the re-submitted prompt contains no `#@`, the `input` handler finds nothing to inject, and **the files silently vanish on every re-open.** The only way to make re-submission reliably re-trigger injection is for the stored prompt to still contain `#@` — i.e. **do not strip.**
+
+So the extension leaves `event.text` byte-for-byte intact (it still attaches images via the `images` field and still publishes the `<file>` blocks via the `before_agent_start` custom message). The cost is purely cosmetic: the user bubble shows `Review #@a.ts` instead of `Review a.ts`. That cost is negligible — stripping's only real effect was deleting two characters per marker (a handful of tokens), never any file bytes (those were always in the custom message). Verbatim delivery is strictly better: honest (model and bubble both show exactly what the user typed), simpler (no marker-index/`prefixLen` bookkeeping anywhere — not in the input handler, not in `injectMarkdown`, not in `scanTokens`), and re-open-safe across cancel, fork, `/tree`, and queued-message dequeue.
 
 ---
 
@@ -1499,15 +1510,12 @@ export default function (pi: ExtensionAPI) {
       bareAt: cfg.markdownBareAtImports === true,
     };
 
-    const resolvedIdx = await processTokenStream(event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
+    await processTokenStream(event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
     if (state.count === 0) return { action: "continue" };
-
-    let stripped = event.text;                                   // user message = ONLY the stripped prompt (§6.4)
-    for (const i of [...resolvedIdx].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
     pending = { blocks: state.blocks, details: state.details };  // hand off to before_agent_start (§6.2)
     const whole = state.count - state.paged;
     if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${state.paged > 0 ? `, ${state.paged} paged` : ""}`, "info");
-    return { action: "transform" as const, text: stripped, images: state.images };
+    return { action: "transform" as const, text: event.text, images: state.images };   // text VERBATIM (§6.4)
   });
 
   pi.on("before_agent_start", async () => {                      // publish files as ONE custom message after the user message
@@ -1556,4 +1564,4 @@ needs a `package.json` with a `"pi"` manifest so the *directory* is loadable (se
   "pi": { "extensions": ["file-injector.ts"] } }
 ```
 
-**Done-definition:** all 41 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files that fit remaining context (delivered as a single custom message after the prompt, §6.2); in the TUI those files render as **green `read <path>` lines — one per file — indistinguishable from the `read` tool** (§6.3), with the user bubble showing only the stripped prompt; markdown imports resolve relative to the importing file's directory (with `.md`/`.markdown` extension shorthand for extensionless tokens), skip code blocks, terminate on cycles, and dedup across the whole prompt; the context budget accounts for the total filesize of all delivered files (top-level + imports); prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.
+**Done-definition:** all 42 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files that fit remaining context (delivered as a single custom message after the prompt, §6.2); in the TUI those files render as **green `read <path>` lines — one per file — indistinguishable from the `read` tool** (§6.3), with the user bubble showing the **verbatim** prompt (`#@` preserved so cancel/fork/re-open re-trigger injection; §6.4); markdown imports resolve relative to the importing file's directory (with `.md`/`.markdown` extension shorthand for extensionless tokens), skip code blocks, terminate on cycles, and dedup across the whole prompt; the context budget accounts for the total filesize of all delivered files (top-level + imports); prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages; and a re-submitted prompt (cancel/re-open, fork, `/tree` navigate, queued-followUp dequeue) re-triggers injection because the stored prompt still contains `#@`.
