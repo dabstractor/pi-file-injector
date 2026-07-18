@@ -139,10 +139,12 @@ for (const [label, suffix] of [["period", "."], ["comma+space", ", and more"], [
 
 // ===========================================================================
 // GROUP 4 — markdown formatting glued to the filename (italics/bold markers)
-// \S+ grabs trailing markdown markers; a filename's extension (.md/.markdown) is its terminator.
-// Rule decided with the user: try cleanToken(raw) FIRST; THEN, if it contains .md/.markdown, also try it
-// truncated immediately after the LAST .md/.markdown (drops trailing *, **, etc.). _ is a filename char,
-// never stripped. Full token wins over truncation (a genuine weird.md.bak beats weird.md).
+// \S+ grabs trailing markdown markers. Rule (PRD §4.4/§4.5 exact-only for extended tokens): try the full token
+// (cleanToken) FIRST; THEN strip a trailing run of the GLUE chars cleanToken omits (* and _) + re-clean (drops
+// an exposed trailing ".") and retry the EXACT path. A token already carrying an extension (.bak/.txt/.old/
+// .backup) is NEVER truncated at .md — if the exact path misses, it is left verbatim (4f/4h). _ INSIDE a name
+// (my_file.md) is a filename char, never stripped (4d). Full token wins (4e: a genuine weird.md.bak beats
+// weird.md when both exist).
 // ===========================================================================
 console.log("\nGROUP 4 — trailing markdown formatting glued to the filename");
 
@@ -181,11 +183,26 @@ await test("4e: genuine multi-extension wins over truncation — '@weird.md.bak'
   assert(has(o, "BAK-MARKER") && !has(o, "MD-MARKER"), `full token 'weird.md.bak' must win over truncation`);
 });
 
-await test("4f: truncation fallback when only the .md exists — '@weird.md.bak' (only weird.md) → weird.md", async () => {
+await test("4f: extended token exact-only — '@weird.md.bak' (only weird.md) → NOT injected, left verbatim", async () => {
+  // PRD §4.5 rule 3: a token already carrying an extension (.bak) is EXACT-only. weird.md.bak is missing →
+  // null → marker left verbatim. The OLD extCut heuristic truncated at .md → injected weird.md (the WRONG file).
   const r = fsSync.mkdtempSync(path.join(os.tmpdir(), "fmt-"));
   mk(r, "a.md", "A\n\n@weird.md.bak\n"); mk(r, "weird.md", "MD-MARKER"); // no weird.md.bak
   const o = await run(r, "#@a.md", true);
-  assert(has(o, "MD-MARKER"), `truncation fallback to weird.md must apply. injected=${o.injected}`);
+  assert(o.injected === 1, `only a.md injected (weird.md.bak missing → exact-only → null), got injected=${o.injected}`);
+  assert(!has(o, "MD-MARKER"), `weird.md must NOT be injected (weird.md.bak is exact-only; no .md truncation), got MD-MARKER present`);
+  assert(has(o, "@weird.md.bak"), `the literal @weird.md.bak reference must be left VERBATIM in a.md's block`);
+});
+
+await test("4h: extended-token false-positive guard — '@api.md.old' (only api.md) → NOT injected (no .md truncation)", async () => {
+  // PRD §4.5 rule 3: .old/.txt/.bak are real extensions → exact-only. The OLD extCut would truncate at .md →
+  // inject api.md (WRONG). Confirmed FP patterns: X.md.txt, X.md.bak (4f), X.md.old, X.md/foo (all → null now).
+  const r = fsSync.mkdtempSync(path.join(os.tmpdir(), "fmt-"));
+  mk(r, "a.md", "A\n\n@api.md.old\n"); mk(r, "api.md", "API-MARKER"); // no api.md.old
+  const o = await run(r, "#@a.md", true);
+  assert(o.injected === 1, `only a.md injected (api.md.old missing → exact-only → null), got injected=${o.injected}`);
+  assert(!has(o, "API-MARKER"), `api.md must NOT be injected (api.md.old is exact-only), got API-MARKER present`);
+  assert(has(o, "@api.md.old"), `the literal @api.md.old reference must be left VERBATIM`);
 });
 
 await test("4g: .markdown variant — '@x.markdown.*' resolves to x.markdown", async () => {

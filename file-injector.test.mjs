@@ -1975,6 +1975,43 @@ await runCase("EDG-4", "§10 md edge: #@sub/notes (sub/notes.md exists) → sub/
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ── P1.M1.T1.S2: Issue 1 regression cases (the X.md.backup false-positive). ──
+// S1 landed the resolveImportPath fix (extCut → fmtCut: trailing-glue strip + re-clean, NEVER truncating
+// an extended token at .md). These two cases lock the PRD-compliant outcome at the primary gate so a future
+// regression of the truncation heuristic fails loudly. ISS1-TL mirrors case 24 (top-level exact-only);
+// ISS1-MD mirrors EDG-2 (markdown-import verbatim). Both use UNIQUE inline fixtures (iss1_ prefix).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ISS1-TL — Issue 1 top-level: a token already carrying .backup is NOT truncated at .md. iss1_report.md.backup
+// is missing → null → #@ left verbatim → injected===0. The OLD extCut would have truncated to iss1_report.md →
+// injected the WRONG file (secret draft) + stripped the #@. PRD §4.4 (top-level exact-only) + Issue 1.
+await runCase("ISS1-TL", "Issue 1 top-level: #@iss1_report.md.backup (only iss1_report.md) → verbatim, injected=0 (no .md truncation)", async () => {
+  const report = path.join(TMPDIR, "iss1_report.md");
+  fsSync.writeFileSync(report, "# Current Report\nSecret draft content.\n"); // NO iss1_report.md.backup
+  const r = await mod.injectFiles("Compare #@iss1_report.md.backup with the latest", [], FIX);
+  assert(r.injected === 0, `nothing injected (iss1_report.md.backup missing → exact-only), got injected=${r.injected}`);
+  assert(r.text === "Compare #@iss1_report.md.backup with the latest",
+    `top-level prompt byte-for-byte UNCHANGED (no .md truncation, no strip), got ${JSON.stringify(r.text)}`);
+  assert(!hasBlock(r, "Secret draft content."), `iss1_report.md must NOT be injected (its content absent from blocks)`);
+});
+
+// ISS1-MD — Issue 1 markdown-import path: iss1_index.md is delivered; its import #@iss1_report.md.backup does
+// NOT resolve (exact-only, missing) → left verbatim in the index block; iss1_report.md is NOT pulled in.
+// The OLD extCut would have truncated → injected iss1_report.md (WRONG). PRD §4.5 rule 3 (extended tokens exact-only).
+await runCase("ISS1-MD", "Issue 1 markdown-import: iss1_index.md imports #@iss1_report.md.backup (only iss1_report.md) → report NOT injected, marker verbatim", async () => {
+  const index = path.join(TMPDIR, "iss1_index.md");
+  const report = path.join(TMPDIR, "iss1_report.md");
+  fsSync.writeFileSync(index, "# Index\n\nSee #@iss1_report.md.backup here.\n");
+  fsSync.writeFileSync(report, "# Current Report\nSecret draft content.\n"); // NO iss1_report.md.backup
+  const r = await mod.injectFiles("Read #@iss1_index.md", [], FIX);
+  assert(r.injected === 1, `only iss1_index.md injected (iss1_report.md.backup missing → exact-only), got injected=${r.injected}`);
+  assert(hasBlock(r, '<file name="' + index + '">'), "iss1_index.md block present (the parent delivered)");
+  assert(!hasBlock(r, "Secret draft content."), `iss1_report.md must NOT be injected (no .md truncation)`);
+  assert(hasBlock(r, "See #@iss1_report.md.backup here."),
+    `the unresolved #@iss1_report.md.backup marker must be left VERBATIM in iss1_index.md's block (not stripped, no wrong file)`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ── P1.M1.T1.S1: scanTokens bare-`@` engine unit tests (PRD §4.6 — the BARE_AT_RE union) ──
 // scanTokens is the single chokepoint where markers are detected. When opts.bareAt is truthy it ALSO runs
 // BARE_AT_RE alongside FILE_INJECT_RE, returning a union of candidate records sorted by index, each tagged
