@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Compact read-tool-style display via custom-message delivery",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Swap the file delivery model from appending <file> blocks into the user prompt text (\\n\\n---\\n\\n separator) to delivering them as a single custom message returned from a before_agent_start handler, rendered compactly in the chat as green collapsible read <path> lines via a registered MessageRenderer. The model still receives the same <file> blocks (byte-identical content); only the message boundary and chat display change. All injection engine logic (regex, resolution, classification, paging, budget, markdown imports, dedup, config, autocomplete) is untouched.",
       "milestones": [
         {
@@ -111,7 +111,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Migrate tests, add delivery/display tests, and sync README (Mode B)",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Migrate the ~170 existing test assertions from reading r.text for block content to reading r.blocks/r.details; add new tests for the custom-message delivery, stash lifecycle, and renderer output; and sync README.md to describe the new compact read-tool-style appearance (removing the --- append language).",
           "tasks": [
             {
@@ -159,7 +159,7 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Add delivery, stash lifecycle, and renderer display tests",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add new runnable tests covering the NEW-model behaviors not exercised by the migrated suites: the injectFiles return shape (blocks/details arrays + stripped text), the before_agent_start custom-message emission and one-shot stash lifecycle, and the renderInjectedMessage output (green read-lines per file kind, defensive fallback).",
               "subtasks": [
                 {
@@ -184,7 +184,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T2.S2",
                   "title": "Renderer output + defensive fallback tests",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
@@ -203,14 +203,14 @@
               "type": "Task",
               "id": "P1.M2.T3",
               "title": "Sync changeset-level documentation (Mode B)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Update README.md to describe the new compact read-tool-style chat display, removing all references to the removed --- append model. This is the cross-cutting changeset-level documentation sync that only makes sense once the full implementation (M1) and test migration (M2.T1-T2) are in place.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T3.S1",
                   "title": "Update README.md for compact read-tool-style display (remove --- append language)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2",

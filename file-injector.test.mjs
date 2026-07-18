@@ -2507,6 +2507,145 @@ await runCase("DELIV-6", "multi-file: r.blocks.length===2 AND r.details.length==
   assert(r.blocks[1].includes('<file name="' + B_TS + '">'), "blocks[1] is the b.ts block (parallel to details[1])");
 });
 
+// ── P1.M2.T2.S2 (plan/008): renderer output + defensive fallback ──
+// ─────────────────────────────────────────────────────────────────────
+// Pins PRD §6.3 (the MessageRenderer) + §11 #33-38 (display matrix) + §12.23 (defensive, never throw) +
+// §12.24 (green choice deliberate: toolSuccessBg/toolTitle+bold/accent/dim) + §12.25 (tildify; ctrl+o hardcoded).
+// Calls mod.renderInjectedMessage DIRECTLY with crafted messages — NO file I/O, NO hooks, NO captureAllHandlers,
+// NO fixtures. Reuses runCase/assert (and os, already imported L25). A local stubTheme renders UNSTYLED content
+// (every theme fn returns its text arg); a local spyTheme (REND-10) records the theme KEYS for color parity.
+//
+// TEST SEAM (pi-tui, grounded in source): Box.children is PUBLIC (Component[]) → inspect children[i] directly.
+// Text.text is PRIVATE → read via Text.render(width): string[]. The renderer builds new Text(s,0,0) (padding 0),
+// so child.render(W).join("\n") = the content (wrapped to W, right-padded with spaces, NO margins). W=2000 → no wrap.
+// highlightCode returns PLAIN text (probed) → body includes-checks are ANSI-safe TODAY.
+const REND_THEME = { fg: (_k, t) => t, bg: (_k, t) => t, bold: (t) => t };
+const REND_W = 2000;
+const textOf = (child) => child.render(REND_W).join("\n"); // generous width → no wrapping; trailing pad is harmless for .includes()
+
+// REND-1 — COLLAPSED SINGLE FILE (§11 #33). One read line; includes "read" + the path.
+await runCase("REND-1", "collapsed single text file: Box has children; [0] includes 'read' + path", async () => {
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/a.ts", kind: "text" }] }, content: '<file name="/abs/a.ts">\nhello world\n</file>' },
+    { expanded: false }, REND_THEME);
+  assert(box && Array.isArray(box.children) && box.children.length >= 1, `renderer must return a Box with children, got ${JSON.stringify(box?.children?.length)}`);
+  const line0 = textOf(box.children[0]);
+  assert(line0.includes("read"), `children[0] is a read line (includes 'read'), got ${JSON.stringify(line0.slice(0, 60))}`);
+  assert(line0.includes("/abs/a.ts"), `children[0] includes the path, got ${JSON.stringify(line0.slice(0, 60))}`);
+  assert(line0.includes("(ctrl+o to expand)"), `children[0] includes the expand hint (i===0), got ${JSON.stringify(line0.slice(0, 60))}`);
+});
+
+// REND-2 — COLLAPSED MULTI-FILE (§11 #34). Two read lines; the expand hint appears ONCE (on [0] only).
+await runCase("REND-2", "collapsed multi-file: 2 read lines; hint on [0] only (shown once per box)", async () => {
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/a.ts", kind: "text" }, { path: "/abs/b.md", kind: "text" }] },
+      content: '<file name="/abs/a.ts">\na\n</file>\n<file name="/abs/b.md">\nb\n</file>' },
+    { expanded: false }, REND_THEME);
+  assert(box.children.length === 2, `two files → two read lines, got ${box.children.length}`);
+  const l0 = textOf(box.children[0]), l1 = textOf(box.children[1]);
+  assert(l0.includes("/abs/a.ts") && l0.includes("(ctrl+o to expand)"), `[0] is the a.ts read line WITH the hint, got ${JSON.stringify(l0.slice(0, 60))}`);
+  assert(l1.includes("/abs/b.md"), `[1] is the b.md read line, got ${JSON.stringify(l1.slice(0, 60))}`);
+  assert(!l1.includes("(ctrl+o to expand)"), `[1] must NOT have the expand hint (shown once per box, §6.3), got ${JSON.stringify(l1.slice(0, 60))}`);
+});
+
+// REND-3 — PAGED LINE (§11 #37). The read line carries the range suffix (mirrors the read tool's formatReadLineRange).
+await runCase("REND-3", "paged file: read line includes the range suffix ':5-'", async () => {
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/huge.log", kind: "paged", range: ":5-" }] },
+      content: '<file name="/abs/huge.log">\nhead line\n</file>\n<file name="/abs/huge.log">directive</file>' },
+    { expanded: false }, REND_THEME);
+  const line0 = textOf(box.children[0]);
+  assert(line0.includes("read") && line0.includes("/abs/huge.log"), `[0] is the huge.log read line, got ${JSON.stringify(line0.slice(0, 60))}`);
+  assert(line0.includes(":5-"), `[0] includes the paged range suffix ':5-', got ${JSON.stringify(line0.slice(0, 60))}`);
+});
+
+// REND-4 — IMAGE LINE (§11 #35). The read line appends the dimensionHint.
+await runCase("REND-4", "image file: read line includes the dimensionHint", async () => {
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/pic.png", kind: "image", dimensionHint: "(resized to 1568×1044)" }] },
+      content: '<file name="/abs/pic.png"></file>' },
+    { expanded: false }, REND_THEME);
+  const line0 = textOf(box.children[0]);
+  assert(line0.includes("read") && line0.includes("/abs/pic.png"), `[0] is the pic.png read line, got ${JSON.stringify(line0.slice(0, 60))}`);
+  assert(line0.includes("(resized to 1568×1044)"), `[0] includes the dimensionHint, got ${JSON.stringify(line0.slice(0, 60))}`);
+});
+
+// REND-5 — BINARY LINE (§11 #36). The read line shows '(binary — not injected)' (model note + display agree).
+await runCase("REND-5", "binary file: read line includes '(binary — not injected)'", async () => {
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/data.bin", kind: "binary" }] },
+      content: '<file name="/abs/data.bin"><binary file — contents not injected; use the read tool if needed></file>' },
+    { expanded: false }, REND_THEME);
+  const line0 = textOf(box.children[0]);
+  assert(line0.includes("read") && line0.includes("/abs/data.bin"), `[0] is the data.bin read line, got ${JSON.stringify(line0.slice(0, 60))}`);
+  assert(line0.includes("(binary — not injected)"), `[0] includes the binary note, got ${JSON.stringify(line0.slice(0, 60))}`);
+});
+
+// REND-6 — EXPANDED (§6.3). Expanded renders the file content below the read line → MORE children than collapsed.
+await runCase("REND-6", "expanded text file: more children than collapsed; body child carries the content", async () => {
+  const msg = { details: { files: [{ path: "/abs/a.ts", kind: "text" }] }, content: '<file name="/abs/a.ts">\nhello world\n</file>' };
+  const collapsed = mod.renderInjectedMessage(msg, { expanded: false }, REND_THEME);
+  const expanded = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME);
+  assert(expanded.children.length > collapsed.children.length,
+    `expanded must render the body below the read line (more children); collapsed=${collapsed.children.length} expanded=${expanded.children.length}`);
+  // the body child (last) carries the file content — PLAIN text (highlightCode returns no ANSI today)
+  const body = textOf(expanded.children[expanded.children.length - 1]);
+  assert(body.includes("hello world"), `the expanded body child carries the file content, got ${JSON.stringify(body.slice(0, 60))}`);
+});
+
+// REND-7 — IMAGE NOT RE-RENDERED (§6.3/§6.4). Expanded image has NO body child (images attach to the user message).
+await runCase("REND-7", "expanded image: NO body child (images attach to the user message, not the renderer)", async () => {
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/pic.png", kind: "image", dimensionHint: "(resized to WxH)" }] },
+      content: '<file name="/abs/pic.png"></file>' },
+    { expanded: true }, REND_THEME);
+  assert(box.children.length === 1, `expanded image must have ONE child (the read line only; no body), got ${box.children.length}`);
+  assert(textOf(box.children[0]).includes("/abs/pic.png"), `[0] is still the pic.png read line, got ${JSON.stringify(textOf(box.children[0]).slice(0, 60))}`);
+});
+
+// REND-8 — DEFENSIVE FALLBACK (§12.23). Malformed entries (no files / no details) never throw; single fallback line.
+await runCase("REND-8", "defensive fallback: {details:{}} and {content} (no details) → no throw; 1 child '(injected files)'", async () => {
+  // (a) details present but no files array
+  let box = mod.renderInjectedMessage({ details: {}, content: '<file name="/abs/x.ts">x</file>' }, { expanded: false }, REND_THEME);
+  assert(box && box.children.length === 1, `{details:{}} → single fallback line, got ${box?.children?.length}`);
+  assert(textOf(box.children[0]).trim() === "read (injected files) (ctrl+o to expand)",
+    `fallback line text, got ${JSON.stringify(textOf(box.children[0]).trim())}`);
+  // (b) no details key at all (only content)
+  box = mod.renderInjectedMessage({ content: '<file name="/abs/x.ts">x</file>' }, { expanded: false }, REND_THEME);
+  assert(box && box.children.length === 1, `{content} (no details) → single fallback line (no throw), got ${box?.children?.length}`);
+  assert(textOf(box.children[0]).trim() === "read (injected files) (ctrl+o to expand)",
+    `fallback line text (no-details path), got ${JSON.stringify(textOf(box.children[0]).trim())}`);
+});
+
+// REND-9 — TILDIFY (§12.25). A path under os.homedir() displays with a leading '~'.
+await runCase("REND-9", "tildify: a homedir path displays starting with '~'", async () => {
+  const homePath = os.homedir() + "/projects/a.ts";
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: homePath, kind: "text" }] }, content: '<file name="' + homePath + '">\nhi\n</file>' },
+    { expanded: false }, REND_THEME);
+  const line0 = textOf(box.children[0]);
+  assert(line0.startsWith("read ~"), `homedir path is tildified (starts with 'read ~'), got ${JSON.stringify(line0.slice(0, 60))}`);
+  assert(!line0.includes(os.homedir()), `the raw homedir must NOT appear (replaced by ~), got ${JSON.stringify(line0.slice(0, 60))}`);
+});
+
+// REND-10 — COLOR PARITY (§11 #38 / §12.24). A spy theme proves the renderer uses the read-tool theme keys.
+await runCase("REND-10", "color parity: toolSuccessBg (bg) + toolTitle/accent/dim (fg) + bold('read') — the read-tool recipe", async () => {
+  const calls = { fg: [], bg: [], bold: [] };
+  const spy = { fg: (k, t) => { calls.fg.push(k); return t; }, bg: (k, t) => { calls.bg.push(k); return t; }, bold: (t) => { calls.bold.push(t); return t; } };
+  const box = mod.renderInjectedMessage(
+    { details: { files: [{ path: "/abs/a.ts", kind: "text" }] }, content: '<file name="/abs/a.ts">\nhi\n</file>' },
+    { expanded: false }, spy);
+  // readLine builds its string eagerly → fg/bold are called during construction
+  assert(calls.fg.includes("toolTitle"), `fg uses toolTitle for the 'read' title (read-tool parity), got fg=${JSON.stringify(calls.fg)}`);
+  assert(calls.fg.includes("accent"), `fg uses accent for the path (read-tool parity), got fg=${JSON.stringify(calls.fg)}`);
+  assert(calls.fg.includes("dim"), `fg uses dim for the expand hint, got fg=${JSON.stringify(calls.fg)}`);
+  assert(calls.bold.includes("read"), `bold is applied to 'read' (read-tool parity), got bold=${JSON.stringify(calls.bold)}`);
+  // the Box bgFn (toolSuccessBg) fires on box.render(width) — prove the GREEN key, not the purple customMessageBg
+  box.render(80);
+  assert(calls.bg.includes("toolSuccessBg"), `bg uses toolSuccessBg (GREEN, the read tool's completed-call color; NOT purple customMessageBg), got bg=${JSON.stringify(calls.bg)}`);
+  assert(!calls.bg.includes("customMessageBg"), `must NOT use customMessageBg (purple = skills, §12.24), got bg=${JSON.stringify(calls.bg)}`);
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
