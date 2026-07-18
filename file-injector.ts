@@ -328,6 +328,81 @@ function extractDirectiveInner(block: string): string {
   return open >= 0 && close > open ? block.slice(open + 1, close) : block;
 }
 
+/** Parse the path out of a `<file name="ABS">…</file>` block header. Returns the absolute path, or
+ *  undefined if the block does not match the opener (defensive — image/binary/F5/paged-directive blocks
+ *  all use the same opener, so the path is always present for real emissions). */
+function blockPath(block: string): string | undefined {
+  const m = /^<file name="([^"]+)">/.exec(block);
+  return m ? m[1] : undefined;
+}
+
+/** §12.22 (P1.M2.T1.S1) — compute absolute `contentStart`/`contentLen` for every text/paged detail so the
+ *  renderer can slice the body out of the assembled `message.content` WITHOUT duplicating file bytes into
+ *  `details` (the body is renderer-only metadata; it must not be persisted in the custom message). Runs in
+ *  `before_agent_start` over the FINAL `blocks` array, because the absolute offset of a detail's body within
+ *  `blocks.join("\\n\\n")` depends on every PRIOR block's length — `emitText` cannot know it at emit time.
+ *
+ *  Pairing: details and blocks are NOT 1:1 — a paged detail emits TWO blocks (head + directive) but only
+ *  the head block carries the body. We pair each detail to the NEXT unmatched text/head block with the same
+ *  path (matching `path` keeps imports of the same file at different depths — deduped anyway — correctly
+ *  paired; a path can repeat across distinct files only if two files share an abs path, which is impossible).
+ *  The body lives between the opener `<file name="ABS">\\n` and the closing `\\n</file>`; its length equals
+ *  `block.length - headerLen - closerLen`. Image/binary/F5 details have no displayable body and are skipped.
+ *  Idempotent + defensive: a detail whose block can't be located is left untouched (renderer falls back to
+ *  the regex tier). Mutates `details` in place and returns it for chaining. */
+export function computeDetailOffsets(blocks: string[], details: FileDetail[]): FileDetail[] {
+  const SEP = "\\n\\n";
+  // absolute char offset of each block within blocks.join("\\n\\n")
+  const starts: number[] = [];
+  let off = 0;
+  for (const b of blocks) { starts.push(off); off += b.length + SEP.length; }
+
+  // index of the next unmatched block, keyed by path, so a paged detail (head then directive) consumes the
+  // head and leaves the directive block for… nothing (directive blocks carry no body); duplicate paths at
+  // distinct depths are consumed in emission order.
+  const cursorByPath = new Map<string, number>();
+  for (let di = 0; di < details.length; di++) {
+    const d = details[di];
+    if (d.kind !== "text" && d.kind !== "paged") continue; // image/binary/F5 — no displayable body
+    const p = d.path;
+    let bi = cursorByPath.get(p);
+    if (bi === undefined) bi = 0;
+    // advance to the next block at/after `bi` whose header path matches AND is a body-bearing block
+    // (head/text — NOT a paged directive block, which is `<paged: …>` inner and carries no file body).
+    while (bi < blocks.length) {
+      const blk = blocks[bi];
+      const hdr = blockPath(blk);
+      if (hdr === p) {
+        // is this a body-bearing block? text/head blocks end with `\n</file>`; paged directive blocks are
+        // `<file name="ABS"><paged: …></file>` (no leading `\n`). The body-bearing test: the char right
+        // after the opener is `\n` for text/head (formatTextFileBlock always emits `>\\n` + content).
+        const openEnd = blk.indexOf(">") + 1; // end of '<file name="…">'
+        if (blk.charCodeAt(openEnd) === 0x0A) { // body-bearing text/head block
+          const headerLen = openEnd + 1;        // include the '\n'
+          const closerLen = "\n</file>".length; // formatTextFileBlock appends '\n</file>'
+          const bodyLen = blk.length - headerLen - closerLen;
+          if (bodyLen >= 0) { // defensive: malformed block → leave detail untouched
+            d.contentStart = starts[bi] + headerLen;
+            d.contentLen = bodyLen;
+          }
+          cursorByPath.set(p, bi + 1); // consumed; a following paged directive block has the same path but is skipped below
+          break;
+        }
+      }
+      bi++;
+    }
+    if (bi >= blocks.length) {
+      // no body-bearing block found for this detail — leave contentStart/contentLen unset; the renderer's
+      // tier-2 (d.body) / tier-3 (regex) fallbacks handle it. (Real emission always pairs; this guards
+      // old/foreign/test details.)
+      cursorByPath.delete(p);
+    } else {
+      cursorByPath.set(p, bi + 1);
+    }
+  }
+  return details;
+}
+
 /**
  * PRD §9 / §5.5 — core assembly. Iterate every `#@<path>` token in `text`, resolve+stat+classify+read
  * each, and append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image). The
@@ -374,7 +449,9 @@ export interface FileDetail {
                       //   reaches the model via message.content (display-only fix). OMITTED for non-paged.
   contentStart?: number; // §12.22 — char offset of this file's body within message.content (text/paged
                          //   only; image/binary omit). The renderer slices message.content for BUG-1-safe
-                         //   body recovery WITHOUT duplicating bytes into details (P1.M2.T1.S1).
+                         //   body recovery WITHOUT duplicating bytes into details (P1.M2.T1.S1). Populated
+                         //   by computeDetailOffsets in before_agent_start (absolute offset within the
+                         //   assembled blocks.join("\n\n"), which emitText cannot know at emit time).
   contentLen?: number; // §12.22 — char length of the body slice (text: whole content; paged: the head).
 }
 
@@ -926,7 +1003,7 @@ export function emitText(abs: string, content: string, state: State): void {
   if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
     // INLINE (whole) — current behavior preserved (PRD §5.1)
     state.blocks.push(formatTextFileBlock(abs, content));
-    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, body: content });
+    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount }); // §12.22 — contentStart/contentLen populated by computeDetailOffsets in before_agent_start (no body duplication)
     subtract(state, fileCost);
   } else {
     // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
@@ -950,7 +1027,7 @@ export function emitText(abs: string, content: string, state: State): void {
       // subtracts its cost at emit time"). Earlier this branch pushed the block without subtract(),
       // which let a tight-but-positive budget never deplete across a run of small files (F1).
       state.blocks.push(formatTextFileBlock(abs, content));
-      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, body: content });
+      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount }); // §12.22 — offsets computed in before_agent_start (no body duplication)
       subtract(state, fileCost);
     } else {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
@@ -959,7 +1036,7 @@ export function emitText(abs: string, content: string, state: State): void {
       const directiveBlock = formatPagedDirectiveBlock(abs, content.length, startLine, headLines); // §6.3 — hoist; the directive block still reaches the model via content (display-only fix); its inner text is stored on the detail for the expanded view
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(directiveBlock);
-      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines, body: head, directive: extractDirectiveInner(directiveBlock) });
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock) }); // §12.22 — head offsets computed in before_agent_start (no body duplication); directive is display-only text, not file bytes
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }
@@ -1255,6 +1332,7 @@ export default function (pi: ExtensionAPI) {
     if (!pending) return undefined;
     const { blocks, details } = pending;
     pending = null; // clear regardless — one-shot per prompt (a later no-#@ prompt never re-delivers)
+    computeDetailOffsets(blocks, details); // §12.22 (P1.M2.T1.S1) — absolute body offsets so the renderer slices message.content WITHOUT duplicating file bytes into details (BUG-1-safe: length-derived, not regex)
     return {
       message: {
         customType: "fileInjector.injected", // the renderer's registered customType (T2.S2 registers it)

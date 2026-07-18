@@ -131,6 +131,7 @@ assert(typeof mod.resolveImportPath === "function", "mod.resolveImportPath must 
 assert(typeof mod.isRegularFile === "function", "mod.isRegularFile must be a function (stat + isFile, never throws)");
 assert(typeof mod.readConfig === "function", "mod.readConfig must be a function (§4.6 config reader: global+project merge, trust gate, never throws)");
 assert(typeof mod.renderInjectedMessage === "function", "mod.renderInjectedMessage must be a function (§6.3 chat renderer for fileInjector.injected custom messages)");
+assert(typeof mod.computeDetailOffsets === "function", "mod.computeDetailOffsets must be a function (§12.22 P1.M2.T1.S1 — absolute body offsets so the renderer slices message.content without duplicating file bytes into details)");
 
 // ── MODULE-SURFACE COMPLETENESS (S4 sync) ── The 16 asserts above name the MEANINGFUL exports. This guard
 // enforces the FULL contract: every function the module SHIPS is either (a) asserted by name above, or (b) a
@@ -141,7 +142,7 @@ const ASSERTED_EXPORTS = new Set([
   "default", "injectFiles", "cleanToken", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
   "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
   "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
-  "resolveImportPath", "isRegularFile", "readConfig", "renderInjectedMessage",
+  "resolveImportPath", "isRegularFile", "readConfig", "renderInjectedMessage", "computeDetailOffsets",
 ]);
 const PURE_HELPERS_NOT_ASSERTED = new Set(["expandTildeAndResolve", "extOf", "isBinary"]); // tested indirectly via injectFiles
 {

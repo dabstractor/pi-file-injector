@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Bug Fixes for `#@file` Extension QA Findings",
-      "status": "Researching",
+      "status": "Complete",
       "description": "Remediate the four issues surfaced by creative end-to-end QA against the `#@file` extension PRD. One Major data-integrity defect (Issue 1: resolveImportPath truncation silently injects the wrong file) and three Minor issues (Issue 2: FileDetail.body byte duplication violating §12.22; Issue 3: paged expanded-view omits the paging directive per §6.3; Issue 4: image magic-number sniff deviation from §5.2, accepted as the intentional README contract — no code change). All findings are grounded in live reproduction via jiti (the same loader the test suite uses) and recorded in plan/008_561ef016260d/bugfix/001_a4cee0dcf39c/architecture/. Baseline before work: 145 + 22 + 38 = 205 shipped test cases green; `npm test` runs only file-injector.test.mjs.",
       "milestones": [
         {
@@ -62,21 +62,21 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Fix Minor Issues 2 & 3: FileDetail byte duplication (§12.22) + paged directive display (§6.3)",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Both issues live in the FileDetail → emitText → renderInjectedMessage data path and are coupled (same interface, same renderer expanded branch), so they are fixed together in one milestone. Issue 2: FileDetail.body duplicates ~100% of every deliverable file's bytes into persisted details, violating §12.22/§6.2 and roughly doubling session storage — fix by storing content offsets (slice from message.content) instead of the body string, keeping the BUG-1 (nested </file>) correctness guarantee. Issue 3: the paged expanded view shows only the head; the <paged: ...> directive text that §6.3 mandates is never surfaced — fix by storing the directive text in the paged detail and rendering it after the head.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Eliminate FileDetail.body byte duplication (§12.22) via content offsets",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Stop embedding the full file body in each FileDetail. Add contentStart/contentLen (char offset+length into the assembled message.content) so the renderer slices the exact body from content (BUG-1 safe — slice by known length, not regex) without duplicating bytes. Keep `body?` as a deprecated fallback field for old/foreign/test entries (REND-* unit tests, §6.3 defensive rendering). Compute offsets post-hoc in the before_agent_start handler where content is assembled.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "FileDetail offset fields + emitText stops duplicating body + before_agent_start offset computation",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Read plan/008_561ef016260d/bugfix/001_a4cee0dcf39c/architecture/issue2_3_filedetail_renderer.md. FileDetail (file-injector.ts:336-348) has `body?: string` storing the EXACT body (text=whole content; paged=head slice). emitText (878-927) sets body at 3 sites (lines 884, 908, 916). content = blocks.join(\"\\n\\n\") is assembled in before_agent_start (line 1213). A paged file = 2 blocks (head + directive) + 1 detail; text/image/binary = 1 block + 1 detail. formatTextFileBlock(abs, content) = `<file name=\"${abs}\">\\n${content}\\n</file>` (deterministic header/footer lengths). BUG-1: a file whose content contains a literal `</file>` breaks the renderer's FILE_BLOCK_RE lazy capture — body was added to fix it; offsets preserve that fix because slicing by known length is exact.\n2. INPUT: FileDetail interface (336-348); emitText (878-927); before_agent_start handler (1206-1220) where `blocks` and `details` are destructured from `pending` and `content: blocks.join(\"\\n\\n\")` is built.\n3. LOGIC: (a) Add `contentStart?: number` and `contentLen?: number` to FileDetail (keep `body?` as deprecated fallback; add `directive?: string` field now too — it is populated by P1.M2.T2.S1 but declaring it here keeps the interface change atomic). (b) emitText: REMOVE `body: content` (line 884), `body: content` (line 908), and `body: head` (line 916) from the three detail pushes — real emission must NOT carry the body bytes. (c) In the before_agent_start handler, AFTER `content = blocks.join(\"\\n\\n\")` is built, compute offsets by walking details and blocks IN PARALLEL: maintain a running `blockStart` char cursor (block length + 2 for the \"\\n\\n\" join). For each detail, consume blocks by kind: paged consumes 2 blocks (head at cursor, directive at cursor+headBlockLen+2) — the body is the HEAD block; text consumes 1 block; image/binary consume 1 block (no body). For body-bearing details (text, paged), set contentStart = blockStartOfHeadBlock + lengthOf(`<file name=\"${d.path}\">\\n`) and contentLen = headBlock.length - headerLen - footerLen (where footerLen = `\\n</file>`.length). This is BUG-1-safe (derived from the full block string length, not regex). Do NOT mutate blocks. Edge: verify the join-separator accounting (2 chars between blocks) matches the cursor math against a multi-file fixture. Mock: none — uses the real injectFiles output shapes against temp fixtures.\n4. OUTPUT: For a real injected file, `details[i]` carries contentStart/contentLen and does NOT carry body (hasOwnProperty('body') === false). The renderer (P1.M2.T1.S2) consumes these. The pre-existing REND-* unit tests that craft details WITH body still render via the fallback path.\n5. DOCS: [Mode A] Update the FileDetail interface comment (file-injector.ts:336-348): document contentStart/contentLen as the offset-based body source (§12.22 compliant), mark `body?` as a deprecated fallback for old/test entries, and document `directive?` (paged-only). Cite PRD §12.22 and §6.2. This rides WITH the work.",
