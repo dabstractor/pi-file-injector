@@ -326,8 +326,25 @@ export function formatPagedDirectiveBlock(abs: string, len: number, startLine: n
  * that will also span markdown imports once they land (PRD §5.6.2) — at which point image/binary
  * deliveries will likewise call `subtract`.
  */
+/** PRD §6.2/§6.3 per-file metadata (one entry per delivered file). Type-only export — interfaces are
+ *  erased at runtime by jiti/TS, so this never appears in the module's runtime surface (no guard impact).
+ *  Consumed forward by the renderer (T2.S2) to draw collapsed `read <path>` lines; it is renderer metadata
+ *  only and is NEVER sent to the model as separate text. In S1, emitText pushes `kind: "text"` (whole +
+ *  sub-head) and `kind: "paged"` entries; image (`kind:"image"`, dimensionHint) and binary (`kind:"binary"`)
+ *  entries are added in injectFile in S2. The kind union is forward-looking. */
+export interface FileDetail {
+  path: string; // absolute resolved path (the <file name=…>)
+  kind: "text" | "image" | "binary" | "paged";
+  chars?: number; // text: content length; paged: FULL content length
+  lines?: number; // text: total line count
+  range?: string; // paged: ":<startLine>-…" resume range (read-tool style)
+  pagedHeadLines?: number; // paged: complete lines delivered in the head
+  dimensionHint?: string; // image: formatDimensionNote(resized) — UNUSED in S1 (image is S2)
+}
+
 interface State {
   blocks: string[];
+  details: FileDetail[]; // PRD §6.4 — per-file metadata, parallel to blocks (index-aligned; one detail per block emission in emitText)
   images: ImageContent[];
   injectedSet: Set<string>; // seeded with priorPaths; holds resolved abs paths → dedup
   remaining: number | null; // single budget accumulator (§5.5 / §5.6.2)
@@ -751,9 +768,11 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
  */
 export function emitText(abs: string, content: string, state: State): void {
   const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
+  const lineCount = (content.match(/\n/g)?.length ?? 0) + 1; // PRD §9 — total line count (for FileDetail.lines; text whole/sub-head)
   if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
     // INLINE (whole) — current behavior preserved (PRD §5.1)
     state.blocks.push(formatTextFileBlock(abs, content));
+    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount });
     subtract(state, fileCost);
   } else {
     // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
@@ -777,10 +796,15 @@ export function emitText(abs: string, content: string, state: State): void {
       // subtracts its cost at emit time"). Earlier this branch pushed the block without subtract(),
       // which let a tight-but-positive budget never deplete across a run of small files (F1).
       state.blocks.push(formatTextFileBlock(abs, content));
+      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount });
       subtract(state, fileCost);
     } else {
+      // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
+      const headLines = headCompleteLineCount(head);
+      const startLine = headLines + 1; // == headStartLine(head)
       state.blocks.push(formatTextFileBlock(abs, head));
-      state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+      state.blocks.push(formatPagedDirectiveBlock(abs, content.length, startLine, headLines));
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines });
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }
@@ -950,6 +974,7 @@ export async function injectFiles(
   // .add(abs) at each success site. remaining is the single budget accumulator (subtract() mutates it).
   const state: State = {
     blocks: [],
+    details: [], // PRD §6.4 — parallel to blocks; populated by emitText (and, in S2, injectFile's image/binary branches)
     images: [...imagesIn], // COPY — runner REPLACES the array on transform; seed originals (item §3a)
     injectedSet: priorPaths, // consolidated dedup: priorPaths ∪ within-run (added at each success)
     remaining,
