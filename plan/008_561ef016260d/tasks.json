@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Thread FileDetail metadata through the injection core",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add the FileDetail interface and a details: FileDetail[] field to State; make emitText push text/paged details alongside blocks; make the image and binary branches in injectFile push their details; and change injectFiles' return to expose blocks + details with a stripped-only text (delete the \\n\\n---\\n\\n concatenation). This is the data-structure foundation that the renderer and custom-message delivery consume.",
               "subtasks": [
                 {
@@ -41,7 +41,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "Add image/binary detail pushes and change injectFiles return shape (strip the --- concat)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -68,7 +68,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "input/before_agent_start split with one-shot pending stash",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"

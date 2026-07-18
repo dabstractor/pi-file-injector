@@ -722,6 +722,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
       // Align with the text path's empty-file handling: emit a note block, attach nothing.
       const f5Block = formatEmptyImageBlock(abs);
       state.blocks.push(f5Block);
+      state.details.push({ path: abs, kind: "image", dimensionHint: undefined }); // §6.4 — empty-image detail (parallel to the block push)
       subtract(state, Math.ceil(f5Block.length / 4)); // §5.6.2 — note consumes budget
     } else if (mime && hasValidImageMagic(buf, mime)) {
       // F3 — validate the ACTUAL bytes match the declared image type before attaching.
@@ -734,6 +735,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
         mimeType: resized?.mimeType ?? mime, // null => original mime
       });
       state.blocks.push(formatImageBlock(abs, resized)); // null => empty-hints <file name="ABS"></file>
+      state.details.push({ path: abs, kind: "image", dimensionHint: resized ? formatDimensionNote(resized) ?? undefined : undefined }); // §6.4 — image detail (dimensionHint from resize)
       subtract(state, estimateImageTokens(resized)); // §5.6.2 — image consumes budget (tile estimate; never paged)
     } else if (MD_EXTS.has(ext)) {
       // MARKDOWN (PRD §5.6) — text block + transitive imports. Markdown bypasses the §5.1 NUL/binary routing
@@ -746,6 +748,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
       // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014)
       const binBlock = formatBinaryBlock(abs);
       state.blocks.push(binBlock);
+      state.details.push({ path: abs, kind: "binary" }); // §6.4 — binary detail
       subtract(state, Math.ceil(binBlock.length / 4)); // §5.6.2 — note consumes budget
     } else {
       // PLAIN TEXT (PRD §5.1 + §5.5) — inline-vs-paged decision (lifted verbatim into emitText)
@@ -932,7 +935,7 @@ export async function injectFiles(
   imagesIn: ImageContent[],
   ctx: Ctx,
   bareAt = false, // §4.6 — markdown bare-@ enabled? (derived from cfg in the input handler; default false for direct unit tests)
-): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number }> {
+): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number; blocks: string[]; details: FileDetail[] }> {
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
   // null (right after compaction). Either → remaining = null → O-1 fallback: inject WHOLE
@@ -993,7 +996,7 @@ export async function injectFiles(
   const resolvedIdx = await processTokenStream(
     text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
 
-  if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0 }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
+  if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0, blocks: [], details: [] }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
   // Strip the #@ trigger from each inline marker — the PATH stays put as a readable reference. The
   // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
@@ -1009,8 +1012,9 @@ export async function injectFiles(
   for (const i of [...resolvedIdx].sort((a, b) => b - a)) {
     strippedText = strippedText.slice(0, i) + strippedText.slice(i + 2);
   }
-  const finalText = `${strippedText}\n\n---\n\n${state.blocks.join("\n\n")}`; // append below the stripped prompt (PRD §6.2)
-  return { text: finalText, images: state.images, injected: state.count, paged: state.paged };
+  // §6.4 — the user message is JUST the stripped prompt (no appended blocks, no `\n\n---\n\n`). The blocks +
+  // details are returned for the caller (P1.M1.T2.S1 stashes them for the before_agent_start custom message).
+  return { text: strippedText, images: state.images, injected: state.count, paged: state.paged, blocks: state.blocks, details: state.details };
 }
 
 /**
