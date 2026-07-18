@@ -63,7 +63,7 @@ Text uses Pi's native block format, the same one `@file` uses:
 
 That's what the model receives. You won't see it as raw text in the chat — each injected file renders as a green `read <path>` line (just like the `read` tool), with `ctrl+o` to expand. Your own message shows only what you typed.
 
-Images are matched by their real bytes, not just the extension. A text file renamed `fake.png` is injected as text, not attached as a broken image. An empty (0-byte) image attaches nothing.
+Images are matched by their real bytes, not just the extension. A text file renamed `fake.png` is injected as text, not attached as a broken image. The check cuts both ways: a real image saved with the wrong extension — a PNG named `photo.jpg`, say — is not attached, because its bytes don't match the `.jpg` signature; it's delivered as a binary note instead. Rename it to its real type to attach it. An empty (0-byte) image attaches nothing.
 
 ## Syntax
 
@@ -76,6 +76,8 @@ Images are matched by their real bytes, not just the extension. A text file rena
 ```text
 . , ; : ! ? " ' ) ] } >
 ```
+
+**Extensions are exact.** A reference that already ends in a file extension is matched by that exact name. A missing `#@report.md.bak` is left as written — it never silently resolves to an existing `report.md`, so the model never receives a different file than the one you named. (Markdown formatting glued to a name is different: emphasis like `*@b.md*` or `**@b.md**` is still trimmed, so the file resolves.)
 
 **Paths:** relative (against your current directory), absolute (`#@/etc/hosts`), tilde (`#@~/notes.md`), and `../` all work.
 

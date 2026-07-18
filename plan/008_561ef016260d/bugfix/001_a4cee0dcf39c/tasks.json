@@ -140,7 +140,7 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Test-suite hardening & changeset-level documentation sync",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Wire the two standalone regression harnesses (import-behavior.test.mjs, relative-imports.test.mjs) into `npm test` so the truncation behavior (and the relative-imports bug classes) are gated going forward — this must land AFTER the Issue 1 test 4f fix so the newly-wired suite is green. Then perform the changeset-level documentation sweep (Mode B): update README.md to reflect the Issue 1 behavior change and record that the Issue 4 image magic-byte sniff is the intentional contract. Issue 4 itself needs no code change (the README already documents the stricter behavior; the PRD is read-only).",
           "tasks": [
             {
@@ -172,14 +172,14 @@
               "type": "Task",
               "id": "P1.M3.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Mode B final documentation sweep across the whole changeset. Update README.md to reflect (a) the Issue 1 behavior change (extended tokens like X.md.bak are now exact-only and left verbatim, not silently truncated to the base .md), and (b) explicitly note that the Issue 4 image magic-number sniff is the intentional, documented contract (the README already states images are matched by real bytes — verify and cross-reference). No PRD.md edit (read-only).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T2.S1",
                   "title": "Update README.md for Issue 1 behavior change + Issue 4 intentional-contract note",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
