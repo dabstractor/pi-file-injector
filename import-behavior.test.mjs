@@ -14,6 +14,7 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": PIPKG + "/dist/index.js",
     "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
+    "@earendil-works/pi-tui": PIPKG + "/node_modules/@earendil-works/pi-tui/dist/index.js",
   },
 });
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -34,19 +35,25 @@ const mk = (dir, rel, body) => {
 const ctxFor = (cwd) => ({ cwd, hasUI: false, isProjectTrusted: () => true, ui: { notify: () => {} } });
 const run = async (cwd, prompt, bareAt) => {
   const out = await mod.injectFiles(prompt, [], ctxFor(cwd), bareAt);
-  return out; // { text, images, injected, paged }
+  return out; // { text(stripped), images, injected, paged, blocks, details }
 };
-const has = (out, marker) => (out.text ?? "").includes(marker);
+const has = (out, marker) => (out.blocks ?? []).join("\n\n").includes(marker);
 const abs = (cwd, rel) => path.resolve(cwd, rel);
 
 // Drive the REAL input handler — the exact path pi takes. session_start loads cfg from the LIVE global
 // settings.json (so markdownBareAtImports is derived INSIDE the handler, not hardcoded). This catches any
 // config/depth wiring bug that a direct injectFiles(..., true) call would hide.
-function capture(event) { const cbs = []; mod.default({ on: (e, cb) => { if (e === event) cbs.push(cb); } }); return cbs; }
+function captureAll() {
+  const cbs = {};
+  mod.default({ on: (ev, cb) => { (cbs[ev] ??= []).push(cb); }, registerMessageRenderer: () => {} });
+  return cbs;
+}
 async function runHandler(cwd, prompt) {
-  for (const cb of capture("session_start")) await cb({}, { cwd, isProjectTrusted: () => true });
-  const inputCb = capture("input").pop();
-  return await inputCb({ text: prompt, source: "interactive", images: [] }, ctxFor(cwd));
+  const cbs = captureAll();
+  for (const cb of (cbs.session_start ?? [])) await cb({}, { cwd, isProjectTrusted: () => true });
+  const out = await cbs.input[0]({ text: prompt, source: "interactive", images: [] }, ctxFor(cwd));
+  const msg = cbs.before_agent_start ? await cbs.before_agent_start[0]({}, ctxFor(cwd)) : undefined;
+  return { out, msg };
 }
 
 // ===========================================================================
@@ -209,9 +216,9 @@ await test("5b: SAME via the REAL handler path (cfg from live settings → bareA
   const r = fsSync.mkdtempSync(path.join(os.tmpdir(), "d0-"));
   mk(r, "spec/PRD.md", "*End of PRD. Continue with @ARCHITECTURE.md.*\n");
   mk(r, "spec/ARCHITECTURE.md", "ARCH-MARKER");
-  const o = await runHandler(r, "#@spec/PRD.md");
-  assert(o.action === "transform" && has(o, "ARCH-MARKER"),
-    `real handler path: depth-0 bare-@ must import. action=${o.action}`);
+  const { out, msg } = await runHandler(r, "#@spec/PRD.md");
+  assert(out.action === "transform" && msg.message.content.includes("ARCH-MARKER"),
+    `real handler path: depth-0 bare-@ must import. action=${out.action}`);
 });
 
 await test("5c: depth-0 plain bare-@ (own line, no glue) → imports", async () => {
@@ -224,8 +231,8 @@ await test("5c: depth-0 plain bare-@ (own line, no glue) → imports", async () 
 await test("5d: depth-0 bare-@ ALSO via the real handler path (plain, no glue)", async () => {
   const r = fsSync.mkdtempSync(path.join(os.tmpdir(), "d0-"));
   mk(r, "a.md", "A\n\n@b.md\n"); mk(r, "b.md", "B-MARKER");
-  const o = await runHandler(r, "#@a.md");
-  assert(o.action === "transform" && has(o, "B-MARKER"), `real handler: depth-0 bare-@ must import. action=${o.action}`);
+  const { out, msg } = await runHandler(r, "#@a.md");
+  assert(out.action === "transform" && msg.message.content.includes("B-MARKER"), `real handler: depth-0 bare-@ must import. action=${out.action}`);
 });
 
 await test("5e: NO asymmetry — depth-0 AND depth-1 bare-@ BOTH honored (setting on)", async () => {

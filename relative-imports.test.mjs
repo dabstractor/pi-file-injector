@@ -44,6 +44,7 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": PIPKG + "/dist/index.js",
     "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
+    "@earendil-works/pi-tui": PIPKG + "/node_modules/@earendil-works/pi-tui/dist/index.js",
   },
 });
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -76,11 +77,13 @@ const blocksRel = (text, root) =>
 // Count <file name="ABS"> occurrences for a given absolute path.
 const countAbs = (text, abs) =>
   (text.match(new RegExp('<file name="' + abs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+// Join the result's blocks into one string for block-content reads (blocks left out.text in P1.M1).
+const blocksText = (r) => (r?.blocks ?? []).join("\n\n");
 
 // Capture the factory's handlers for the REAL input path (session_start loads cfg → input derives bareAt).
 function captureHandlers() {
-  const cbs = { input: [], session_start: [] };
-  mod.default({ on: (ev, cb) => { cbs[ev]?.push(cb); } });
+  const cbs = { input: [], session_start: [], before_agent_start: [] };
+  mod.default({ on: (ev, cb) => { cbs[ev]?.push(cb); }, registerMessageRenderer: () => {} });
   return cbs;
 }
 
@@ -258,9 +261,9 @@ await test("C1: nested file imports same-name file → file-relative copy wins, 
   mk(root, "dir/b.md", "B-FILE-RELATIVE");   // correct target (the importing file's dir)
   mk(root, "b.md", "B-CWD-ROOT");            // wrong target (cwd) — must NEVER be injected
   const out = await run(root, "Read #@dir/a.md");
-  assert(has(out.text, "B-FILE-RELATIVE"), `expected dir/b.md (file-relative); marker absent. injected=${out.injected}`);
-  assert(!has(out.text, "B-CWD-ROOT"), "BUG: resolved the cwd-root copy — that is cwd resolution, NOT file-relative");
-  assert(countAbs(out.text, path.join(root, "b.md")) === 0, "cwd-root b.md must have ZERO blocks");
+  assert(has(blocksText(out), "B-FILE-RELATIVE"), `expected dir/b.md (file-relative); marker absent. injected=${out.injected}`);
+  assert(!has(blocksText(out), "B-CWD-ROOT"), "BUG: resolved the cwd-root copy — that is cwd resolution, NOT file-relative");
+  assert(countAbs(blocksText(out), path.join(root, "b.md")) === 0, "cwd-root b.md must have ZERO blocks");
 });
 
 await test("C2: user's exact deep scenario — #@directory/otherdir/some/file.md → #@file2.md resolves in that dir", async () => {
@@ -269,8 +272,8 @@ await test("C2: user's exact deep scenario — #@directory/otherdir/some/file.md
   mk(root, "directory/otherdir/some/file2.md", "FILE2-CORRECT");  // file-relative (correct)
   mk(root, "file2.md", "FILE2-WRONG-CWD");                        // cwd-root (wrong)
   const out = await run(root, "Read #@directory/otherdir/some/file.md");
-  assert(has(out.text, "FILE2-CORRECT"), `nested relative import must resolve in the importing file's dir; injected=${out.injected}`);
-  assert(!has(out.text, "FILE2-WRONG-CWD"), "BUG: the cwd-root file2.md was chosen instead of the file-relative one");
+  assert(has(blocksText(out), "FILE2-CORRECT"), `nested relative import must resolve in the importing file's dir; injected=${out.injected}`);
+  assert(!has(blocksText(out), "FILE2-WRONG-CWD"), "BUG: the cwd-root file2.md was chosen instead of the file-relative one");
 });
 
 await test("C3: #@../sibling.md from a nested file resolves up-and-over (relative to the importing file)", async () => {
@@ -278,7 +281,7 @@ await test("C3: #@../sibling.md from a nested file resolves up-and-over (relativ
   mk(root, "dir/inner.md", "Inner\n\nSee #@../sibling.md.\n");
   mk(root, "sibling.md", "SIBLING-UP-AND-OVER");
   const out = await run(root, "Read #@dir/inner.md");
-  assert(has(out.text, "SIBLING-UP-AND-OVER"), `../ from the importing file's dir must resolve; injected=${out.injected}`);
+  assert(has(blocksText(out), "SIBLING-UP-AND-OVER"), `../ from the importing file's dir must resolve; injected=${out.injected}`);
 });
 
 await test("C4: multi-level chain — each level resolves relative to its OWN dir; a root same-name file never wins", async () => {
@@ -288,8 +291,8 @@ await test("C4: multi-level chain — each level resolves relative to its OWN di
   mk(root, "dir/c.md", "C-DEEP");            // correct chain target
   mk(root, "c.md", "C-ROOT");                // wrong: must never win at any level
   const out = await run(root, "Read #@dir/a.md");
-  assert(has(out.text, "C-DEEP"), `chain must reach dir/c.md; injected=${out.injected}`);
-  assert(!has(out.text, "C-ROOT"), "BUG: a root same-name file leaked into the chain — level was resolved cwd-relative");
+  assert(has(blocksText(out), "C-DEEP"), `chain must reach dir/c.md; injected=${out.injected}`);
+  assert(!has(blocksText(out), "C-ROOT"), "BUG: a root same-name file leaked into the chain — level was resolved cwd-relative");
 });
 
 await test("C5: extension shorthand from a nested dir (#@api → nested/api.md, NOT root/api.md)", async () => {
@@ -298,8 +301,8 @@ await test("C5: extension shorthand from a nested dir (#@api → nested/api.md, 
   mk(root, "dir/api.md", "API-NESTED");
   mk(root, "api.md", "API-ROOT");
   const out = await run(root, "Read #@dir/notes.md");
-  assert(has(out.text, "API-NESTED"), `shorthand must resolve nested/api.md; injected=${out.injected}`);
-  assert(!has(out.text, "API-ROOT"), "BUG: shorthand fell back to the cwd-root api.md");
+  assert(has(blocksText(out), "API-NESTED"), `shorthand must resolve nested/api.md; injected=${out.injected}`);
+  assert(!has(blocksText(out), "API-ROOT"), "BUG: shorthand fell back to the cwd-root api.md");
 });
 
 await test("C6: .markdown fallback from a nested dir", async () => {
@@ -307,7 +310,7 @@ await test("C6: .markdown fallback from a nested dir", async () => {
   mk(root, "dir/notes.md", "Notes\n\n#@api\n");
   mk(root, "dir/api.markdown", "API-MARKDOWN-NESTED");
   const out = await run(root, "Read #@dir/notes.md");
-  assert(has(out.text, "API-MARKDOWN-NESTED"), `.markdown fallback must resolve relative to the nested dir; injected=${out.injected}`);
+  assert(has(blocksText(out), "API-MARKDOWN-NESTED"), `.markdown fallback must resolve relative to the nested dir; injected=${out.injected}`);
 });
 
 await test("C7: cwd independence — absolute top-level token + nested relative import resolves file-relative", async () => {
@@ -318,7 +321,7 @@ await test("C7: cwd independence — absolute top-level token + nested relative 
   // and the nested #@child.md must STILL resolve relative to dir/ (the importing file's dir).
   const elsewhere = newRoot();
   const out = await run(elsewhere, "Read #@" + path.join(root, "dir", "parent.md"));
-  assert(has(out.text, "CHILD-FILE-RELATIVE"),
+  assert(has(blocksText(out), "CHILD-FILE-RELATIVE"),
     `nested import must resolve file-relative regardless of ctx.cwd; injected=${out.injected}`);
 });
 
@@ -328,7 +331,7 @@ await test("C8: code-exempt — a #@file inside a fenced/inline code span in a n
   mk(root, "dir/b.md", "B-NESTED");          // would be the file-relative target
   mk(root, "b.md", "B-ROOT");                // would be the cwd-leak target
   const out = await run(root, "Read #@dir/a.md");
-  assert(!has(out.text, "B-NESTED") && !has(out.text, "B-ROOT"),
+  assert(!has(blocksText(out), "B-NESTED") && !has(blocksText(out), "B-ROOT"),
     `a #@ inside code must be inert — neither nested nor root copy may be injected; injected=${out.injected}`);
   assert(out.injected === 1, `only a.md itself; got injected=${out.injected}`);
 });
@@ -338,8 +341,8 @@ await test("C9: missing relative import → verbatim marker, NO cwd fallback to 
   mk(root, "dir/a.md", "A\n\nSee #@ghost.md.\n");
   mk(root, "ghost.md", "GHOST-ROOT");        // exists at cwd-root ONLY; must NOT be chosen as a fallback
   const out = await run(root, "Read #@dir/a.md");
-  assert(has(out.text, "#@ghost.md"), "the missing relative-import marker must be left VERBATIM");
-  assert(!has(out.text, "GHOST-ROOT"), "BUG: missing-in-dir import fell back to the cwd-root same-name file");
+  assert(has(blocksText(out), "#@ghost.md"), "the missing relative-import marker must be left VERBATIM");
+  assert(!has(blocksText(out), "GHOST-ROOT"), "BUG: missing-in-dir import fell back to the cwd-root same-name file");
   assert(out.injected === 1, `only a.md; got injected=${out.injected}`);
 });
 
@@ -350,8 +353,8 @@ await test("C10: dedup across subtrees — a shared dependency imported from two
   mk(root, "dir/shared.md", "SHARED-ONCE");
   mk(root, "index.md", "Index\n\n#@dir/a.md\n#@dir/b.md\n");
   const out = await run(root, "Read #@index.md");
-  assert(countAbs(out.text, path.join(root, "dir", "shared.md")) === 1,
-    `shared.md must be injected exactly once across both subtrees; blocks=${blocksRel(out.text, root)}`);
+  assert(countAbs(blocksText(out), path.join(root, "dir", "shared.md")) === 1,
+    `shared.md must be injected exactly once across both subtrees; blocks=${blocksRel(blocksText(out), root)}`);
 });
 
 await test("C11: cycle terminates — a.md→b.md→a.md resolves file-relative and stops (dedup-bounded)", async () => {
@@ -359,8 +362,8 @@ await test("C11: cycle terminates — a.md→b.md→a.md resolves file-relative 
   mk(root, "dir/a.md", "A\n\n#@b.md\n");
   mk(root, "dir/b.md", "B\n\n#@a.md\n");
   const out = await run(root, "Read #@dir/a.md");
-  assert(countAbs(out.text, path.join(root, "dir", "a.md")) === 1, "a.md injected once (cycle dedups)");
-  assert(countAbs(out.text, path.join(root, "dir", "b.md")) === 1, "b.md injected once");
+  assert(countAbs(blocksText(out), path.join(root, "dir", "a.md")) === 1, "a.md injected once (cycle dedups)");
+  assert(countAbs(blocksText(out), path.join(root, "dir", "b.md")) === 1, "b.md injected once");
 });
 
 await test("C12: relative import resolving OUTSIDE cwd but inside the importing file's parent (../shared) is allowed", async () => {
@@ -368,7 +371,7 @@ await test("C12: relative import resolving OUTSIDE cwd but inside the importing 
   mk(root, "sub/host.md", "Host\n\n#@../shared/lib.md\n");
   mk(root, "shared/lib.md", "LIB-OUTSIDE-CWD"); // outside cwd-relative-to-subdir, inside host's parent's sibling
   const out = await run(root, "Read #@sub/host.md");
-  assert(has(out.text, "LIB-OUTSIDE-CWD"), `../shared import relative to the importing file must be allowed; injected=${out.injected}`);
+  assert(has(blocksText(out), "LIB-OUTSIDE-CWD"), `../shared import relative to the importing file must be allowed; injected=${out.injected}`);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -388,7 +391,7 @@ await test("D1: the user's exact case — first imported file uses bare @ → ho
   mk(root, "imp3.md", "Imp3 imports #@imp1.md\n");
   // main2.md (bare-@ entry) must pull in the SAME chain as main.md (#@ entry).
   const out = await run(root, "Check out #@main2.md", true);
-  const got = blocksRel(out.text, root).sort();
+  const got = blocksRel(blocksText(out), root).sort();
   assert(JSON.stringify(got) === JSON.stringify(["imp1.md", "imp2.md", "imp3.md", "main2.md"]),
     `bare-@ entry must import the whole chain; got [${got.join(", ")}]. injected=${out.injected}`);
 });
@@ -399,8 +402,8 @@ await test("D2: bare @ works at EVERY depth (no first-level asymmetry): @→@→
   mk(root, "b.md", "B-MARKER\n\n@c.md\n");              // depth-1 file, bare @
   mk(root, "c.md", "C-MARKER");                         // depth-2 leaf
   const out = await run(root, "#@a.md", true);
-  assert(has(out.text, "A-MARKER") && has(out.text, "B-MARKER") && has(out.text, "C-MARKER"),
-    `bare @ must work at depth 0→1 too. A=${has(out.text,"A-MARKER")} B=${has(out.text,"B-MARKER")} C=${has(out.text,"C-MARKER")}. injected=${out.injected}`);
+  assert(has(blocksText(out), "A-MARKER") && has(blocksText(out), "B-MARKER") && has(blocksText(out), "C-MARKER"),
+    `bare @ must work at depth 0→1 too. A=${has(blocksText(out),"A-MARKER")} B=${has(blocksText(out),"B-MARKER")} C=${has(blocksText(out),"C-MARKER")}. injected=${out.injected}`);
 });
 
 await test("D3: first-level bare-@ COMBINED with relative resolution (nested first file, bare @, relative target)", async () => {
@@ -409,8 +412,8 @@ await test("D3: first-level bare-@ COMBINED with relative resolution (nested fir
   mk(root, "dir/nested-target.md", "NESTED-RELATIVE");      // correct (file-relative)
   mk(root, "nested-target.md", "ROOT-RELATIVE");            // wrong (cwd) — must NOT win
   const out = await run(root, "#@dir/entry.md", true);
-  assert(has(out.text, "NESTED-RELATIVE"), `first-level bare @ must resolve file-relative; injected=${out.injected}`);
-  assert(!has(out.text, "ROOT-RELATIVE"), "BUG: first-level bare @ resolved cwd-relative instead of file-relative");
+  assert(has(blocksText(out), "NESTED-RELATIVE"), `first-level bare @ must resolve file-relative; injected=${out.injected}`);
+  assert(!has(blocksText(out), "ROOT-RELATIVE"), "BUG: first-level bare @ resolved cwd-relative instead of file-relative");
 });
 
 await test("D4: setting OFF → bare @ is inert in the first AND every imported file (only #@ imports)", async () => {
@@ -418,7 +421,7 @@ await test("D4: setting OFF → bare @ is inert in the first AND every imported 
   mk(root, "a.md", "A-MARKER\n\n@b.md\n");              // bare @, setting OFF → must NOT import
   mk(root, "b.md", "B-MARKER");
   const out = await run(root, "#@a.md", false);
-  assert(!has(out.text, "B-MARKER"), `with markdownBareAtImports OFF, bare @ in markdown must be inert`);
+  assert(!has(blocksText(out), "B-MARKER"), `with markdownBareAtImports OFF, bare @ in markdown must be inert`);
   assert(out.injected === 1, `only a.md; got injected=${out.injected}`);
 });
 
@@ -429,7 +432,9 @@ await test("D4: setting OFF → bare @ is inert in the first AND every imported 
 async function runViaHandler(root, prompt) {
   const cbs = captureHandlers();
   for (const cb of cbs.session_start) await cb({}, { cwd: root, isProjectTrusted: () => true });
-  return cbs.input[0]({ text: prompt, source: "interactive", images: [] }, ctxFor(root));
+  const out = await cbs.input[0]({ text: prompt, source: "interactive", images: [] }, ctxFor(root));
+  const msg = cbs.before_agent_start ? await cbs.before_agent_start[0]({}, ctxFor(root)) : undefined;
+  return { out, msg };
 }
 
 await test("D5: real handler + hermetic project config ON → first-level bare @ honored end-to-end", async () => {
@@ -438,9 +443,9 @@ await test("D5: real handler + hermetic project config ON → first-level bare @
   mk(root, "imp1.md", "Imp1 imports @imp2.md\n");
   mk(root, "imp2.md", "Imp2 leaf\n");
   mk(root, ".pi/file-injector.json", JSON.stringify({ markdownBareAtImports: true })); // hermetic ON
-  const out = await runViaHandler(root, "Check out #@main2.md");
+  const { out, msg } = await runViaHandler(root, "Check out #@main2.md");
   assert(out.action === "transform", `handler must transform; got ${out.action}`);
-  const got = blocksRel(out.text, root).sort();
+  const got = blocksRel(msg.message.content, root).sort();
   assert(JSON.stringify(got) === JSON.stringify(["imp1.md", "imp2.md", "main2.md"]),
     `handler with cfg ON must honor the first-level bare @; got [${got.join(", ")}]`);
 });
@@ -466,8 +471,8 @@ await test("D7: real handler + hermetic project config OFF → first-level bare 
   mk(root, "main2.md", "Main imports @imp1.md\n");
   mk(root, "imp1.md", "Imp1\n");
   mk(root, ".pi/file-injector.json", JSON.stringify({ markdownBareAtImports: false })); // hermetic OFF
-  const out = await runViaHandler(root, "Check out #@main2.md");
-  const got = blocksRel(out.text, root);
+  const { out, msg } = await runViaHandler(root, "Check out #@main2.md");
+  const got = blocksRel(msg.message.content, root);
   assert(JSON.stringify(got) === JSON.stringify(["main2.md"]),
     `with cfg OFF the handler must not honor bare @; got [${got.join(", ")}]`);
 });
@@ -485,14 +490,14 @@ await test("E1: top-level user token is cwd-relative (#@a.md resolves against ct
   mk(root, "a.md", "TOP-LEVEL-A");
   // ctx.cwd is `root`; there is no "importing file", so resolution MUST be against root (cwd).
   const out = await run(root, "Read #@a.md");
-  assert(has(out.text, "TOP-LEVEL-A"), `top-level #@a.md must resolve against cwd; injected=${out.injected}`);
+  assert(has(blocksText(out), "TOP-LEVEL-A"), `top-level #@a.md must resolve against cwd; injected=${out.injected}`);
 });
 
 await test("E2: top-level bare @ is NEVER injected even with bareAt on (prompt is #@-only forever)", async () => {
   const root = newRoot();
   mk(root, "a.md", "A-SHOULD-NOT-INJECT");
   const out = await run(root, "Read @a.md", true);   // bare @ at the PROMPT, bareAt on
-  assert(!has(out.text, "A-SHOULD-NOT-INJECT"), `a bare @ in the PROMPT must never be injected (markdown-only opt-in)`);
+  assert(!has(blocksText(out), "A-SHOULD-NOT-INJECT"), `a bare @ in the PROMPT must never be injected (markdown-only opt-in)`);
   assert(out.injected === 0, `nothing should be injected; got injected=${out.injected}`);
 });
 
@@ -500,7 +505,7 @@ await test("E3: top-level absolute and tilde tokens ARE allowed (contrast with m
   const root = newRoot();
   mk(root, "abs.md", "ABS-OK");
   const out = await run(root, "Read #@" + path.join(root, "abs.md"));
-  assert(has(out.text, "ABS-OK"), `top-level absolute paths must resolve (only markdown is relative-only); injected=${out.injected}`);
+  assert(has(blocksText(out), "ABS-OK"), `top-level absolute paths must resolve (only markdown is relative-only); injected=${out.injected}`);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
