@@ -14,7 +14,9 @@ Pi has no simple, consistent way to say **"put this entire file into the model's
 - Worse, `@file` is **overloaded**: it means "autocomplete a path" interactively *and* "inject a file" at the CLI. Users cannot express a clear, unconditional "inject the whole file" intent in either context without it being ambiguous.
 
 ### Solution
-A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery** trigger: whatever file the user names, the model receives all of it. When the user writes `#@filename.txt` anywhere in a prompt and submits, the extension reads the file and delivers it into the prompt **before** the model sees it. If the file fits the model's remaining context it is injected whole; if it exceeds the remaining context it is delivered in pages the model reads through the `read` tool (see §5.5). No configuration either way.
+A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery** trigger: whatever file the user names, the model receives all of it. When the user writes `#@filename.txt` anywhere in a prompt and submits, the extension reads the file and delivers it to the model **before** the model sees it. If the file fits the model's remaining context it is delivered whole; if it exceeds the remaining context it is delivered in pages the model reads through the `read` tool (see §5.5). No configuration either way.
+
+**How delivery works (and how it looks).** Files are *not* pasted into the user's prompt text. Instead the extension delivers them as a single **custom message** (`customType: "fileInjector.injected"`) that a `before_agent_start` handler returns after the user message is built (§6.2). That custom message **participates in LLM context** — Pi's `convertToLlm()` maps `role:"custom"` to a user-role message — so the model receives every `<file name="/abs/path">…</file>` block it always did, byte-identical in content (§13.7 documents the one consequence: the model's input is now two user messages instead of one). Simultaneously the extension **registers a `MessageRenderer`** for that `customType` (§6.3) that draws the injected files in the chat exactly like the built-in `read` tool: a green box (theme color `toolSuccessBg`) showing **one `read <path>` line per file** when collapsed, expanding on `ctrl+o` to the full file contents — the same collapse/expand affordance the `[skill]` block uses, but green and one-line-per-file. To the end user it is indistinguishable from the agent having called `read` on each file itself; the only difference is that the files are attached at submit time instead of after a model round-trip. The user's own message bubble shows only what they typed (the `#@` triggers are stripped to bare paths, §6.4) — never the raw file contents.
 
 `#@` is deliberately a **different symbol** from `@` so there is zero ambiguity:
 - `@file` → Pi's existing behavior (autocomplete interactively; inject at CLI). Left untouched.
@@ -26,7 +28,8 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - **One syntax, every context.** Because the extension hooks the `input` event (which fires for *every* prompt — interactive typed messages *and* the initial CLI/`-p` message), `#@file` works identically whether you launch with it or type it mid-session. (See §3.)
 - **Explicit intent.** `#@` can't be confused with a path-completion trigger or an email-style `@mention`. The user is saying "give the model this whole file," and that's exactly what happens.
 - **Composable for docs.** `#@spec.md` pulls in everything `spec.md` references with the *same* `#@` directive — spec-and-its-dependencies in one token, loop-safe via dedup (§5.6).
-- **Zero config by default.** No setup is required — `#@` works out of the box. There is one opt-in setting (`markdownBareAtImports`, §4.6) for users who want a bare `@file.md` to import inside markdown too; without it, behavior is fixed and predictable.
+- **Reads like a `read`, not like a paste.** Injected files render in the chat as compact, green, collapsible `read <path>` lines (one per file) — visually identical to the built-in `read` tool's completed-call rendering and to how `[skill]` blocks collapse/expand — while the model still receives the full `<file>` contents. The user's message bubble stays clean (§6.3). No config; it is how `#@` always looks.
+- **Zero config by default.** No setup is required — `#@` works out of the box. The inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5), and there are no knobs for format, image handling, paging, budget, or display. The single user-facing setting is the opt-in `markdownBareAtImports` (§4.6), off by default.
 
 ### Tagline
 > "`#@file`: the whole file, every time, everywhere."
@@ -43,6 +46,7 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 5. **Non-destructive & loop-safe.** Leaves the user's original prompt intact; never breaks a prompt on an error; never re-expands its own or other extensions' injected messages.
 6. **Markdown transitive imports.** A delivered markdown file (`.md`/`.markdown`) is scanned for further `#@<path>` directives; each resolves **relative to that markdown file's directory**, is delivered as its own block, and is itself scanned if markdown. **An import may omit its `.md`/`.markdown` extension** — an extensionless token (e.g. `#@PRD`) resolves to `PRD.md` or `PRD.markdown` when no bare file of that name exists, treated as an exact match (markdown imports only; top-level tokens stay exact-match, §4.4). Recursion is bounded by **dedup — each absolute path is injected at most once across the whole prompt** (including paths already present as `<file>` blocks). Absolute/tilde paths inside markdown are ignored; `#@` inside fenced or inline code is ignored. An opt-in setting (`markdownBareAtImports`, §4.6) additionally treats a bare `@<path>` (no `#`) as a markdown import, with all the same rules. All other rules (file-type handling, paging, budget) apply to imported files unchanged.
 7. **Total-size context accounting.** A single shared context-budget accumulator spans the entire prompt — every top-level token **and every transitive import** — with each delivered file (text whole/head, image, binary note) subtracting its cost *before* the next file is decided, so the inline-vs-paged decision is made against the running total of all files injected so far, not per-file in isolation (§5.6.2).
+8. **Compact, read-tool-style chat display.** Injected files render in the chat as collapsible green `read <path>` lines — one per file — indistinguishable from the built-in `read` tool's completed-call rendering, expanding on `ctrl+o` to the full contents (the same affordance `[skill]` blocks use). This is achieved with **no core changes to Pi**: files are delivered as a single custom message returned from a `before_agent_start` handler (model still receives every `<file>` block), and a registered `MessageRenderer` draws the green box (§6). The user's message bubble shows only what they typed.
 
 ### Non-Goals
 - **No silent truncation.** `#@` never drops or caps file contents without telling the model. A file is either injected whole (when it fits remaining context) or delivered in full through paged reads (§5.5).
@@ -54,7 +58,8 @@ A new, dedicated syntax: **`#@<path>`**. It is an **unconditional file-delivery*
 - **No absolute/tilde markdown imports.** Markdown imports are relative-only by design (portability + a shared doc can't yank arbitrary home/system paths). Top-level user-prompt `#@` still allows absolute and `~/` paths (§4.4).
 - **No extension shorthand at the top level.** The `.md`/`.markdown` omission is a markdown-import convenience (authored in files, no live completion). Top-level `#@` tokens stay exact-match — the user has path autocomplete (§14) and types the full name.
 - **No replacement of `@`, `read`, or any built-in.** `#@` is purely additive.
-- **No custom TUI rendering.** Injected content appears in the user's message bubble normally.
+- **No change to what the model receives — only to message boundaries and display.** The model gets the same `<file>` blocks with the same contents as before; delivery moves them from the user-message text into a following custom (→ user-role) message so the TUI can render them compactly (§6, §13.7). No content is added, removed, or rewritten for the model.
+- **No custom *user-message* rendering, and no Pi core patch.** Compact display is achieved purely through the public custom-message + `MessageRenderer` APIs. The extension never monkeypatches Pi's `UserMessageComponent` or `parseSkillBlock`; it does not rely on the TUI recognizing `<file>` blocks (it does not).
 - **No config required to work.** `#@` injection needs no setup; the only setting is the opt-in `markdownBareAtImports` (§4.6). There are no toggles for format, image handling, paging, or context budget — those stay derived/fixed.
 
 ---
@@ -127,6 +132,53 @@ The built-in CLI `@file` path uses helpers that are **not** exported from the pa
 | `processImage(bytes, mime)` | ❌ internal | `resizeImage` instead |
 | `detectSupportedImageMimeTypeFromFile(path)` | ❌ internal | small inline MIME table (§5.2) |
 | `resolveReadPath(p, cwd)` (tilde + macOS Unicode-space) | ❌ internal | inline tilde expansion via `os.homedir()` (§4) |
+| `before_agent_start` event (return `{ message }`) | ✅ yes | **file delivery** — the custom message carrying all `<file>` blocks is returned here, appended after the user message, persisted, and sent to the LLM (§6.2) |
+| `registerMessageRenderer(customType, renderer)` | ✅ yes | **chat display** — draws the injected files as green `read <path>` lines (§6.3) |
+| `Box`, `Text`, `Markdown`, `Container`, `Spacer` (`@earendil-works/pi-tui`) | ✅ yes | the `Component`s the renderer returns (§6.3, §7) |
+| `Theme#fg/bg/bold` (passed to the renderer) | ✅ yes | styling (`toolSuccessBg`, `toolTitle`, `accent`, `dim`) (§6.3) |
+| `highlightCode`, `getLanguageFromPath`, `getMarkdownTheme` | ✅ yes | optional syntax highlighting for the expanded view (§6.3) |
+| `convertToLlm()` (custom→user mapping) | ❌ internal (Pi core) | relied upon, not imported: this is *why* a custom message reaches the model (§6.2). Documented behavior, stable contract. |
+
+### 3.4 How `#@` delivers files *and* renders them compactly (the two-mechanism model)
+
+`#@` does two things on submit, through two different public hooks, because **display** and **model delivery** are served by different parts of Pi's pipeline:
+
+```
+user submits prompt with #@file
+        │
+        ▼
+  AgentSession.prompt(text)
+        │
+        ├─► ★ input event ★  (this extension)
+        │      • detect #@ tokens, read+classify each file
+        │      • build the <file> blocks + per-file details
+        │      • strip #@ from the prompt (paths remain)
+        │      • STASH {blocks, details} in instance state
+        │      • return { action:"transform", text: strippedPrompt, images }
+        │            (user message = ONLY what the user typed; no file bytes)
+        │
+        ├─► skill/template expansion on the (already stripped) text
+        │
+        ├─► build user message from stripped text + images
+        │
+        ├─► ★ before_agent_start event ★  (this extension)
+        │      • read the stashed {blocks, details}
+        │      • return { message: { customType:"fileInjector.injected",
+        │                             content: blocks, display:true, details } }
+        │      • clear the stash
+        │      ──► Pi appends this custom message AFTER the user message,
+        │          persists it, and (via convertToLlm) sends it to the model
+        │          as a user-role message. The model sees every <file> block.
+        │
+        └─► agent loop  ──►  TUI renders messages in order:
+              [user bubble: stripped prompt]  then
+              [★ renderer for "fileInjector.injected" ★ → green box,
+                one `read <path>` per file, collapsible]
+```
+
+**Why two hooks, not one.** The `input` event is the *only* place an extension can rewrite the user's prompt text (so `#@` is stripped there). But the `input` handler's job is to return a transform; it cannot append *separate* messages in the right position, and it cannot register display. Pi appends a `before_agent_start` handler's returned `message` **after** the user message (verified in `prompt()`), persists it, and routes it to the LLM (`convertToLlm`, `role:"custom"`→user) — which is exactly the position and lifecycle injected files need. The stash is the handoff: `input` produces the work, `before_agent_start` publishes it. Full spec in §6; pseudocode in §9.
+
+**Why this is the only extension-level path to compact display.** The TUI collapses only `<skill>` blocks inside a user message — `parseSkillBlock()` is hard-coded in Pi core's `case "user"` renderer. There is **no** extension hook to collapse arbitrary `<file>` blocks that live *inside* user-message text. Therefore compact display *requires* the file bytes to live somewhere the TUI renders via a registered renderer — i.e. a custom message. Keeping the bytes in the user message (the old design) forces the full contents into the user bubble with no way to hide them. See §13.7 for the tradeoff.
 
 ---
 
@@ -364,11 +416,13 @@ The budget is cumulative over **every** delivered file in the prompt, not a per-
 
 ---
 
-## 6. Output Format & Assembly
+## 6. Output Format, Delivery & Chat Display
 
-### 6.1 Format: Pi-native `<file>` tags
+`#@` has three concerns that used to be one: **(A)** the *model-facing* format of each delivered file (unchanged — still Pi-native `<file>` tags), **(B)** *how* those blocks reach the model (new — as a custom message, not appended prompt text), and **(C)** *how* they render in the chat (new — green, collapsible `read` lines via a registered renderer). This section specifies all three.
 
-Mirror the exact format Pi's own CLI `@file` expansion emits (from `processFileArguments`), so the model sees identical structure regardless of source:
+### 6.1 Model-facing format: Pi-native `<file>` tags (unchanged)
+
+Each delivered file is still serialized exactly as Pi's own CLI `@file` expansion emits (from `processFileArguments`), so the model sees identical structure regardless of source. The only change is *where* the resulting strings live (the custom message's `content`, §6.2) — not their format.
 
 **Text file** →
 ```
@@ -377,7 +431,7 @@ Mirror the exact format Pi's own CLI `@file` expansion emits (from `processFileA
 </file>
 ```
 
-**Image file** → an `ImageContent` block is attached **and** a text reference tag is emitted:
+**Image file** → an `ImageContent` block is attached to the **user message** (via the `input` transform's `images`, §6.4) **and** a text reference tag is emitted in the custom-message content:
 ```
 <file name="/absolute/path/to/img.png"><optional dimension hints></file>
 ```
@@ -395,38 +449,104 @@ Mirror the exact format Pi's own CLI `@file` expansion emits (from `processFileA
 <file name="/absolute/path/to/huge.log"><paged: <len> chars; head delivered <injectedLines> complete lines; read the rest with the read tool at offset:<startLine>, limit:2000, incrementing offset by 2000 until done></file>
 ```
 
-Use the **absolute resolved path** as `name` (matches the CLI format).
+Use the **absolute resolved path** as `name` (matches the CLI format). All blocks for a prompt are concatenated (joined by `"\n\n"`) into the custom message's `content`.
 
-### 6.2 Assembly
+### 6.2 Delivery: a custom message returned from `before_agent_start`
+
+Files are delivered to the model as **one custom message** per prompt, returned from a `before_agent_start` handler. This is the public hook Pi provides for “inject a persistent message, stored in session, sent to the LLM” (verified: `prompt()` appends each handler's returned `message` to the turn's message list **after** the user message; `convertToLlm()` maps `role:"custom"` → a user-role message; the `message_end` path persists it as a `CustomMessageEntry`).
+
+**The custom message:**
+```ts
+{
+  customType: "fileInjector.injected",
+  content:   state.blocks.join("\n\n"),   // every <file> block (text/head/directive/binary/img-ref)
+  display:   true,                        // render in the TUI (§6.3)
+  details:   { files: fileDetails },       // per-file metadata for the renderer (§6.3)
+}
+```
+`fileDetails` is an array, **one entry per delivered file, in emission (pre-order depth-first) order**, each shaped:
+```ts
+interface FileDetail {
+  path: string;                 // absolute resolved path (the <file name=…>)
+  kind: "text" | "image" | "binary" | "paged";
+  chars?: number;               // text: content length; paged: full content length
+  lines?: number;               // text: total line count (for the “N lines” hint)
+  range?: string;               // paged: ":<startLine>-…" resume range, mirrors the read tool's range suffix
+  pagedHeadLines?: number;      // paged: complete lines delivered in the head
+  dimensionHint?: string;       // image: formatDimensionNote(resized) (e.g. "(resized to 1568×1044)")
+}
+```
+Details carry *only* metadata the renderer needs to draw lines and expansion; the **bytes** live in `content` (sent to the model) and are re-derived for display from `content`/`details` — never duplicated into the model input.
+
+**What the model receives** (after `convertToLlm`):
+```
+[ user:   "<stripped prompt — what the user typed, #@ removed, paths kept>"  + <injected images> ]
+[ user:   "<file name="/abs/a.ts">\n…\n</file>\n\n<file name="/abs/b.md">\n…\n</file>" ]
+                     └─ the custom message, mapped to a user-role message ─┘
+```
+I.e. the model sees the prompt, then every `<file>` block — the same content as before, now split across two user-role messages instead of concatenated into one. See §13.7.
+
+**Why one custom message (not one per file).** `BeforeAgentStartEventResult` carries a single `message` (singular); `emitBeforeAgentStart()` aggregates one per handler across handlers, but a single extension handler returns one. So all files for a prompt are packed into one custom message, and the **renderer** (§6.3) decomposes `details.files` into one `read <path>` line per file. Unit expand/collapse (the whole message expands together on `ctrl+o`) matches the `[skill]` block precedent.
+
+**Handoff via instance state.** The `input` handler does all file I/O and *stashes* `{ blocks, details }` on a closure variable; the `before_agent_start` handler reads and clears it. `prompt()` is sequential (`input` → … → `before_agent_start` → `runAgentPrompt`, all awaited in one call), so there is no race: by the time `before_agent_start` fires, the stash is populated. If the `input` handler short-circuited (`source==="extension"`, steering, or no `#@`), the stash stays empty and `before_agent_start` returns `undefined` — a no-op.
+
+**Ordering & persistence guarantees.**
+- Files always render *after* the user's message and *before* the assistant reply (they're a later entry in the same message list).
+- On session reload, the custom message is reloaded as a `CustomMessageEntry` and rendered through the same registered renderer (and re-sent to the model on continuation, exactly as the old appended text was).
+- Works in **every input context** (interactive, initial CLI/`-p`, RPC) because `before_agent_start` fires inside `prompt()` for all of them. In print/JSON mode there is no TUI, so the renderer is simply not called — but the custom message still delivers the files to the model.
+
+### 6.3 Chat display: a green, collapsible `read`-line box (the `MessageRenderer`)
+
+On `session_start` the extension registers:
+```ts
+pi.registerMessageRenderer("fileInjector.injected", (message, { expanded }, theme) => { … });
+```
+The renderer returns a `Component` (from `@earendil-works/pi-tui`) that **replicates the `read` tool's completed-call look**:
+
+- **Shell:** a `Box` with background `theme.bg("toolSuccessBg", t)` — the *same green* the `read` tool uses when a call succeeds (mirrors `ToolExecutionComponent`'s `bgFn` for a non-partial, non-error result). This is what makes reads look green; skills use `customMessageBg` (purple) instead.
+- **Collapsed (default):** **one line per file**, each identical in spirit to the read tool's `formatReadCall`:
+  ```
+  read <path><range> (ctrl+o to expand)
+  ```
+  built as `theme.fg("toolTitle", theme.bold("read")) + " " + theme.fg("accent", displayPath) + range + hint` — the exact colors and bolding the built-in `read` call line uses. `range` is empty for whole text/image/binary files and `":<startLine>-…"` for paged files (mirrors `formatReadLineRange`). For **images** the line appends `dimensionHint` (e.g. `read img.png (resized to 1568×1044)`). For **binary** files the line reads `read data.bin (binary — not injected)` so the model's note and the display agree. The `(ctrl+o to expand)` hint (`hint = theme.fg("dim", " (ctrl+o to expand)")`) is shown once for the whole box (like the `[skill]` block), not repeated per line. The expand key is hardcoded `ctrl+o` (the default binding, matching the user's example) because Pi's `keyText("app.tools.expand")` helper is internal and not importable; see §12.25.
+- **Expanded (`ctrl+o`):** each file's full delivered text renders below its `read` line. Text/code content is passed through `highlightCode(content, getLanguageFromPath(path))` when a language is detected, else `theme.fg("toolOutput", content)` — matching how the `read` tool's `formatReadResult` shows code. Paged files show their head block plus the paged-directive text verbatim (the model-driven paging is unaffected; this is just the expanded view of what was delivered). Images are **not** re-rendered here — they are already attached to the user message above (§6.4); the expanded view just repeats the `read <img>` reference line.
+- **Path display.** The renderer tildifies the absolute path for readability (leading `os.homedir()` → `~`), approximating the read tool's `renderToolPath`/`formatPathRelativeToCwdOrAbsolute` (those helpers are not exported from the package; tildification is the closest portable equivalent and is what the user's example showed — `read ~/.local/share/…/disk-passthrough-methods.md`).
+
+**Visual outcome (matches the user's example):**
+```
+ read a.ts (ctrl+o to expand)
+ read b.md
+ read ~/notes/img.png (resized to 1568×1044)
+```
+all on the green `toolSuccessBg` background, directly under the user's message bubble — indistinguishable from three completed `read` tool calls except that they appear at submit time with no model round-trip.
+
+**Defensive rendering.** If `details` is missing/malformed (e.g. an old session entry written before this feature), the renderer falls back to a single `read <n> files` line plus the raw `content` when expanded — it never throws (a renderer exception would fall through to Pi's default `[fileInjector.injected]` box, which is acceptable but not the goal).
+
+### 6.4 Assembly & shared state
 
 Maintain as **shared, mutable state across the entire prompt** (top-level tokens + every transitive markdown import — see §5.6):
-- `blocks: string[]` — the `<file>…</file>` strings, appended in **pre-order depth-first** emission order (a file's own block, then its imports' subtrees, before the next sibling).
-- `images: ImageContent[]` — seeded from `event.images ?? []`, appended to for each image.
-- `injectedSet: Set<string>` — resolved absolute paths **claimed** so far; seeded with any paths already present as `<file name="…">` blocks in the text (a prior copy or `@file`), so each path is injected at most once across the whole prompt.
+- `blocks: string[]` — the `<file>…</file>` strings, appended in **pre-order depth-first** emission order (a file's own block, then its imports' subtrees, before the next sibling). These become the custom message's `content` (§6.2).
+- `details: FileDetail[]` — per-file metadata, parallel to `blocks` emission order (text/head/directive/image-ref/binary each push their detail(s)).
+- `images: ImageContent[]` — seeded from `event.images ?? []`, appended to for each image. Returned on the `input` transform so they attach to the **user message**.
+- `injectedSet: Set<string>` — resolved absolute paths **claimed** so far; seeded with any paths already present as `<file name="…">` blocks in `event.text` (a user who pasted one, or a prior `@file`), so each path is injected at most once across the whole prompt.
 - `count: number` — files delivered (block appended or image attached), whole or paged, **spanning the whole recursion**; `0` means none.
 - `paged: number` — subset of `count` delivered via the §5.5 page path.
 - `remaining: number | null` — the single context-budget accumulator (§5.6.2); every emitted block subtracts from it.
 
-**Final text:** **append** all blocks below the user's prompt, separated by a horizontal rule, and **strip the trigger** (`#@`, or a bare `@` when `markdownBareAtImports` is on — §4.6) from each resolved marker — the **path** stays as a readable reference (the model gets the data from the appended `<file name="abs">` blocks, so the trigger is pure noise). This stripping happens in two places: (a) resolved **top-level** markers in the user prompt, and (b) resolved **import** markers inside each markdown file's content, *before* that content becomes its block (§5.6 step 4). Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are left byte-for-byte verbatim, `#@` included:
-
+**User-message text (the `input` transform).** **Strip the trigger** (`#@`, or a bare `@` when `markdownBareAtImports` is on — §4.6) from each resolved marker — the **path** stays as a readable reference (the model gets the bytes from the custom-message `<file>` blocks, so the trigger is pure noise; and the user's bubble now shows a clean `a.ts` reference instead of `#@a.ts`). This stripping happens in two places: (a) resolved **top-level** markers in the user prompt, and (b) resolved **import** markers inside each markdown file's content, *before* that content becomes its block (§5.6 step 4). Markers that did **not** resolve — missing / directory / read-error / deduped / absolute-or-tilde-in-markdown / inside-code — are left byte-for-byte verbatim, `#@` included. The user message is **never** appended with file bytes (that was the old design); it is just the stripped prompt:
 ```
-<original prompt text, unchanged>
-
----
-
-<block 1>
-
-<block 2>
-...
+<original prompt text, #@ stripped to paths, otherwise unchanged>
 ```
 
-> **Why append, not inline-replace?** Files can be large (this is unconditional). Appending keeps the user's prose readable in the transcript and is the least surprising transformation. The `#@` trigger is stripped from each injected reference (the path stays); failed tokens keep their `#@` verbatim.
+> **Why strip-and-reference instead of append?** Two reasons. (1) The bytes now live in the custom message (§6.2), so appending them to the prompt too would duplicate them for the model. (2) Keeping the user's prose clean in the bubble is the whole point of the display feature. The bare path left behind is a useful, honest reference ("the model has `a.ts`"); failed tokens keep their `#@` so the user can see nothing was injected.
 
-**Final images:** the accumulated `images` array (unchanged if none).
+**Images** are returned on the `input` transform (`images: finalImages`) so they attach to the user message (as today); the custom message carries only their text reference tag.
 
-**Return:**
-- `count > 0` → `return { action: "transform", text: finalText, images: finalImages };`
-- else → `return { action: "continue" };` (prompt preserved byte-for-byte).
+**Two returns (not one).**
+- `input` handler: `count > 0` → stash `{ blocks, details }`, notify, and `return { action: "transform", text: strippedPrompt, images: finalImages }`; else `return { action: "continue" }` (prompt preserved byte-for-byte, no stash).
+- `before_agent_start` handler: if a stash exists → `return { message: { customType: "fileInjector.injected", content: blocks.join("\n\n"), display: true, details: { files: details } } }` and clear the stash; else `return undefined`.
+
+The renderer is registered once on `session_start` (§6.3).
 
 ---
 
@@ -440,7 +560,12 @@ import {
   formatDimensionNote,  // (resized: ResizedImage) => string | undefined
   CONFIG_DIR_NAME,      // project-local config dir name (".pi") — §4.6 config path
   getAgentDir,          // global agent config dir (~/.pi/agent) — §4.6 config path
+  // §6.3 display helpers (all exported from the package):
+  highlightCode,        // (code: string, lang: string) => string[] — syntax-highlight expanded code
+  getLanguageFromPath,  // (path: string) => string | undefined — detect language for highlighting
 } from "@earendil-works/pi-coding-agent";
+// §6.3 the Component types the MessageRenderer returns (the example extensions import these):
+import { Box, Text, Markdown, type Component } from "@earendil-works/pi-tui";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -478,6 +603,54 @@ type InputEventResult =
 ```
 `transform`s chain across handlers (each sees the previous output); return `continue` when you change nothing.
 
+**`before_agent_start` event contract (delivery — §6.2):**
+```ts
+interface BeforeAgentStartEvent {
+  type: "before_agent_start";
+  prompt: string;            // the (already input-transformed, skill/template-expanded) user text
+  images?: ImageContent[];   // attached images
+  systemPrompt: string;
+  systemPromptOptions: BuildSystemPromptOptions;
+}
+interface BeforeAgentStartEventResult {
+  message?: {                // SINGULAR — one per handler; all files for a prompt pack into this one message
+    customType: string;      // "fileInjector.injected"
+    content: string | Content[];  // → <file> blocks; sent to the LLM (convertToLlm: role "custom" → user)
+    display?: boolean;       // true → render in TUI via the registered renderer
+    details?: unknown;       // { files: FileDetail[] } — renderer metadata, NOT sent as extra model text
+  };
+  systemPrompt?: string;     // (unused by this extension)
+}
+pi.on("before_agent_start", async (event, ctx) => {
+  // read + clear the stash populated by the input handler; return the custom message or undefined
+});
+```
+Verified in `prompt()`: the returned `message` is pushed onto the turn's message list **after** the user message, emitted as a `message_start`/`message_end` (role `"custom"`), and persisted via `appendCustomMessageEntry`. `emitBeforeAgentStart()` aggregates one `message` per handler across extensions. Returning `undefined` (no stash) is a no-op.
+
+**`registerMessageRenderer` + renderer contract (display — §6.3):**
+```ts
+type MessageRenderer<T = unknown> = (
+  message: CustomMessage<T>,
+  options: { expanded: boolean },   // mirrors the global ctrl+o toggle, like [skill] blocks
+  theme: Theme,                     // Pi Theme: theme.fg(key, text), theme.bg(key, text), theme.bold(text)
+) => Component | undefined;         // Component from @earendil-works/pi-tui (Box/Text/Markdown/…)
+pi.registerMessageRenderer("fileInjector.injected", (message, { expanded }, theme) => {
+  const files = (message.details as { files: FileDetail[] } | undefined)?.files ?? [];
+  // build a Box(theme.bg("toolSuccessBg", t)) with one `read <path>` Text line per file,
+  // and (when expanded) each file's highlighted/full content. See §6.3.
+  return box;
+});
+```
+Registered once on `session_start`. The `theme` argument is Pi's `Theme` (the same object `ToolExecutionComponent`/`SkillInvocationMessageComponent` use). Relevant theme keys: backgrounds `toolSuccessBg` (green, the read-tool look), `customMessageBg` (purple, skills — **not** used here); foregrounds `toolTitle`, `accent`, `dim`, `warning`, `toolOutput`. A thrown exception in the renderer is caught by `CustomMessageComponent`, which falls back to its default `[fileInjector.injected]` purple box — so the renderer must be defensive but cannot crash the TUI.
+
+**`Component` constructors used (from `@earendil-works/pi-tui`):**
+```ts
+class Box       implements Component { constructor(paddingX?, paddingY?, bgFn?: (t: string) => string); addChild(c: Component); clear(); }
+class Text      implements Component { constructor(text?: string, paddingX?, paddingY?, customBgFn?: (t: string) => string); setText(t: string); }
+class Markdown  implements Component { constructor(text, paddingX?, paddingY?, mdTheme?, opts?); }   // for prose-y expanded content if desired
+```
+(Box applies `bgFn` to all rendered children — exactly how `ToolExecutionComponent` paints its green background.)
+
 ---
 
 ## 8. File Structure
@@ -502,8 +675,9 @@ Internal sections (in order):
 2. Constants: `FILE_INJECT_RE`, `BARE_AT_RE`, `INLINE_CODE_RE`, `FENCE_OPEN_RE`, `MIME_BY_EXT`, `MD_EXTS`, `TRAILING_PUNCT`, `SETTINGS_KEY` (settings.json key), budget constants (`PAGED_THRESHOLD`, `MARGIN`, `HEAD_CHARS`, `READ_LIMIT`, `DEFAULT_RESERVE`, `IMAGE_FALLBACK_TOKENS`)
 3. Pure/IO helpers: `cleanToken`, `isAbsoluteOrTilde`, `expandTildeAndResolve`, `resolveImportPath` (exact → `.md`/`.markdown`), `isRegularFile`, `readConfig` (§4.6), `extOf`, `isBinary`, `headSlice`, `headStartLine`, `headCompleteLineCount`, `estimateImageTokens`, `formatTextFileBlock`, `formatImageBlock`, `formatBinaryBlock`, `formatPagedDirectiveBlock`
 4. Markdown helpers: `computeCodeRanges(content)` → sorted `[start,end][]`; `inCode(index, ranges)` → boolean
-5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,prefixLen,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`
-6. Factory: `export default function (pi: ExtensionAPI) { pi.on("session_start", …) (load `cfg`, §4.6); pi.on("input", ...) }`
+5. Core (shared state + recursion): `scanTokens(text, baseDir, opts, state)` → `{index,prefixLen,abs}[]`; `processTokenStream(...)` → resolved indices; `injectFile(abs, state, ctx)` → bool; `injectMarkdown(abs, content, state, ctx)`; `emitText(abs, content, state)`; `subtract(state, cost)`; plus `FileDetail` type and detail-push helpers (`pushTextDetail`, `pushPagedDetail`, `pushImageDetail`, `pushBinaryDetail`).
+6. Renderer: `renderInjectedMessage(message, { expanded }, theme)` → `Component` (§6.3); small display helpers (`tildify(abs)`, `readLine(detail, theme)`).
+7. Factory: `export default function (pi: ExtensionAPI) { let pending: { blocks; details } | null = null; pi.on("session_start", …) (load `cfg`, §4.6; **register the `MessageRenderer`** for `"fileInjector.injected"`, §6.3); pi.on("input", …) (read+classify+build blocks/details, strip `#@`, **stash `pending`**, return transform); pi.on("before_agent_start", …) (consume `pending` → return `{ message }`, §6.2) }`
 
 Target ~300–380 lines.
 
@@ -514,7 +688,8 @@ Target ~300–380 lines.
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resizeImage, formatDimensionNote, highlightCode, getLanguageFromPath, CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Box, Text, type Component } from "@earendil-works/pi-tui";   // §6.3 renderer components
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -537,10 +712,23 @@ const DEFAULT_RESERVE = 8192, IMAGE_FALLBACK_TOKENS = 2805;
 // §4.6 config (read on session_start, cached). markdownBareAtImports: also match bare "@path" in markdown.
 interface FileInjectorConfig { markdownBareAtImports?: boolean; }
 
+// §6.2/§6.3 per-file metadata carried in the custom message's `details` (one entry per delivered file).
+// Drives the renderer's collapsed `read <path>` lines; never sent to the model as separate text.
+interface FileDetail {
+  path: string;                 // absolute resolved path (the <file name=…>)
+  kind: "text" | "image" | "binary" | "paged";
+  chars?: number;               // text: content length; paged: FULL content length
+  lines?: number;               // text: total line count
+  range?: string;               // paged: ":<startLine>-…" resume range (read-tool style)
+  pagedHeadLines?: number;      // paged: complete lines delivered in the head
+  dimensionHint?: string;       // image: formatDimensionNote(resized)
+}
+
 // Shared, mutable state carried across the whole prompt (top-level tokens + imports).
 interface State {
-  blocks: string[];
-  images: ImageContent[];
+  blocks: string[];           // <file>…</file> strings → the custom message's content (§6.2)
+  details: FileDetail[];      // per-file metadata → the custom message's details (§6.3), parallel to blocks
+  images: ImageContent[];     // attached to the USER message via the input transform (§6.4)
   injectedSet: Set<string>;   // claimed absolute paths → dedup across the whole prompt
   remaining: number | null;   // single budget accumulator (§5.6.2)
   count: number;              // files delivered (whole + paged + image + binary note)
@@ -550,14 +738,23 @@ interface State {
 
 export default function (pi: ExtensionAPI) {
   let cfg: FileInjectorConfig = {};                       // loaded on session_start (§4.6)
-  pi.on("session_start", async (_e, ctx) => { cfg = await readConfig(ctx); });
+  let pending: { blocks: string[]; details: FileDetail[] } | null = null;   // input → before_agent_start handoff (§6.2)
+
+  pi.on("session_start", async (_e, ctx) => {
+    cfg = await readConfig(ctx);
+    // §6.3 register the chat renderer ONCE. Drawing is a no-op outside the TUI (print/json modes
+    // never call renderers), so no hasUI guard is needed for registration.
+    pi.registerMessageRenderer("fileInjector.injected", (message, opts, theme) =>
+      renderInjectedMessage(message, opts, theme));
+  });
+
   pi.on("input", async (event, ctx) => {
     // --- short circuits ---
     if (event.source === "extension") return { action: "continue" };        // loop prevention
     if (event.streamingBehavior === "steer") return { action: "continue" }; // latency during steering
     if (!event.text?.includes("#@")) return { action: "continue" };         // cheap pre-check
 
-    // seed dedup with <file> blocks already present (prior copy or @file)
+    // seed dedup with <file> blocks already present (user pasted one, or prior @file)
     const priorPaths = new Set([...event.text.matchAll(/<file name="([^"]+)">/g)].map(x => x[1]));
 
     // §5.6.2 budget. Window from usage.contextWindow (NOT ctx.model). O-1: if getContextUsage()
@@ -568,7 +765,7 @@ export default function (pi: ExtensionAPI) {
       : null;
 
     const state: State = {
-      blocks: [], images: [...(event.images ?? [])],
+      blocks: [], details: [], images: [...(event.images ?? [])],
       injectedSet: priorPaths, remaining, count: 0, paged: 0,
       bareAt: cfg.markdownBareAtImports === true,
     };
@@ -576,16 +773,34 @@ export default function (pi: ExtensionAPI) {
     // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping, bare-@ off
     const resolvedIdx = await processTokenStream(
       event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
-    if (state.count === 0) return { action: "continue" };   // nothing delivered → byte-for-byte
+    if (state.count === 0) return { action: "continue" };   // nothing delivered → byte-for-byte, no stash
 
-    // strip '#@' from resolved top-level markers (high→low)
+    // strip '#@' from resolved top-level markers (high→low); the user message is JUST the stripped prompt (§6.4)
     let stripped = event.text;
     for (const i of [...resolvedIdx].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
-    const finalText = `${stripped}\n\n---\n\n${state.blocks.join("\n\n")}`;
+
+    // §6.2 hand the built blocks+details to before_agent_start; do NOT append blocks to the prompt text.
+    pending = { blocks: state.blocks, details: state.details };
 
     const whole = state.count - state.paged;                 // §5.5 mode-aware notify
     if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${state.paged > 0 ? `, ${state.paged} paged` : ""}`, "info");
-    return { action: "transform" as const, text: finalText, images: state.images };
+    return { action: "transform" as const, text: stripped, images: state.images };
+  });
+
+  // §6.2 publish the stashed files as ONE custom message, appended after the user message.
+  // Fires once per prompt(), after the input handler. No stash (no #@, or short-circuited) → no-op.
+  pi.on("before_agent_start", async (_e, _ctx) => {
+    if (!pending) return undefined;
+    const { blocks, details } = pending;
+    pending = null;                                         // clear regardless (one-shot per prompt)
+    return {
+      message: {
+        customType: "fileInjector.injected",
+        content: blocks.join("\n\n"),                       // every <file> block → sent to the LLM
+        display: true,                                      // render via the registered MessageRenderer
+        details: { files: details },                        // renderer metadata (NOT extra model text)
+      },
+    };
   });
 }
 
@@ -650,7 +865,7 @@ async function injectFile(abs: string, state: State, ctx: any): Promise<boolean>
   try {
     const buf = await fs.readFile(abs);
     if (mime) {
-      // IMAGE (§5.2) — consumes budget, never paged
+      // IMAGE (§5.2) — consumes budget, never paged. Attached to the USER message; ref tag + detail in the custom message.
       const resized = await resizeImage(new Uint8Array(buf), mime);
       state.images.push({
         type: "image",
@@ -658,6 +873,7 @@ async function injectFile(abs: string, state: State, ctx: any): Promise<boolean>
         mimeType: resized?.mimeType ?? mime,
       });
       state.blocks.push(formatImageBlock(abs, resized));
+      state.details.push({ path: abs, kind: "image", dimensionHint: resized ? formatDimensionNote(resized) ?? undefined : undefined });
       subtract(state, estimateImageTokens(resized));                   // §5.6.2
     } else if (MD_EXTS.has(ext)) {
       // MARKDOWN (§5.6) — text block + transitive imports
@@ -666,6 +882,7 @@ async function injectFile(abs: string, state: State, ctx: any): Promise<boolean>
       // BINARY NOTE (§5.3)
       const note = formatBinaryBlock(abs);
       state.blocks.push(note);
+      state.details.push({ path: abs, kind: "binary" });
       subtract(state, Math.ceil(note.length / 4));
     } else {
       // PLAIN TEXT (§5.1 + §5.5)
@@ -700,19 +917,25 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: a
   }
 }
 
-// §5.5 inline-vs-paged decision; pushes block(s); subtracts cost; bumps paged (NOT count).
+// §5.5 inline-vs-paged decision; pushes block(s) + a FileDetail; subtracts cost; bumps paged (NOT count).
 function emitText(abs: string, content: string, state: State) {
   const fileCost = Math.ceil(content.length / 4);
+  const lineCount = (content.match(/\n/g)?.length ?? 0) + 1;
   if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
     state.blocks.push(formatTextFileBlock(abs, content));               // whole
+    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount });
     subtract(state, fileCost);
   } else if (content.length <= HEAD_CHARS) {
     state.blocks.push(formatTextFileBlock(abs, content));               // sub-head-sized → whole
+    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount });
     subtract(state, fileCost);
   } else {
     const head = headSlice(content);                                   // first HEAD_CHARS, surrogate-safe
+    const headLines = headCompleteLineCount(head);
+    const startLine = headLines + 1;                                   // first line AFTER the head's complete lines
     state.blocks.push(formatTextFileBlock(abs, head));
-    state.blocks.push(formatPagedDirectiveBlock(abs, content.length, headStartLine(head), headCompleteLineCount(head)));
+    state.blocks.push(formatPagedDirectiveBlock(abs, content.length, startLine, headLines));
+    state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines });
     state.paged++;
     subtract(state, Math.ceil(head.length / 4));
   }
@@ -863,6 +1086,60 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
     `read the rest with the read tool at offset:${startLine}, limit:${READ_LIMIT}, ` +
     `incrementing offset by ${READ_LIMIT} until done></file>`;
 }
+
+// ---------- §6.3 chat renderer (registered for "fileInjector.injected") ---------------------
+// Replicates the read tool's completed-call look: a green (toolSuccessBg) box, one `read <path>` line
+// per file when collapsed, full content when expanded. Blocks (message.content) and details.files are
+// co-emitted in the same order (§6.4), so they align by index.
+const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
+function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
+  const files: FileDetail[] = message?.details?.files ?? [];
+  // pair each detail with its block body (re-parsed from content) by index
+  const bodies: string[] = [];
+  if (typeof message?.content === "string") {
+    let m: RegExpExecArray | null;
+    FILE_BLOCK_RE.lastIndex = 0;
+    while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) bodies.push(m[2].replace(/^\n|\n$/g, ""));
+  }
+  const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));   // green, like a completed read call
+  if (files.length === 0) {                                               // defensive fallback (old/foreign entry)
+    box.addChild(new Text(theme.fg("toolTitle", theme.bold("read")) + " " +
+      theme.fg("dim", "(injected files)") + expandHint(theme), 0, 0));
+    if (opts.expanded && typeof message?.content === "string")
+      box.addChild(new Text(theme.fg("toolOutput", message.content), 0, 0));
+    return box;
+  }
+  for (let i = 0; i < files.length; i++) {
+    const d = files[i];
+    box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
+    if (opts.expanded) {
+      const body = bodies[i];
+      if (body !== undefined && d.kind !== "image") {                     // images already shown via user-message attachment
+        const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
+        const rendered = lang ? highlightCode(body, lang).join("\n") : body;
+        box.addChild(new Text(theme.fg("toolOutput", rendered), 0, 0));
+      }
+    }
+  }
+  return box;
+}
+// One collapsed line per file, identical in spirit to the read tool's formatReadCall:
+//   read <tildified-path><range-or-hint>
+function readLine(d: FileDetail, theme: any): string {
+  const title = theme.fg("toolTitle", theme.bold("read"));
+  const path = theme.fg("accent", tildify(d.path));
+  if (d.kind === "binary") return `${title} ${path} ${theme.fg("dim", "(binary — not injected)")}`;
+  if (d.kind === "image")  return `${title} ${path}${d.dimensionHint ? " " + theme.fg("dim", d.dimensionHint) : ""}`;
+  if (d.kind === "paged")  return `${title} ${path}${theme.fg("warning", d.range ?? "")}`;
+  return `${title} ${path}`;                                              // whole text
+}
+// "(ctrl+o to expand)" — the default expand binding (matches the user's example). Hardcoded because
+// Pi's keyText() helper is internal; ctrl+o is the default and is what the read/skill hints show.
+function expandHint(theme: any): string { return " " + theme.fg("dim", "(ctrl+o to expand)"); }
+function tildify(abs: string): string {
+  const home = os.homedir();
+  return home && abs.startsWith(home + "/") ? "~" + abs.slice(home.length) : abs;
+}
 ```
 
 `state.count` is the number of files delivered (≥ 0, whole + paged + image + binary note); the handler treats `0` as "nothing injected" and returns `continue`.
@@ -871,17 +1148,19 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 
 ## 10. Edge Cases (implementer checklist)
 
+> **Terminology note (post-display feature):** throughout this table, “a block is delivered / appended” now means *the `<file>` block is added to the single custom message* (§6.2) and *rendered as one green `read <path>` line* (§6.3) — **not** appended into the user's prompt text. The user message is always just the stripped prompt. Dedup, ordering, paging, and file-type semantics are unchanged.
+
 | Case | Expected behavior |
 |---|---|
-| No `#@` in prompt | `continue` (no work). |
+| No `#@` in prompt | `continue` (no work); `before_agent_start` returns `undefined` (no stash). |
 | `#@nonexistent.txt` | Token left verbatim; no block; no error. |
 | `#@some/dir/` (directory) | Token left verbatim. |
-| `text #@a.txt more` | File injected, appended below; inline marker becomes `a.txt` (`#@` stripped, path stays). |
-| Multiple `#@a.txt #@b.md` | Both injected; blocks appended in order; notify `2 whole`. |
+| `text #@a.txt more` | File delivered (green `read a.txt` line below the bubble); inline marker becomes `a.txt` (`#@` stripped, path stays). |
+| Multiple `#@a.txt #@b.md` | Both delivered (two `read` lines, in order); notify `2 whole`. |
 | Same path twice (`#@a.ts` + `#@./a.ts`, or `#@a.md` that imports `a.ts`) | Injected once across the **whole prompt** (shared `injectedSet`, including imports); repeats left verbatim. |
 | `#@huge.log` (50 MB) | If it fits remaining context: injected whole. If it exceeds it: head block + paged directive (§5.5). Never silently truncated. |
-| `#@data.bin` (binary, NUL) | Binary note block appended; no garbage. |
-| `#@pic.png` | Image attached as `ImageContent` (resized); reference block appended. |
+| `#@data.bin` (binary, NUL) | Binary note delivered (rendered as `read data.bin (binary — not injected)`); no garbage. |
+| `#@pic.png` | Image attached as `ImageContent` (resized) to the user message; reference delivered + rendered as `read pic.png (resized …)`. |
 | `#@~/notes.md` | Tilde-expanded; resolved; injected. |
 | `#@/etc/hosts` (absolute) | Resolved; injected (explicit user intent). |
 | `#@file.txt.` (trailing period) | Period trimmed → `file.txt`; injected. |
@@ -928,6 +1207,19 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 | Missing/malformed config (settings key or `file-injector.json`) | Defaults to `false`; no error, no behavior change. |
 | `markdownBareAtImports` under `fileInjector` in `settings.json` | Read like the dedicated file; co-located with the user's other Pi settings. |
 | Both `settings.json` key and `file-injector.json` set in the same scope | Dedicated `file-injector.json` wins within that scope; project overrides global. |
+| **Chat display — single file** | User bubble = stripped prompt (e.g. `Review a.ts`); directly below, one green (`toolSuccessBg`) `read a.ts (ctrl+o to expand)` line. Model receives prompt + `<file name="/abs/a.ts">…</file>` custom message. |
+| **Chat display — multiple files** | One green `read <path>` line per file, in emission order, under the user bubble; `ctrl+o` expands all (unit expand, like `[skill]`). Notify still says `N whole`. |
+| **Chat display — image** | Green `read img.png (resized to 1568×1044)` line; the image itself is attached to the user message above (as today). Expanded view repeats the reference line only (no double image). |
+| **Chat display — binary** | Green `read data.bin (binary — not injected)` line; expanded shows the same note text. |
+| **Chat display — paged** | Green `read huge.log:<startLine>-` line (range suffix, like the read tool); expanded shows the head + the paged directive text; the model pages the rest via `read` as before. |
+| **Chat display — markdown imports** | One `read <path>` line per file across the whole transitive set (parent before children, pre-order); all in the single green box. |
+| `ctrl+o` expand/collapse | Toggles the whole injected-files box between the read lines and full contents (mirrors `[skill]` block behavior). |
+| Session reload | The custom message is persisted; on reload it re-renders via the same renderer (green read lines) and is re-sent to the model on continuation (same as old appended text). |
+| `#@` in print / JSON mode (`-p`, `--mode json`) | No TUI, so the renderer is never called; the custom message still delivers the `<file>` blocks to the model (files are *not* lost in non-interactive modes). |
+| `before_agent_start` registered by another extension | Independent; our handler consumes only our stash. Other extensions' messages render separately. Our stash is empty unless our `input` handler ran and found `#@`. |
+| `input` short-circuits (extension source / steering) but `before_agent_start` still fires | Stash empty → `before_agent_start` returns `undefined`; no phantom injection. |
+| Renderer throws | Caught by `CustomMessageComponent`; falls back to Pi's default `[fileInjector.injected]` purple box. Never crashes the TUI. (Renderer is defensive; this is a last resort.) |
+| Old/foreign `fileInjector.injected` entry with no `details.files` | Renderer fallback: single `read (injected files)` line + raw `content` when expanded (§6.3). |
 
 ---
 
@@ -945,7 +1237,7 @@ pi -e .                             # quick test (directory — resolves via pac
 
 | # | Setup | Input | Expected |
 |---|---|---|---|
-| 1 | small `a.ts` (~50 words) | `Review #@a.ts` | Prompt sent to model already contains `a.ts` contents in a `<file name="…">` block; **no `read` tool call**. Original prompt text unchanged; block appended after `---`. |
+| 1 | small `a.ts` (~50 words) | `Review #@a.ts` | Model receives the prompt plus a `<file name="/abs/a.ts">…</file>` custom message (no `read` tool call). In the TUI the user bubble reads `Review a.ts` (`#@` stripped) and a green `read a.ts (ctrl+o to expand)` line appears below it. |
 | 2 | `huge.log` (50 MB) | `Summarize #@huge.log` | If it fits remaining context: injected whole, no `read` call. If it exceeds it: head block + paged directive (§5.5); the model pages the rest via `read`. Notify reflects the mode. |
 | 3 | `pic.png` | `Describe #@pic.png` | `ImageContent` attached; `<file name="…">…</file>` reference appended; inline marker becomes `pic.png` (`#@` stripped). |
 | 4 | `data.bin` (binary) | `Inspect #@data.bin` | Binary note block appended; no decoded garbage. |
@@ -977,6 +1269,15 @@ pi -e .                             # quick test (directory — resolves via pac
 | 30 | md relative disambiguation | `dir/a.md` imports `#@b.md`; **both** `dir/b.md` and `./b.md` exist; `#@dir/a.md` | `dir/b.md` injected (the md's dir wins); cwd-root `./b.md` has zero blocks. Proves resolution is file-relative, not cwd-relative. |
 | 31 | md relative, deep + cwd-indep. | `directory/otherdir/some/file.md` imports `#@file2.md`; only `…/some/file2.md` exists; also a stray `./file2.md`; `#@directory/otherdir/some/file.md` | `…/some/file2.md` injected (the importing file's dir), never `./file2.md`. |
 | 32 | bare-`@` first-file + chain | config on; prompt `#@a.md`; `a.md`→`@b.md`→`@c.md` (all bare `@`) | `a.md`, `b.md`, `c.md` all injected; the first imported file's bare-`@` is honored (no asymmetry vs. deeper files); notify `3 whole`. |
+| 33 | **display — single file** | `Review #@a.ts` | User bubble: `Review a.ts`. Below it: one green box line `read a.ts (ctrl+o to expand)`. `ctrl+o` shows the full highlighted contents; `ctrl+o` again collapses. Indistinguishable from a completed `read a.ts` tool call. |
+| 34 | **display — multi-file** | `Diff #@a.ts vs #@b.ts` | User bubble: `Diff a.ts vs b.ts`. Below: two green lines `read a.ts` / `read b.ts` (one hint). Both expand together on `ctrl+o`. Notify `2 whole`. |
+| 35 | **display — image** | `Describe #@pic.png` | Green line `read pic.png (resized to WxH)`; image renders via the user-message attachment. Expanded view does **not** duplicate the image. |
+| 36 | **display — binary** | `Inspect #@data.bin` | Green line `read data.bin (binary — not injected)`; expanded shows the note. |
+| 37 | **display — paged** | `Summarize #@huge.log` (over budget) | Green line `read huge.log:<startLine>-`; expanded shows head + directive; model pages the rest via `read`. Notify `0 whole, 1 paged`. |
+| 38 | **display — color parity** | side-by-side: `#@a.ts` vs a real agent `read a.ts` | Both green boxes use identical `toolSuccessBg`; both `read` titles use `toolTitle`+bold; both paths use `accent`. Visually identical (the only difference: `#@` line appears at submit, no spinner). |
+| 39 | **display — reload** | inject `#@a.ts`, reply, `/exit`, reopen session | The green `read a.ts` line re-renders from the persisted custom message; the model still has the `<file>` content on continuation. |
+| 40 | **display — print mode** | `pi -p "Review #@a.ts"` | No TUI rendering; model still receives the `<file>` block via the custom message (verify in `--mode json` that a user-role message carries the `<file>` block after the prompt). |
+| 41 | **model input — structure** | `#@a.ts` with extension loaded; inspect provider request (`before_provider_request`) | Two user-role messages: `[prompt]` then `[<file name="/abs/a.ts">…</file>]`. Content byte-identical to the old single-message form (§13.7). |
 
 ### Automated sanity check (optional)
 
@@ -1011,7 +1312,7 @@ pi.registerCommand("sharp-at-test", {
 7. **Images are base64, no data-URL prefix.** `ImageContent.data` is raw base64.
 8. **Image resize is a necessity, not a config.** Providers reject oversized images; `resizeImage` (2000×2000 default) is hardcoded so injection actually succeeds. This does not contradict "no config" — it's required for correctness, and the user still gets "the whole image" (downscaled to fit).
 9. **Binary detection is for routing, not gating.** Use the NUL-byte heuristic *only* to avoid injecting decoded garbage from non-image binaries. Image files skip this check entirely (handled by MIME type first). Markdown skips it too (always treated as text so import scanning runs).
-10. **Append, don't inline-replace; strip the trigger.** Large files would wreck the transcript bubble. Append blocks below a `---`, and strip `#@` from each resolved marker (the path stays). Failed tokens are left verbatim, `#@` included.
+10. **Deliver as a custom message, not appended prompt text; strip the trigger.** Files go into ONE custom message returned from `before_agent_start` (§6.2); the user message is just the stripped prompt. Strip `#@` from each resolved marker (the path stays as a readable reference in the bubble). Never append `<file>` blocks to the prompt text — that would both duplicate the bytes for the model and defeat the compact display. Failed tokens stay verbatim, `#@` included.
 11. **Whole file always reaches the model.** Never silently truncate or cap a file. When it fits remaining context, inject inline; when it exceeds it, page via §5.5. The contract is "the model gets all of it," not "all of it in one block."
 12. **Don't touch `@`.** This extension must not match or transform bare `@path`. Only `#@path`. Verify with test #14.
 13. **Markdown recursion is bounded by dedup, not depth.** Each absolute path is claimed in `injectedSet` *before* its content is scanned (self-imports dedup to verbatim). Termination is guaranteed because the set of injectable files is finite and each is processed at most once. No separate depth limit is needed.
@@ -1021,6 +1322,12 @@ pi.registerCommand("sharp-at-test", {
 17. **Scan before inject (top-level).** `processTokenStream` runs `scanTokens` once over the whole prompt *before* injecting anything, so a later top-level token whose path an earlier token's import already claimed is left verbatim (cross-subtree dedup). Markdown does its own scan+strip+emit+recurse in `injectMarkdown`.
 18. **Extension shorthand is markdown-only and keyed on the resolved abs.** `resolveImportPath` tries exact → `.md` → `.markdown` only for *extensionless* markdown-import tokens (`tryMdExt: true`); top-level tokens pass `tryMdExt: false` (exact-only — the user has §14 autocomplete and types the full name). Dedup runs on the *resolved* abs, so `#@PRD` and `#@PRD.md` in one file collapse to one injection — which is why `scanTokens` is `async` (it stats candidate paths before checking `injectedSet`/`localSeen`).
 19. **The bare-`@` option is markdown-only, opt-in, and never double-matches `#@`.** `markdownBareAtImports` (default `false`, read from `file-injector.json` or the `fileInjector` key in `settings.json` (§4.6) on `session_start`, project sources honored only when `ctx.isProjectTrusted()`) adds bare-`@` matching to markdown scanning only — never the top-level prompt (Pi's `@` is left untouched, §3.2). `BARE_AT_RE` uses `(?<=[^\w#])` so an `@` preceded by `#` is not matched, hence `#@file` fires once. Each match carries `prefixLen` (2 for `#@`, 1 for `@`); Step 4 strips `slice(index, index + prefixLen)`. Non-resolving bare tokens (prose `@mentions`) stay verbatim.
+20. **Two hooks, one stash.** File I/O and classification happen in the `input` handler (the only place to rewrite the prompt); publishing the result happens in `before_agent_start` (the only hook whose returned `message` lands after the user message, persists, and reaches the LLM). The closure variable `pending` is the handoff — set in `input`, read-and-cleared in `before_agent_start`. Because `prompt()` runs `input` → … → `before_agent_start` → `runAgentPrompt` sequentially in one awaited call, there is no race and no need for locking. Clear `pending` unconditionally in `before_agent_start` (one-shot per prompt) so a later non-`#@` prompt never re-delivers a stale stash.
+21. **One custom message per prompt; the renderer decomposes it.** `BeforeAgentStartEventResult.message` is singular (one per handler), so all files pack into one custom message; the `MessageRenderer` reads `details.files` and draws one `read <path>` line per file (§6.3). Expand/collapse is unit-level for the whole box (matches the `[skill]` precedent); independent per-file expansion is not supported under this API.
+22. **`details` is renderer-only — never sent to the model.** `convertToLlm()` maps a custom message to a user-role message using only `content`; `details` is ignored. So `FileDetail` metadata (paths, kinds, line counts, ranges, dimension hints) costs zero model tokens. Do **not** duplicate file bytes into `details` — the renderer re-parses them from `content` (§6.3 `FILE_BLOCK_RE`), keeping `details` cheap and the model input uncontaminated.
+23. **Renderer must be defensive and never throw.** A thrown renderer is caught by `CustomMessageComponent`, which falls back to Pi's default `[fileInjector.injected]` purple box — acceptable but not the goal. Guard `message.details?.files` (may be absent on old/foreign entries), guard `bodies[i]`, and short-circuit the image expanded-view (images are already attached to the user message; don't re-render them).
+24. **Color/green choice is deliberate.** Use `toolSuccessBg` (green) — the *exact* background the `read` tool uses for a completed call — and `toolTitle`+bold for the `read` title, `accent` for the path. Do **not** use `customMessageBg` (purple); purple is for `[skill]`/custom messages, and the user explicitly wants injected files to read like tool calls, not like skills. The only shared affordance with skills is the collapse/expand (ctrl+o) behavior.
+25. **Path display tildifies; the real `renderToolPath` is internal.** Pi's `renderToolPath`/`formatPathRelativeToCwdOrAbsolute` are not exported, so the renderer tildifies (leading `os.homedir()` → `~`) — the closest portable match to the read tool's display and exactly what the user's example showed (`read ~/.local/share/…/disk-passthrough-methods.md`). The expand hint is hardcoded `ctrl+o` (the default binding) for the same reason (`keyText()` is internal).
 
 ---
 
@@ -1058,6 +1365,28 @@ The three guards are deliberate:
 The cost is real: a single `#@` can now balloon to many files. That is why imports share the single context budget (§5.6.2) and page when the running total exceeds remaining — the model never silently receives more than fits, and the total filesize of every file (top-level plus imports) is accounted for in one accumulator.
 
 **Why extension shorthand, and why markdown-only.** Markdown imports are authored in files where there is no live path completion (§14 is prompt-only), so a bare `#@PRD` is a natural way to reference the `PRD.md` doc — `#@` is a strong enough import signal that an extensionless name matching a markdown file after appending `.md`/`.markdown` should be treated as an exact match. The fallback is deliberately scoped to markdown imports and to *extensionless* tokens: exact-match always wins (a bare `PRD` file beats `PRD.md`), an explicit `#@PRD.md` never becomes `PRD.md.md`, and top-level prompt tokens stay exact-only (the user has autocomplete there). Dedup keys on the resolved abs, so `#@PRD` and `#@PRD.md` in the same file inject once.
+
+### 13.7 Why custom messages + a renderer (compact display), and its one tradeoff
+
+The user asked that injected files appear in the chat **exactly like the `read` tool** — compact green `read <path>` lines, one per file, expandable — while the model still receives the full contents. This section explains the mechanism and the single honest tradeoff.
+
+**How Pi itself achieves compact display (the precedent).** The `[skill]` block collapses because Pi *hard-codes* `parseSkillBlock()` in the TUI's `case "user"` renderer: it detects `<skill …>…</skill>` XML **inside the user-message text**, splits it out, and renders a collapsible `SkillInvocationMessageComponent` (purple `customMessageBg`) plus the remainder as a normal user message. The model still gets the full `<skill>` XML because it's in the stored text. The `read` tool, meanwhile, renders via `ToolExecutionComponent` — a `Box` with `toolSuccessBg` (green) and a `read <path>` call line (`toolTitle`+bold), collapsing the result until expanded.
+
+**Why we cannot reuse the skill trick for `<file>` blocks.** There is **no** extension hook to make `UserMessageComponent` collapse arbitrary `<file>` blocks that live *inside* user-message text — `parseSkillBlock` is the only such parser and it is core, not extensible. So as long as the file bytes stay in the user message (the old design), they are shown in full in the user bubble with no way to hide them. **Compact display therefore requires the bytes to leave the user message.**
+
+**The mechanism we use (all public API, zero core changes).** Move the bytes into a **custom message**:
+- A `before_agent_start` handler returns `{ message: { customType, content, display:true, details } }`. Pi appends it **after** the user message, **persists** it, and — via `convertToLlm()` (`role:"custom"` → user-role message) — **sends it to the LLM**. So the model still receives every `<file name="…">…</file>` block, byte-identical in content.
+- A `MessageRenderer` registered for that `customType` returns a green `Box` (`toolSuccessBg`) with one `read <path>` line per file (collapsible/expandable), replicating the `read` tool's look using the same theme keys (`toolTitle`, `accent`, `dim`).
+- The `input` handler still does all file I/O and strips `#@`; it hands the built blocks+details to `before_agent_start` through a one-shot closure stash (§6.2).
+
+**The one tradeoff (be honest about it).** The model's input changes from **one** user message (`prompt` + appended `<file>` blocks) to **two** user messages (`prompt`, then the custom→user message with the `<file>` blocks). The *content* is byte-identical; only the message *boundary* differs. In practice this is benign-to-better: providers treat consecutive user messages fine, the files are still clearly associated with the prompt, and nothing is lost, added, or rewritten. It is **not** a change to what the model is told — only to how it is parcelled. This is the unavoidable cost of compact display at the extension level: the bytes must live where the TUI renders via a registered renderer, and that is a separate message.
+
+**Why this is strictly better than the alternatives.**
+- *Append to prompt text + display-only custom entry (dual render).* Rejected: `UserMessageComponent` would still print the full bytes in the user bubble; the user would see the content twice (once expanded, once as read lines). No suppression hook exists.
+- *Monkeypatch `UserMessageComponent`/`parseSkillBlock`.* Rejected: depends on Pi internals (unstable), breaks across versions, and violates "no core patch."
+- *Wait for Pi core to add `<file>` collapsing.* Out of scope (this is an extension) and unbounded (may never ship).
+
+**Why green / read-tool styling, not purple / skill styling.** The user's explicit model is the `read` tool ("exactly as though the read tool were called"), and the example shows green lines. `toolSuccessBg` + `toolTitle` is the literal color/bold recipe the `read` tool's completed call uses; `customMessageBg` (purple) would make injected files look like skills instead. We keep only the collapse/expand affordance in common with skills, because it is the right UX for "summary line → full content."
 
 ---
 
@@ -1120,7 +1449,8 @@ file's directory (§4.5), not the prompt cwd; an extensionless import token also
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { resizeImage, formatDimensionNote, CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resizeImage, formatDimensionNote, highlightCode, getLanguageFromPath, CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Box, Text, type Component } from "@earendil-works/pi-tui";   // §6.3 renderer components
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -1139,14 +1469,21 @@ const PAGED_THRESHOLD = 0.6, MARGIN = 8192, HEAD_CHARS = 8192, READ_LIMIT = 2000
 const DEFAULT_RESERVE = 8192, IMAGE_FALLBACK_TOKENS = 2805;
 
 interface FileInjectorConfig { markdownBareAtImports?: boolean; }
+interface FileDetail { path: string; kind: "text"|"image"|"binary"|"paged"; chars?: number; lines?: number; range?: string; pagedHeadLines?: number; dimensionHint?: string; }
 interface State {
-  blocks: string[]; images: ImageContent[];
+  blocks: string[]; details: FileDetail[]; images: ImageContent[];
   injectedSet: Set<string>; remaining: number | null; count: number; paged: number; bareAt: boolean;
 }
 
 export default function (pi: ExtensionAPI) {
   let cfg: FileInjectorConfig = {};
-  pi.on("session_start", async (_e, ctx) => { cfg = await readConfig(ctx); });
+  let pending: { blocks: string[]; details: FileDetail[] } | null = null;   // input → before_agent_start handoff (§6.2)
+
+  pi.on("session_start", async (_e, ctx) => {
+    cfg = await readConfig(ctx);
+    pi.registerMessageRenderer("fileInjector.injected", (m, o, t) => renderInjectedMessage(m, o, t));   // §6.3
+  });
+
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension" || event.streamingBehavior === "steer") return { action: "continue" };
     if (!event.text?.includes("#@")) return { action: "continue" };
@@ -1157,7 +1494,7 @@ export default function (pi: ExtensionAPI) {
       ? Math.max(0, usage.contextWindow - usage.tokens - (ctx.model?.maxTokens ?? DEFAULT_RESERVE) - MARGIN)
       : null;
     const state: State = {
-      blocks: [], images: [...(event.images ?? [])],
+      blocks: [], details: [], images: [...(event.images ?? [])],
       injectedSet: priorPaths, remaining, count: 0, paged: 0,
       bareAt: cfg.markdownBareAtImports === true,
     };
@@ -1165,15 +1502,48 @@ export default function (pi: ExtensionAPI) {
     const resolvedIdx = await processTokenStream(event.text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
     if (state.count === 0) return { action: "continue" };
 
-    let stripped = event.text;
+    let stripped = event.text;                                   // user message = ONLY the stripped prompt (§6.4)
     for (const i of [...resolvedIdx].sort((a, b) => b - a)) stripped = stripped.slice(0, i) + stripped.slice(i + 2);
+    pending = { blocks: state.blocks, details: state.details };  // hand off to before_agent_start (§6.2)
     const whole = state.count - state.paged;
     if (ctx.hasUI) ctx.ui.notify(`#@ injected ${whole} whole${state.paged > 0 ? `, ${state.paged} paged` : ""}`, "info");
-    return { action: "transform" as const, text: `${stripped}\n\n---\n\n${state.blocks.join("\n\n")}`, images: state.images };
+    return { action: "transform" as const, text: stripped, images: state.images };
+  });
+
+  pi.on("before_agent_start", async () => {                      // publish files as ONE custom message after the user message
+    if (!pending) return undefined;
+    const { blocks, details } = pending; pending = null;
+    return { message: { customType: "fileInjector.injected", content: blocks.join("\n\n"), display: true, details: { files: details } } };
   });
 }
 
-// ... scanTokens (async) / processTokenStream / injectFile / injectMarkdown / emitText / subtract
+// §6.3 renderer: green (toolSuccessBg) box, one `read <path>` line per file, expandable.
+function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
+  const files: FileDetail[] = message?.details?.files ?? [];
+  const bodies: string[] = [];
+  if (typeof message?.content === "string")
+    for (const m of message.content.matchAll(/<file name="[^"]+">([\s\S]*?)<\/file>/g)) bodies.push(m[1].replace(/^\n|\n$/g, ""));
+  const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));
+  if (!files.length) { box.addChild(new Text(theme.fg("toolTitle", theme.bold("read")) + " " + theme.fg("dim", "(injected files)") + " (ctrl+o to expand)", 0, 0)); return box; }
+  files.forEach((d, i) => {
+    box.addChild(new Text(readLine(d, theme) + (i === 0 ? " (ctrl+o to expand)" : ""), 0, 0));
+    if (opts.expanded && bodies[i] !== undefined && d.kind !== "image") {
+      const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
+      box.addChild(new Text(theme.fg("toolOutput", lang ? highlightCode(bodies[i], lang).join("\n") : bodies[i]), 0, 0));
+    }
+  });
+  return box;
+}
+function readLine(d: FileDetail, theme: any): string {
+  const t = theme.fg("toolTitle", theme.bold("read")), p = theme.fg("accent", tildify(d.path));
+  if (d.kind === "binary") return `${t} ${p} ${theme.fg("dim", "(binary — not injected)")}`;
+  if (d.kind === "image")  return `${t} ${p}${d.dimensionHint ? " " + theme.fg("dim", d.dimensionHint) : ""}`;
+  if (d.kind === "paged")  return `${t} ${p}${theme.fg("warning", d.range ?? "")}`;
+  return `${t} ${p}`;
+}
+function tildify(abs: string): string { const h = os.homedir(); return h && abs.startsWith(h + "/") ? "~" + abs.slice(h.length) : abs; }
+
+// ... scanTokens (async) / processTokenStream / injectFile / injectMarkdown / emitText (pushes FileDetail) / subtract
 //     + helpers (incl. resolveImportPath, isRegularFile, readConfig) + BARE_AT_RE + computeCodeRanges / inCode  per §9 ...
 ```
 
@@ -1186,4 +1556,4 @@ needs a `package.json` with a `"pi"` manifest so the *directory* is loadable (se
   "pi": { "extensions": ["file-injector.ts"] } }
 ```
 
-**Done-definition:** all 32 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files that fit remaining context; markdown imports resolve relative to the importing file's directory (with `.md`/`.markdown` extension shorthand for extensionless tokens), skip code blocks, terminate on cycles, and dedup across the whole prompt; the context budget accounts for the total filesize of all delivered files (top-level + imports); prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.
+**Done-definition:** all 41 manual test cases in §11 pass; no uncaught errors; the model receives whole-file contents with **zero** `read` tool calls for `#@`-injected files that fit remaining context (delivered as a single custom message after the prompt, §6.2); in the TUI those files render as **green `read <path>` lines — one per file — indistinguishable from the `read` tool** (§6.3), with the user bubble showing only the stripped prompt; markdown imports resolve relative to the importing file's directory (with `.md`/`.markdown` extension shorthand for extensionless tokens), skip code blocks, terminate on cycles, and dedup across the whole prompt; the context budget accounts for the total filesize of all delivered files (top-level + imports); prompts without `#@` (including bare `@file`) are byte-for-byte unchanged; `#@` works in both interactive and initial `-p` messages.
