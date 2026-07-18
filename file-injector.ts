@@ -318,6 +318,16 @@ export function formatPagedDirectiveBlock(abs: string, len: number, startLine: n
   return '<file name="' + abs + '"><paged: ' + len + ' chars; head delivered ' + injectedLines + ' complete lines; read the rest with the read tool at offset:' + startLine + ', limit:' + READ_LIMIT + ', incrementing offset by ' + READ_LIMIT + ' until done></file>';
 }
 
+/** §6.3 — the INNER text of a paged directive block (the `<paged: …>` resume instructions), for the expanded view.
+ *  Strips the wrapping `<file name="…">` opener and `</file>` closer. `formatPagedDirectiveBlock` emits
+ *  `<file name="ABS"><paged: …></file>` (no newline), so the inner is everything between the first `>` (end of the
+ *  opener) and the last `</file>` (the closer). Defensive: if the markers aren't found, return the block unchanged. */
+function extractDirectiveInner(block: string): string {
+  const open = block.indexOf(">");        // end of '<file name="…">'
+  const close = block.lastIndexOf("</file>");
+  return open >= 0 && close > open ? block.slice(open + 1, close) : block;
+}
+
 /**
  * PRD §9 / §5.5 — core assembly. Iterate every `#@<path>` token in `text`, resolve+stat+classify+read
  * each, and append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image). The
@@ -356,6 +366,16 @@ export interface FileDetail {
                  //   display it WITHOUT re-regexing message.content (which mis-truncates when a file's
                  //   own content contains a literal </file>). Renderer-only metadata; never sent to the
                  //   model. OMITTED for image/binary (no displayable body) and by old/foreign entries.
+                 //   DEPRECATED fallback (old/test entries; renderer prefers contentStart/contentLen).
+                 //   Real emission does NOT set this (§12.22 — P1.M2.T1.S1 removes the body pushes).
+  directive?: string; // §6.3 paged-only — the <paged: …> directive INNER text, rendered in the expanded
+                      //   view after the head body (§6.3: paged files show head + directive verbatim).
+                      //   Populated by emitText's paged branch (P1.M2.T2.S1); the directive block still
+                      //   reaches the model via message.content (display-only fix). OMITTED for non-paged.
+  contentStart?: number; // §12.22 — char offset of this file's body within message.content (text/paged
+                         //   only; image/binary omit). The renderer slices message.content for BUG-1-safe
+                         //   body recovery WITHOUT duplicating bytes into details (P1.M2.T1.S1).
+  contentLen?: number; // §12.22 — char length of the body slice (text: whole content; paged: the head).
 }
 
 interface State {
@@ -687,6 +707,9 @@ export function renderInjectedMessage(message: any, opts: { expanded: boolean },
         const rendered = lang ? highlightCode(body, lang).join("\n") : body;
         box.addChild(new Text(theme.fg("toolOutput", rendered), 0, 0));
       }
+      if (d.kind === "paged" && typeof d.directive === "string") { // §6.3 — paged directive after the head, expanded view only
+        box.addChild(new Text(theme.fg("dim", d.directive), 0, 0));
+      }
     }
   }
   return box;
@@ -933,9 +956,10 @@ export function emitText(abs: string, content: string, state: State): void {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
       const headLines = headCompleteLineCount(head);
       const startLine = headLines + 1; // == headStartLine(head)
+      const directiveBlock = formatPagedDirectiveBlock(abs, content.length, startLine, headLines); // §6.3 — hoist; the directive block still reaches the model via content (display-only fix); its inner text is stored on the detail for the expanded view
       state.blocks.push(formatTextFileBlock(abs, head));
-      state.blocks.push(formatPagedDirectiveBlock(abs, content.length, startLine, headLines));
-      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines, body: head });
+      state.blocks.push(directiveBlock);
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines, body: head, directive: extractDirectiveInner(directiveBlock) });
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }

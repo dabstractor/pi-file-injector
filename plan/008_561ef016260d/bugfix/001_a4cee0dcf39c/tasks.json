@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Bug Fixes for `#@file` Extension QA Findings",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Remediate the four issues surfaced by creative end-to-end QA against the `#@file` extension PRD. One Major data-integrity defect (Issue 1: resolveImportPath truncation silently injects the wrong file) and three Minor issues (Issue 2: FileDetail.body byte duplication violating §12.22; Issue 3: paged expanded-view omits the paging directive per §6.3; Issue 4: image magic-number sniff deviation from §5.2, accepted as the intentional README contract — no code change). All findings are grounded in live reproduction via jiti (the same loader the test suite uses) and recorded in plan/008_561ef016260d/bugfix/001_a4cee0dcf39c/architecture/. Baseline before work: 145 + 22 + 38 = 205 shipped test cases green; `npm test` runs only file-injector.test.mjs.",
       "milestones": [
         {
@@ -111,14 +111,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Surface paged-directive text in the expanded view (§6.3)",
-              "status": "Ready",
+              "status": "Complete",
               "description": "PRD §6.3 requires paged files to show their head block PLUS the paged-directive text verbatim in the expanded view. Currently the expanded branch reads only the head body and the `<paged: ...>` directive (which reaches the model via content) is never surfaced. Store the directive text in the paged FileDetail and render it after the head when expanded.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Store directive in paged FileDetail + render after head in expanded branch",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S2"
@@ -140,21 +140,21 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Test-suite hardening & changeset-level documentation sync",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Wire the two standalone regression harnesses (import-behavior.test.mjs, relative-imports.test.mjs) into `npm test` so the truncation behavior (and the relative-imports bug classes) are gated going forward — this must land AFTER the Issue 1 test 4f fix so the newly-wired suite is green. Then perform the changeset-level documentation sweep (Mode B): update README.md to reflect the Issue 1 behavior change and record that the Issue 4 image magic-byte sniff is the intentional contract. Issue 4 itself needs no code change (the README already documents the stricter behavior; the PRD is read-only).",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Wire all three test harnesses into npm test",
-              "status": "Planned",
+              "status": "Ready",
               "description": "package.json currently runs only file-injector.test.mjs under `npm test`. import-behavior.test.mjs (which encodes the truncation behavior, including the now-fixed test 4f) and relative-imports.test.mjs (BUG CLASS 1 & 2 regression guards) are standalone scripts not gated by CI. Chain all three in the test script so future regressions are caught.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Update package.json test script to chain all three harnesses",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S2"
@@ -172,14 +172,14 @@
               "type": "Task",
               "id": "P1.M3.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Mode B final documentation sweep across the whole changeset. Update README.md to reflect (a) the Issue 1 behavior change (extended tokens like X.md.bak are now exact-only and left verbatim, not silently truncated to the base .md), and (b) explicitly note that the Issue 4 image magic-number sniff is the intentional, documented contract (the README already states images are matched by real bytes — verify and cross-reference). No PRD.md edit (read-only).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T2.S1",
                   "title": "Update README.md for Issue 1 behavior change + Issue 4 intentional-contract note",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

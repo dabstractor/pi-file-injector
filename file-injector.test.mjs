@@ -1267,6 +1267,25 @@ await runCase("PD-TEMPLATE", "§6.1 paged directive block matches the PRD templa
   assert(!got.includes("<large file"), "directive must NOT use the legacy '<large file' wording [F2]");
 });
 
+// ISS3-DIRECTIVE — §6.3 producer (P1.M2.T2.S1). A REAL paged injection (huge.log under PAGED_FIX) produces a paged
+// FileDetail whose `directive` is populated (the <paged: …> inner text) — proving emitText + extractDirectiveInner.
+// Asserts `d.directive` (NOT `d.body` — P1.M2.T1.S1 removes body), so it's robust to S1's presence/absence.
+await runCase("ISS3-DIRECTIVE", "§6.3 producer: paged injection → FileDetail.directive carries the <paged: …> inner text", async () => {
+  const r = await mod.injectFiles("Summarize #@huge.log", [], PAGED_FIX);
+  assert(r.injected === 1, `huge.log delivered (count includes paged), got injected=${r.injected}`);
+  assert(r.paged === 1, `huge.log must be PAGED under PAGED_FIX, got paged=${r.paged}`);
+  assert(Array.isArray(r.details) && r.details.length === 1, `one paged detail, got ${JSON.stringify(r.details?.length)}`);
+  const d = r.details[0];
+  assert(d.kind === "paged", `detail kind === 'paged', got ${d.kind}`);
+  assert(typeof d.directive === "string" && d.directive.includes("<paged:"),
+    `paged detail.directive carries the <paged: …> inner text (populated by emitText), got ${JSON.stringify(d.directive)}`);
+  assert(d.directive.includes("read the rest"),
+    `directive inner text includes the resume instructions, got ${JSON.stringify(d.directive)}`);
+  // the model-facing content is unchanged — the directive block is still pushed to blocks (this fix is display-only):
+  assert(blocksText(r).includes("<paged:"),
+    `the directive block still reaches the model via content (display-only fix), got ${JSON.stringify(blocksText(r).slice(0, 80))}`);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // ── §5.5 HANDLER NOTIFY (PRD §5.5 Notify) — mode-aware notify via the input handler ──────
 // The handler now destructures `paged` from injectFiles and reports whole-vs-paged mode. The existing
@@ -2743,6 +2762,29 @@ await runCase("REND-OFFSET", "offset tier: detail with contentStart/contentLen (
   // sanity: tier-1 fired (not the regex). The regex alone would yield "a" (truncated at the inner </file>).
   assert(!bodyChild.endsWith("a") || bodyChild.length > 1,
     `tier-1 slice is the FULL body (not the regex-truncated 'a'), got ${JSON.stringify(bodyChild.slice(0, 80))}`);
+});
+
+// REND-PAGED-DIR — §6.3 paged directive in the expanded view (P1.M2.T2.S1). A paged detail carrying `directive` +
+// content renders, when expanded, the head body FOLLOWED BY the directive text (the <paged: …> resume instructions).
+// Crafts the detail directly (independent of P1.M2.T1.S1 offsets + paging fixtures — mirrors REND-OFFSET's isolation).
+await runCase("REND-PAGED-DIR", "§6.3 expanded paged: head body FOLLOWED BY the <paged: …> directive text (dim)", async () => {
+  const headBody = "first 8 KB of the file…";
+  const directive = "<paged: 50000 chars; head delivered 200 complete lines; read the rest with the read tool at offset:201, limit:2000, incrementing offset by 2000 until done>";
+  const content = '<file name="/abs/huge.log">\n' + headBody + '\n</file>';   // single head block → bodies[0] resolves
+  const msg = {
+    details: { files: [{ path: "/abs/huge.log", kind: "paged", range: ":201-", body: headBody, directive }] },
+    content,
+  };
+  const expanded = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME);
+  const texts = expanded.children.map((c) => textOf(c));
+  // the head body renders (tier-2 d.body):
+  assert(texts.some((t) => t.includes(headBody)), `expanded paged view shows the head body, got ${JSON.stringify(texts.map((t) => t.slice(0, 40)))}`);
+  // the directive renders AFTER the head (§6.3) — the LAST child is the directive:
+  assert(texts.some((t) => t.includes("<paged:") && t.includes("read the rest")),
+    `expanded paged view shows the <paged: …> directive text (§6.3), got ${JSON.stringify(texts.map((t) => t.slice(0, 40)))}`);
+  const bodyIdx = texts.findIndex((t) => t.includes(headBody));
+  const dirIdx = texts.findIndex((t) => t.includes("<paged:"));
+  assert(dirIdx > bodyIdx, `the directive renders AFTER the head body (§6.3 order), got bodyIdx=${bodyIdx} dirIdx=${dirIdx}`);
 });
 
 // 10. Summary + cleanup + exit.
