@@ -180,7 +180,8 @@ await test("A9: resolution is independent of process.cwd() when baseDir is absol
 
 // ════════════════════════════════════════════════════════════════════════════
 // GROUP B — scanTokens: baseDir-parameterized scanning + guards.
-// Proves the records carry abs paths resolved against `baseDir`, the relative-only + code-exempt
+// Proves the resolved abs paths (string[] — scanTokens no longer returns index/prefixLen records; markers are
+// detected only to resolve imports, never stripped, §6.4) are baseDir-relative, the relative-only + code-exempt
 // guards fire, and the bare-@ union (bareAt:true) also resolves baseDir-relative.
 // ════════════════════════════════════════════════════════════════════════════
 console.log("\nGROUP B — scanTokens: baseDir-parameterized scan + guards");
@@ -193,8 +194,8 @@ await test("B1: #@b.md resolves to baseDir/b.md (record.abs is baseDir-relative)
   mk(root, "b.md", "ROOT-B");                // must NOT win
   const recs = await mod.scanTokens("See #@b.md.", path.join(root, "dir"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: false }, blankState());
-  assert(recs.length === 1 && recs[0].abs === path.join(root, "dir", "b.md"),
-    `expected 1 record at dir/b.md, got ${JSON.stringify(recs.map((r) => r.abs))}`);
+  assert(recs.length === 1 && recs[0] === path.join(root, "dir", "b.md"),
+    `expected 1 resolved abs at dir/b.md, got ${JSON.stringify(recs)}`);   // recs IS the abs paths
 });
 
 await test("B2: relative-only guard — #@/abs/... ignored when allowAbsTilde:false", async () => {
@@ -217,8 +218,8 @@ await test("B4: bare @b.md (bareAt:true) resolves baseDir-relative too", async (
   mk(root, "b.md", "ROOT-B");
   const recs = await mod.scanTokens("See @b.md.", path.join(root, "dir"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: true }, blankState());
-  assert(recs.length === 1 && recs[0].abs === path.join(root, "dir", "b.md"),
-    `bare @ must resolve baseDir-relative; got ${JSON.stringify(recs.map((r) => r.abs))}`);
+  assert(recs.length === 1 && recs[0] === path.join(root, "dir", "b.md"),
+    `bare @ must resolve baseDir-relative; got ${JSON.stringify(recs)}`);
 });
 
 await test("B5: dedup within a single scan (same abs recorded once)", async () => {
@@ -229,15 +230,18 @@ await test("B5: dedup within a single scan (same abs recorded once)", async () =
   assert(recs.length === 1, `duplicate token must dedup to one record; got ${recs.length}`);
 });
 
-await test("B6: prefixLen is correct (2 for #@, 1 for bare @)", async () => {
+// scanTokens returns string[] (resolved abs; no index/prefixLen — markers are never stripped, §6.4).
+// Repurposed to pin the still-meaningful property: both #@ and bare-@ resolve baseDir-relative in one scan.
+await test("B6: both #@ and bare-@ resolve baseDir-relative in a single scan (bareAt:true union)", async () => {
   const root = newRoot();
   mk(root, "dir/a.md", "A"); mk(root, "dir/b.md", "B");
   const recs = await mod.scanTokens("#@a.md then @b.md", path.join(root, "dir"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: true }, blankState());
-  const a = recs.find((r) => r.abs.endsWith("a.md"));
-  const b = recs.find((r) => r.abs.endsWith("b.md"));
-  assert(a && a.prefixLen === 2, `#@ must carry prefixLen 2; got ${a && a.prefixLen}`);
-  assert(b && b.prefixLen === 1, `bare @ must carry prefixLen 1; got ${b && b.prefixLen}`);
+  const a = recs.find((r) => r.endsWith("a.md"));
+  const b = recs.find((r) => r.endsWith("b.md"));
+  assert(recs.length === 2, `both #@ and bare-@ must resolve in one scan (the bareAt:true union); got ${recs.length}: ${JSON.stringify(recs)}`);
+  assert(a && a === path.join(root, "dir", "a.md"), `#@a.md resolved baseDir-relative; got ${JSON.stringify(a)}`);
+  assert(b && b === path.join(root, "dir", "b.md"), `bare @b.md resolved baseDir-relative; got ${JSON.stringify(b)}`);
 });
 
 await test("B7: code-exempt — #@b.md inside a fenced code block yields no record", async () => {

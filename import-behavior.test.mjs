@@ -35,7 +35,7 @@ const mk = (dir, rel, body) => {
 const ctxFor = (cwd) => ({ cwd, hasUI: false, isProjectTrusted: () => true, ui: { notify: () => {} } });
 const run = async (cwd, prompt, bareAt) => {
   const out = await mod.injectFiles(prompt, [], ctxFor(cwd), bareAt);
-  return out; // { text(stripped), images, injected, paged, blocks, details }
+  return out; // { text(verbatim — the prompt is preserved as-typed, §6.4), images, injected, paged, blocks, details }
 };
 const has = (out, marker) => (out.blocks ?? []).join("\n\n").includes(marker);
 const abs = (cwd, rel) => path.resolve(cwd, rel);
