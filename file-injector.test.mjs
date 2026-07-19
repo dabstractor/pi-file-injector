@@ -425,7 +425,7 @@ console.log("\nfile-injector.ts — PRD §11 acceptance matrix (model-free)\n");
 await runCase(1, "single text file injected, original preserved", async () => {
   const r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
-  assert(r.text === "Review a.ts", `text is the stripped prompt only (no blocks, no ---), got ${JSON.stringify(r.text)}`);
+  assert(r.text === "Review #@a.ts", `text is the verbatim prompt (#@ preserved; no blocks, no ---), got ${JSON.stringify(r.text)}`);
   const expectedBlock = '<file name="' + A_TS + '">\n' + A_TS_CONTENT + '\n</file>';
   assert(hasBlock(r, expectedBlock), `expected block to equal the processFileArguments template`);
 });
@@ -548,7 +548,7 @@ await runCase(12, "handler transforms interactive input (input event fires for -
   // source:"interactive" mirrors the -p path (the input event fires inside prompt() for ALL contexts).
   const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `handler must transform an interactive #@ prompt, got '${out.action}'`);
-  assert(out.text === "Review a.ts", `handler text is the stripped prompt (blocks now live in the before_agent_start custom message), got ${JSON.stringify(out.text)}`);
+  assert(out.text === "Review #@a.ts", `handler text is the verbatim prompt (#@ preserved; blocks live in the before_agent_start custom message), got ${JSON.stringify(out.text)}`);
   const msg = await h.before_agent_start[0]({}, ctx); // SAME factory → reads the stashed pending
   assert(msg && msg.message && msg.message.customType === "fileInjector.injected", `before_agent_start must publish the custom message, got ${JSON.stringify(msg)}`);
   assert(msg.message.content.includes('<file name="' + A_TS + '">'), "the a.ts block must be in the custom message content");
@@ -993,7 +993,7 @@ await runCase("U1", "U1 — Unicode word-boundary: #@ does not fire mid-word in 
   // (c) REGRESSION GUARD: a SPACE before #@ is a boundary → Review #@a.ts still injects → injected===1.
   r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `(c) Review #@a.ts must inject (space before #@ is a boundary), got ${r.injected}`);
-  assert(r.text.startsWith("Review a.ts"), `(c) path stays inline as a reference (#@ trigger stripped on successful inject)`);
+  assert(r.text.startsWith("Review #@a.ts"), `(c) path stays inline as a reference (#@ preserved verbatim; §6.4)`);
   assert(hasBlock(r, '<file name="' + A_TS + '">'), `(c) injected text must contain the a.ts <file> block`);
   // (d) REGRESSION GUARD: start-of-string (^ alternation) → #@a.ts still injects → injected===1.
   r = await mod.injectFiles("#@a.ts", [], FIX);
@@ -1089,7 +1089,7 @@ await runCase("PD1", "§5.5 paged: huge.log under tight budget → head + direct
   for (let i = 1; i <= total; i++) if (!seen.has(i)) { lost++; if (first < 0) first = i; }
   assert(lost === 0, `directive + head must cover every line; ${lost} of ${total} lines never delivered (first gap at line ${first}); Finding 1 regression`);
   // #@ stripped from the injected marker; the path stays
-  assert(r.text.startsWith("Summarize huge.log"), "#@huge.log must be stripped to huge.log (path stays)");
+  assert(r.text.startsWith("Summarize #@huge.log"), "#@huge.log preserved verbatim (path stays inline; §6.4)");
   assert(r.images.length === 0, "text-file paging attaches NO images");
 });
 
@@ -1635,7 +1635,7 @@ await runCase(15, "md import: notes.md imports api.md → both blocks (pre-order
   const r = await mod.injectFiles("Review #@notes.md", [], FIX);
   assert(r.injected === 2, `expected injected===2 (notes.md + api.md), got ${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notes.md"), "top-level #@notes.md marker stripped to notes.md");
+  assert(r.text.startsWith("Review #@notes.md"), "top-level #@notes.md preserved verbatim (§6.4)");
   const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES + '">'));
   const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both notes.md and api.md blocks must be present");
@@ -1667,7 +1667,7 @@ await runCase("CRLF-E2E", "§5.6 — CRLF markdown: fenced block + #@ import →
   const r = await mod.injectFiles("Read #@crlf_spec.md", [], FIX);
   assert(r.injected === 2, `CRLF spec + crlf_after.md both injected (import after the fence resolved), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Read crlf_spec.md"), "top-level #@crlf_spec.md marker stripped to crlf_spec.md");
+  assert(r.text.startsWith("Read #@crlf_spec.md"), "top-level #@crlf_spec.md preserved verbatim (§6.4)");
   assert(r.blocks.some((b) => b.includes('<file name="' + crlfSpec + '">')), "crlf_spec.md block present");
   assert(r.blocks.some((b) => b.includes('<file name="' + crlfAfter + '">')), "crlf_after.md block present (import after the CRLF fence resolved)");
   // The import marker is STRIPPED to the bare path — proving the #@ was recognized as an import (NOT code).
@@ -1702,7 +1702,7 @@ await runCase(19, "md relative base: sub/notes.md's #@api.md → sub/api.md (md'
   const r = await mod.injectFiles("Read #@sub/notes.md", [], FIX);
   assert(r.injected === 2, `sub/notes.md + sub/api.md injected, got ${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Read sub/notes.md"), "top-level #@sub/notes.md marker stripped to sub/notes.md");
+  assert(r.text.startsWith("Read #@sub/notes.md"), "top-level #@sub/notes.md preserved verbatim (§6.4)");
   const iSubNotes = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_NOTES + '">'));
   const iSubApi = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_API + '">'));
   assert(iSubNotes !== -1 && iSubApi !== -1, "both sub/notes.md and sub/api.md blocks present");
@@ -1768,7 +1768,7 @@ await runCase("MD1", "§10 md edge: notesMissing.md imports missing ghost.md →
   const r = await mod.injectFiles("Review #@notesMissing.md", [], FIX);
   assert(r.injected === 1, `only notesMissing.md injected (ghost.md is missing), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notesMissing.md"), "top-level #@notesMissing.md marker stripped to notesMissing.md");
+  assert(r.text.startsWith("Review #@notesMissing.md"), "top-level #@notesMissing.md preserved verbatim (§6.4)");
   assert(hasBlock(r, '<file name="' + NOTES_MISSING + '">'), "notesMissing.md block present");
   // THE §10 FIX: the missing import marker is LEFT VERBATIM (not stripped) — nothing was injected for it.
   assert(hasBlock(r, "Refs #@ghost.md here."), "the MISSING import marker #@ghost.md must be left VERBATIM (§10)");
@@ -1782,7 +1782,7 @@ await runCase("MD2", "§10 md edge: sub/outsider.md imports #@../shared/api.md �
   const r = await mod.injectFiles("Read #@sub/outsider.md", [], FIX);
   assert(r.injected === 2, `sub/outsider.md + shared/api.md injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Read sub/outsider.md"), "top-level #@sub/outsider.md marker stripped to sub/outsider.md");
+  assert(r.text.startsWith("Read #@sub/outsider.md"), "top-level #@sub/outsider.md preserved verbatim (§6.4)");
   assert(hasBlock(r, '<file name="' + OUTSIDER + '">'), "sub/outsider.md block present");
   assert(hasBlock(r, '<file name="' + SHARED_API + '">'), "shared/api.md block present (resolved via ../, outside cwd)");
   // shared/api.md is OUTSIDE cwd (TMPDIR) but INSIDE the markdown's parent — explicitly ALLOWED (§10).
@@ -1879,7 +1879,7 @@ await runCase(21, "md ext-shorthand: #@api (no bare api) → api.md; marker→ap
   const r = await mod.injectFiles("Review #@notesShorthand.md", [], FIX);
   assert(r.injected === 2, `notesShorthand.md + api.md injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notesShorthand.md"), "top-level #@notesShorthand.md marker stripped to notesShorthand.md");
+  assert(r.text.startsWith("Review #@notesShorthand.md"), "top-level #@notesShorthand.md preserved verbatim (§6.4)");
   const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_SHORTHAND + '">'));
   const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));   // reuses the existing top-level api.md
   assert(iNotes !== -1 && iApi !== -1, "both notesShorthand.md and api.md blocks must be present");
@@ -1894,7 +1894,7 @@ await runCase(22, "md ext exact-wins: #@guide (bare guide + guide.md) → bare g
   const r = await mod.injectFiles("Review #@notesExactWins.md", [], FIX);
   assert(r.injected === 2, `notesExactWins.md + bare guide injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notesExactWins.md"), "top-level #@notesExactWins.md marker stripped to notesExactWins.md");
+  assert(r.text.startsWith("Review #@notesExactWins.md"), "top-level #@notesExactWins.md preserved verbatim (§6.4)");
   const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_EXACT_WINS + '">'));
   const iGuide = r.blocks.findIndex((b) => b.includes('<file name="' + GUIDE_BARE + '">'));
   assert(iNotes !== -1 && iGuide !== -1, "both notesExactWins.md and bare guide blocks must be present");
@@ -1912,7 +1912,7 @@ await runCase(23, "md ext .markdown: #@api (only api.markdown) → api.markdown;
   const r = await mod.injectFiles("Read #@sub/ext/notes.md", [], FIX);
   assert(r.injected === 2, `sub/ext/notes.md + sub/ext/api.markdown injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Read sub/ext/notes.md"), "top-level #@sub/ext/notes.md marker stripped to sub/ext/notes.md");
+  assert(r.text.startsWith("Read #@sub/ext/notes.md"), "top-level #@sub/ext/notes.md preserved verbatim (§6.4)");
   const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + EXT_NOTES + '">'));
   const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + EXT_API_MARKDOWN + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both sub/ext/notes.md and sub/ext/api.markdown blocks must be present");
@@ -1938,7 +1938,7 @@ await runCase("EDG-1", "§10 md edge: #@ghost (no ghost/.md/.markdown) → verba
   const r = await mod.injectFiles("Review #@notesGhost.md", [], FIX);
   assert(r.injected === 1, `only notesGhost.md injected (ghost has no match), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notesGhost.md"), "top-level #@notesGhost.md marker stripped to notesGhost.md");
+  assert(r.text.startsWith("Review #@notesGhost.md"), "top-level #@notesGhost.md preserved verbatim (§6.4)");
   assert(hasBlock(r, '<file name="' + NOTES_GHOST + '">'), "notesGhost.md block present");
   assert(hasBlock(r, "Refs #@ghost here."), "the no-match import marker #@ghost must be left VERBATIM (§10)");
   assert(!hasBlock(r, "Refs ghost here."), "the no-match import marker must NOT be stripped");
@@ -1951,7 +1951,7 @@ await runCase("EDG-2", "§10 md edge: #@absent.md (missing) → exact-only (neve
   const r = await mod.injectFiles("Review #@notesAbsent.md", [], FIX);
   assert(r.injected === 1, `only notesAbsent.md injected (absent.md missing), got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notesAbsent.md"), "top-level #@notesAbsent.md marker stripped to notesAbsent.md");
+  assert(r.text.startsWith("Review #@notesAbsent.md"), "top-level #@notesAbsent.md preserved verbatim (§6.4)");
   assert(hasBlock(r, '<file name="' + NOTES_ABSENT + '">'), "notesAbsent.md block present");
   assert(hasBlock(r, "Refs #@absent.md here."), "the missing already-extended marker #@absent.md must be left VERBATIM (exact-only, never .md.md)");
   assert(!hasBlock(r, "Refs absent.md here."), "the missing import marker must NOT be stripped");
@@ -1965,7 +1965,7 @@ await runCase("EDG-3", "§10 md edge: #@specdoc + #@specdoc.md (specdoc.md exist
   const r = await mod.injectFiles("Review #@notesDedup.md", [], FIX);
   assert(r.injected === 2, `notesDedup.md + specdoc.md (deduped) injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Review notesDedup.md"), "top-level #@notesDedup.md marker stripped to notesDedup.md");
+  assert(r.text.startsWith("Review #@notesDedup.md"), "top-level #@notesDedup.md preserved verbatim (§6.4)");
   // specdoc.md injected EXACTLY ONCE (dedup on the resolved abs — both #@specdoc and #@specdoc.md collapse)
   assert(countFileBlocks(blocksText(r), SPECDOC_MD) === 1, `specdoc.md must appear exactly ONCE (dedup across shorthand forms), got ${countFileBlocks(blocksText(r), SPECDOC_MD)}`);
   // first marker #@specdoc stripped to "specdoc"; second #@specdoc.md left VERBATIM (deduped → not recorded → not stripped)
@@ -1983,7 +1983,7 @@ await runCase("EDG-4", "§10 md edge: #@sub/notes (sub/notes.md exists) → sub/
   const r = await mod.injectFiles("Read #@notesSubPrefix.md", [], FIX);
   assert(r.injected === 3, `notesSubPrefix.md + sub/notes.md + sub/api.md (transitive) injected, got injected=${r.injected}`);
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
-  assert(r.text.startsWith("Read notesSubPrefix.md"), "top-level #@notesSubPrefix.md marker stripped to notesSubPrefix.md");
+  assert(r.text.startsWith("Read #@notesSubPrefix.md"), "top-level #@notesSubPrefix.md preserved verbatim (§6.4)");
   const iNotes = r.blocks.findIndex((b) => b.includes('<file name="' + NOTES_SUB_PREFIX + '">'));
   const iSub = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_NOTES + '">'));   // reuses the existing sub/notes.md
   const iSubApi = r.blocks.findIndex((b) => b.includes('<file name="' + SUB_API + '">'));   // sub/notes.md's transitive #@api.md → sub/api.md
@@ -2474,7 +2474,7 @@ await runCase("DELIV-1", "injectFiles return shape: r.text stripped (no ---/<fil
   const r = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
   assert(r.paged === 0, `expected paged===0, got ${r.paged}`);
-  assert(r.text === "Review a.ts", `r.text is the STRIPPED prompt (no blocks); got ${JSON.stringify(r.text)}`);
+  assert(r.text === "Review #@a.ts", `r.text is the verbatim prompt (#@ preserved; no blocks); got ${JSON.stringify(r.text)}`);
   assert(!r.text.includes("---"), "r.text must NOT contain the old '---' separator");
   assert(!r.text.includes("<file"), "r.text must NOT contain any <file> block (bytes live in r.blocks/the custom message)");
   assert(Array.isArray(r.blocks) && r.blocks.length === 1, `r.blocks is a string[] of length 1, got ${JSON.stringify(r.blocks)}`);
@@ -2497,7 +2497,7 @@ await runCase("DELIV-2", "custom message: before_agent_start → {customType, co
   const h = captureAllHandlers(); // ONE factory → input + before_agent_start share the `pending` closure
   const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
   assert(out.action === "transform", `input must transform, got '${out.action}'`);
-  assert(out.text === "Review a.ts", `input text is stripped (blocks leave the user message); got ${JSON.stringify(out.text)}`);
+  assert(out.text === "Review #@a.ts", `input text is verbatim (#@ preserved; blocks leave the user message), got ${JSON.stringify(out.text)}`);
   const msg = await h.before_agent_start[0]({}, ctx); // SAME factory → reads the stashed pending
   assert(msg && msg.message, `before_agent_start must return {message}, got ${JSON.stringify(msg)}`);
   const m = msg.message;
