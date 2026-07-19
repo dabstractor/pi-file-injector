@@ -40,9 +40,11 @@ const run = async (cwd, prompt, bareAt) => {
 const has = (out, marker) => (out.blocks ?? []).join("\n\n").includes(marker);
 const abs = (cwd, rel) => path.resolve(cwd, rel);
 
-// Drive the REAL input handler — the exact path pi takes. session_start loads cfg from the LIVE global
-// settings.json (so markdownBareAtImports is derived INSIDE the handler, not hardcoded). This catches any
-// config/depth wiring bug that a direct injectFiles(..., true) call would hide.
+// Drive the REAL input handler — the exact path pi takes. session_start loads cfg via readConfig (so
+// markdownBareAtImports is derived INSIDE the handler, not hardcoded). Handler tests write a HERMETIC
+// project-local .pi/file-injector.json into the tmp repo so cfg does NOT depend on the machine's global
+// ~/.pi/agent settings (which differ between dev and CI). This catches any config/depth wiring bug that a
+// direct injectFiles(..., true) call would hide.
 function captureAll() {
   const cbs = {};
   mod.default({ on: (ev, cb) => { (cbs[ev] ??= []).push(cb); }, registerMessageRenderer: () => {} });
@@ -217,7 +219,7 @@ await test("4g: .markdown variant — '@x.markdown.*' resolves to x.markdown", a
 // User report: with the setting ON, the FIRST-imported (depth-0) file's imports need #@, while deeper
 // files accept bare @. Desired: bare @ works at EVERY depth incl. the first-imported file — identical to
 // deeper files, no special-casing. Tests run through BOTH injectFiles (direct) AND the real handler path
-// (cfg loaded from live settings, bareAt derived inside the handler — the path pi actually takes).
+// (hermetic project .pi/file-injector.json → bareAt derived inside the handler — the path pi actually takes).
 // ===========================================================================
 console.log("\nGROUP 5 — depth-0 (first-imported) file bare-@ under markdownBareAtImports:true");
 
@@ -229,8 +231,9 @@ await test("5a: depth-0 EXACT user line '*...@ARCHITECTURE.md.*' (bare @, italic
   assert(has(o, "ARCH-MARKER"), `depth-0 bare-@ (italic line) must import. injected=${o.injected}`);
 });
 
-await test("5b: SAME via the REAL handler path (cfg from live settings → bareAt derived inside handler)", async () => {
+await test("5b: SAME via the REAL handler path (hermetic project config → bareAt derived inside handler)", async () => {
   const r = fsSync.mkdtempSync(path.join(os.tmpdir(), "d0-"));
+  mk(r, ".pi/file-injector.json", JSON.stringify({ markdownBareAtImports: true })); // hermetic — no reliance on global ~/.pi/agent
   mk(r, "spec/PRD.md", "*End of PRD. Continue with @ARCHITECTURE.md.*\n");
   mk(r, "spec/ARCHITECTURE.md", "ARCH-MARKER");
   const { out, msg } = await runHandler(r, "#@spec/PRD.md");
@@ -247,6 +250,7 @@ await test("5c: depth-0 plain bare-@ (own line, no glue) → imports", async () 
 
 await test("5d: depth-0 bare-@ ALSO via the real handler path (plain, no glue)", async () => {
   const r = fsSync.mkdtempSync(path.join(os.tmpdir(), "d0-"));
+  mk(r, ".pi/file-injector.json", JSON.stringify({ markdownBareAtImports: true })); // hermetic — no reliance on global ~/.pi/agent
   mk(r, "a.md", "A\n\n@b.md\n"); mk(r, "b.md", "B-MARKER");
   const { out, msg } = await runHandler(r, "#@a.md");
   assert(out.action === "transform" && msg.message.content.includes("B-MARKER"), `real handler: depth-0 bare-@ must import. action=${out.action}`);
