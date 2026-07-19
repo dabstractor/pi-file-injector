@@ -340,7 +340,7 @@ function blockPath(block: string): string | undefined {
  *  renderer can slice the body out of the assembled `message.content` WITHOUT duplicating file bytes into
  *  `details` (the body is renderer-only metadata; it must not be persisted in the custom message). Runs in
  *  `before_agent_start` over the FINAL `blocks` array, because the absolute offset of a detail's body within
- *  `blocks.join("\\n\\n")` depends on every PRIOR block's length — `emitText` cannot know it at emit time.
+ *  `blocks.join("\n\n")` depends on every PRIOR block's length — `emitText` cannot know it at emit time.
  *
  *  Pairing: details and blocks are NOT 1:1 — a paged detail emits TWO blocks (head + directive) but only
  *  the head block carries the body. We pair each detail to the NEXT unmatched text/head block with the same
@@ -351,8 +351,8 @@ function blockPath(block: string): string | undefined {
  *  Idempotent + defensive: a detail whose block can't be located is left untouched (renderer falls back to
  *  the regex tier). Mutates `details` in place and returns it for chaining. */
 export function computeDetailOffsets(blocks: string[], details: FileDetail[]): FileDetail[] {
-  const SEP = "\\n\\n";
-  // absolute char offset of each block within blocks.join("\\n\\n")
+  const SEP = "\n\n";
+  // absolute char offset of each block within blocks.join("\n\n")
   const starts: number[] = [];
   let off = 0;
   for (const b of blocks) { starts.push(off); off += b.length + SEP.length; }
