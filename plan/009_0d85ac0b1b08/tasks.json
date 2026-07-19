@@ -218,14 +218,14 @@
               "type": "Task",
               "id": "P1.M2.T3",
               "title": "Add re-open / re-submit regression tests (PRD §11 case #42 + §10 new rows)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "The core value of verbatim delivery is that cancel/fork/tree-navigate re-submission re-triggers injection. No existing test covers this — it's a NEW regression guard. The test must model the Pi constraint: the stored user-message text is re-fed to a fresh input invocation, and injection must re-trigger because #@ survived in the stored text.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T3.S1",
                   "title": "Add return-shape, handler-level, and re-open simulation regression tests",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S1"
@@ -242,7 +242,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T3.S2",
                   "title": "Add markdown verbatim regression test (import markers preserved in delivered content)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S2"

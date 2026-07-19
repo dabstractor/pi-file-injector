@@ -2788,6 +2788,75 @@ await runCase("REND-PAGED-DIR", "§6.3 expanded paged: head body FOLLOWED BY the
   assert(dirIdx > bodyIdx, `the directive renders AFTER the head body (§6.3 order), got bodyIdx=${bodyIdx} dirIdx=${dirIdx}`);
 });
 
+// ── P1.M2.T3.S1 (plan/009): verbatim re-submission regression ──
+// ─────────────────────────────────────────────────────────────────────
+// Pins PRD §6.4 (the prompt is preserved byte-for-byte; re-submission robustness) + §13.8 (stripping breaks
+// every re-submission path) + §10 (the prompt is stored verbatim — #@ stays, so re-open re-triggers).
+// The keystone is REOPEN-3: it feeds the STORED text back through a FRESH factory and proves injection
+// RE-TRIGGERS — the exact invariant that would silently break (files vanish on cancel/fork//tree) if #@ were
+// ever stripped again. REUSE makeMockCtx/captureAllHandlers/FIX/A_TS/A_TS_CONTENT/assert/runCase — no new
+// fixtures/helpers. Calls injectFiles (Mode A) and captureAllHandlers (Mode B) only — no scanTokens, no dedup.
+// Prefix REOPEN- (no collision with DELIV-/F1/T1.S1-).
+
+// REOPEN-1 — RETURN SHAPE (Mode A, contract a). The stored prompt text carries #@ verbatim.
+await runCase("REOPEN-1", "injectFiles return shape: r.text is the verbatim prompt (#@ preserved — what gets stored); blocks/details len 1", async () => {
+  const r = await mod.injectFiles("Review #@a.ts", [], FIX);
+  assert(r.text === "Review #@a.ts", `r.text must be the verbatim prompt (#@ preserved — §6.4; this is what Pi STORES so re-open re-triggers), got ${JSON.stringify(r.text)}`);
+  assert(r.injected === 1, `injected===1 (one file delivered), got ${r.injected}`);
+  assert(Array.isArray(r.blocks) && r.blocks.length === 1, `r.blocks is a string[] of length 1, got ${JSON.stringify(r.blocks?.length)}`);
+  assert(r.blocks[0].includes('<file name="' + A_TS + '">'), `r.blocks[0] is the a.ts <file> block, got ${JSON.stringify(r.blocks?.[0]?.slice(0, 40))}`);
+  assert(Array.isArray(r.details) && r.details.length === 1, `r.details is a FileDetail[] of length 1, got ${JSON.stringify(r.details?.length)}`);
+});
+
+// REOPEN-2 — HANDLER-LEVEL (Mode B, contract b). The input handler stores #@ verbatim AND before_agent_start
+// still delivers the block to the model. (Leaner than DELIV-2 — asserts only the re-submission-relevant facts.)
+await runCase("REOPEN-2", "handler-level: input stores #@ verbatim (action:transform) + before_agent_start delivers the <file> block", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);
+  const h = captureAllHandlers(); // ONE factory → input + before_agent_start share the `pending` closure
+  const out = await h.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `input must transform (injection happened), got '${out.action}'`);
+  assert(out.text === "Review #@a.ts", `input text is VERBATIM (event.text, #@ preserved — §6.4/§13.8; this is what gets stored), got ${JSON.stringify(out.text)}`);
+  const msg = await h.before_agent_start[0]({}, ctx); // SAME factory → reads the stashed pending
+  assert(msg && msg.message && typeof msg.message.content === "string" && msg.message.content.includes("<file name="),
+    `before_agent_start must deliver the <file> block to the model (msg.message.content), got ${JSON.stringify(msg)}`);
+});
+
+// REOPEN-3 — RE-OPEN SIMULATION (Mode B ×2, contract c — the KEYSTONE REGRESSION). Pi re-feeds the STORED text
+// on cancel/fork//tree re-open. Feed factory-1's stored text (out1.text) into a FRESH factory-2 input and prove
+// injection RE-TRIGGERS (and the block is re-delivered). If #@ had been stripped, out1.text would be "Review a.ts"
+// → factory-2 input would return {action:"continue"} → files would silently vanish. This case catches that.
+await runCase("REOPEN-3", "re-open simulation: feeding the STORED text (verbatim #@) back into a FRESH factory re-triggers injection (keystone — §13.8)", async () => {
+  // Factory 1 — the original submission. out1.text is what Pi STORES.
+  const { ctx: ctx1 } = makeMockCtx(TMPDIR);
+  const h1 = captureAllHandlers();
+  const out1 = await h1.input[0]({ text: "Review #@a.ts", source: "interactive", images: [] }, ctx1);
+  assert(out1.action === "transform", `1st submission must inject, got '${out1.action}'`);
+  assert(out1.text === "Review #@a.ts", `the STORED text (out1.text) must still contain #@ (verbatim — §6.4), got ${JSON.stringify(out1.text)}`);
+
+  // Simulate re-open: Pi re-feeds the STORED text into a FRESH prompt() invocation → a fresh factory closure.
+  // (pending is closure-scoped; a 2nd captureAllHandlers() = its own pending — a faithful fresh-invocation model.)
+  const { ctx: ctx2 } = makeMockCtx(TMPDIR);
+  const h2 = captureAllHandlers();
+  const out2 = await h2.input[0]({ text: out1.text, source: "interactive", images: [] }, ctx2);
+  assert(out2.action === "transform", `RE-OPEN must RE-TRIGGER injection (the stored text still has #@) — got '${out2.action}' (a stripping regression would make this 'continue' → files vanish, §13.8)`);
+  assert(out2.text === "Review #@a.ts", `re-opened text is still verbatim, got ${JSON.stringify(out2.text)}`);
+  // And the block is re-delivered to the model on re-open (proves files don't vanish end-to-end):
+  const msg2 = await h2.before_agent_start[0]({}, ctx2);
+  assert(msg2 && msg2.message && typeof msg2.message.content === "string" && msg2.message.content.includes("<file name="),
+    `re-open must RE-DELIVER the <file> block to the model (before_agent_start), got ${JSON.stringify(msg2)}`);
+});
+
+// REOPEN-4 — NEGATIVE CONTROL (Mode B, the regression's failure mode). A stored prompt with NO #@ re-triggers
+// nothing ({action:"continue"}). This is the EXACT failure mode a stripping regression would produce: stripped
+// stored text → no #@ on re-open → continue → files vanish. REOPEN-3 passes only because verbatim preserves #@.
+await runCase("REOPEN-4", "negative control: a stored prompt with NO #@ re-triggers nothing (continue) — the failure mode a stripping regression would produce", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);
+  const h = captureAllHandlers();
+  // "Review a.ts" models a STRIPPED stored prompt (no #@). Re-open finds no trigger → continue.
+  const out = await h.input[0]({ text: "Review a.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "continue", `a prompt with NO #@ must NOT inject (action:continue) — this is the trap REOPEN-3 avoids by preserving #@, got '${out.action}'`);
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
