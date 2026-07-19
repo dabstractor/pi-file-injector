@@ -132,7 +132,7 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Migrate stripped->verbatim assertions in file-injector.test.mjs",
-              "status": "Planned",
+              "status": "Researching",
               "description": "file-injector.test.mjs (2812 lines) is the primary test gate. It currently asserts ~78 stripping-related expectations across three categories: (a) top-level prompt assertions where r.text/out.text was checked for stripped prompts (e.g. r.text === 'Review a.ts'), (b) markdown block content assertions where markers were checked as stripped (hasBlock pairs asserting the marker was removed), and (c) partial-strip / verbatim-prompt assertions. All must flip from 'stripped' to 'verbatim'.",
               "subtasks": [
                 {
@@ -156,7 +156,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "Migrate markdown block content assertions (~13 pairs): markers now present verbatim",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
@@ -173,7 +173,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S3",
                   "title": "Migrate partial-strip + verify verbatim-prompt assertions (~19 cases)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"

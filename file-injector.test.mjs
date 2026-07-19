@@ -1640,9 +1640,9 @@ await runCase(15, "md import: notes.md imports api.md → both blocks (pre-order
   const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both notes.md and api.md blocks must be present");
   assert(iNotes < iApi, "notes.md block must appear BEFORE api.md block (pre-order depth-first: parent then import)");
-  // the import marker inside notes.md is stripped to the bare path (the fenced #@example.ts is left verbatim)
-  assert(hasBlock(r, "Imports api.md here."), "notes.md block: resolved import marker stripped to api.md");
-  assert(!hasBlock(r, "Imports #@api.md here."), "the resolved import marker must NOT retain #@");
+  // the import marker inside notes.md is preserved verbatim (§6.4); the fenced #@example.ts is also verbatim
+  assert(hasBlock(r, "Imports #@api.md here."), "notes.md block: resolved import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "Imports api.md here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 await runCase(16, "md code-exempt: fenced #@example.ts left verbatim; only api.md imported", async () => {
@@ -1670,9 +1670,9 @@ await runCase("CRLF-E2E", "§5.6 — CRLF markdown: fenced block + #@ import →
   assert(r.text.startsWith("Read #@crlf_spec.md"), "top-level #@crlf_spec.md preserved verbatim (§6.4)");
   assert(r.blocks.some((b) => b.includes('<file name="' + crlfSpec + '">')), "crlf_spec.md block present");
   assert(r.blocks.some((b) => b.includes('<file name="' + crlfAfter + '">')), "crlf_after.md block present (import after the CRLF fence resolved)");
-  // The import marker is STRIPPED to the bare path — proving the #@ was recognized as an import (NOT code).
-  assert(hasBlock(r, "See crlf_after.md"), "crlf_spec.md block: CRLF-path import marker stripped to crlf_after.md");
-  assert(!hasBlock(r, "See #@crlf_after.md"), "the resolved CRLF-path import marker must NOT retain #@");
+  // The import marker is preserved VERBATIM — the #@ stays (content is the file as-read; §6.4).
+  assert(hasBlock(r, "See #@crlf_after.md"), "crlf_spec.md block: CRLF-path import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "See crlf_after.md"), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 await runCase(17, "md cycle: a.md↔b.md → each once, b.md's #@a.md verbatim, no loop, injected=2", async () => {
@@ -1710,9 +1710,9 @@ await runCase(19, "md relative base: sub/notes.md's #@api.md → sub/api.md (md'
   // CRITICAL: api.md resolved as sub/api.md (relative to the markdown's dir), NOT TMPDIR/api.md.
   assert(hasBlock(r, "Sibling API in sub/."), "sub/api.md's DISTINCT content present (proves resolution relative to md dir)");
   assert(!hasBlock(r, "Top-level API surface."), "the top-level api.md must NOT be injected (resolution is relative to the md's dir)");
-  // sub/notes.md's #@api.md marker stripped to api.md
-  assert(hasBlock(r, "See api.md."), "sub/notes.md's import marker stripped to api.md");
-  assert(!hasBlock(r, "See #@api.md."), "the resolved import marker must NOT retain #@");
+  // sub/notes.md's #@api.md marker preserved verbatim (§6.4)
+  assert(hasBlock(r, "See #@api.md."), "sub/notes.md's import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "See api.md."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1748,9 +1748,9 @@ await runCase(20, "§5.6.2 shared budget: bigdoc.md + 3 imports whole, huge.log 
   assert(hugeTags === 2, `huge.log must have a HEAD block + a DIRECTIVE block (2 tags), got ${hugeTags}`);
   assert(hasBlock(r, "<paged:"), "huge.log paged directive present (PRD §6.1 '<paged: ...>' format)");
   assert(hasBlock(r, "with the read tool"), "huge.log paged directive references the read tool (§6.1 'read the rest with the read tool')");
-  // bigdoc.md's import markers are STRIPPED (all 4 imports resolved+exist → injectable → stripped).
-  assert(r.blocks[iB].includes("Logs: huge.log"), "bigdoc.md block: the #@huge.log marker stripped to huge.log");
-  assert(!r.blocks[iB].includes("#@"), "bigdoc.md block must contain NO '#@' markers (all imports resolved+stripped)");
+  // bigdoc.md's import markers are preserved VERBATIM (content is the file as-read; all 4 imports resolved+exist; §6.4).
+  assert(r.blocks[iB].includes("Logs: #@huge.log"), "bigdoc.md block: the #@huge.log marker preserved verbatim (§6.4)");
+  assert(r.blocks[iB].includes("#@"), "bigdoc.md block now CONTAINS verbatim #@ markers (§6.4)");
 
   // (2) NOTIFY — merged ctx (makeMockCtx ui + PAGED_FIX budget) via the handler. Counts come from the message.
   const { ctx: base, rec } = makeMockCtx(TMPDIR);
@@ -1789,9 +1789,9 @@ await runCase("MD2", "§10 md edge: sub/outsider.md imports #@../shared/api.md �
   assert(path.relative(TMPDIR, SHARED_API) === path.join("shared", "api.md"),
     `shared/api.md resolves under TMPDIR/shared (the md's parent's sibling), got rel=${path.relative(TMPDIR, SHARED_API)}`);
   assert(hasBlock(r, "Outside cwd."), "shared/api.md's DISTINCT content present (proves the outside-cwd file was injected)");
-  // the import marker is STRIPPED (the import resolved + exists → injectable → stripped).
-  assert(hasBlock(r, "See ../shared/api.md here."), "sub/outsider.md block: the #@../shared/api.md marker stripped to ../shared/api.md");
-  assert(!hasBlock(r, "#@../shared/api.md"), "the resolved outside-cwd import marker must NOT retain #@");
+  // the import marker is preserved VERBATIM (content is the file as-read; §6.4).
+  assert(hasBlock(r, "#@../shared/api.md"), "sub/outsider.md block: the #@../shared/api.md marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "See ../shared/api.md here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1884,8 +1884,8 @@ await runCase(21, "md ext-shorthand: #@api (no bare api) → api.md; marker→ap
   const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));   // reuses the existing top-level api.md
   assert(iNotes !== -1 && iApi !== -1, "both notesShorthand.md and api.md blocks must be present");
   assert(iNotes < iApi, "notesShorthand.md block must appear BEFORE api.md block (pre-order depth-first)");
-  assert(hasBlock(r, "Imports api here."), "notesShorthand.md block: extensionless import marker stripped to api");
-  assert(!hasBlock(r, "Imports #@api here."), "the resolved extensionless import marker must NOT retain #@");
+  assert(hasBlock(r, "Imports #@api here."), "notesShorthand.md block: extensionless import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "Imports api here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // Case 22 — §11: EXACT BEATS SHORTHAND. notesExactWins.md imports "#@guide"; BOTH a bare "guide" AND
@@ -1902,8 +1902,8 @@ await runCase(22, "md ext exact-wins: #@guide (bare guide + guide.md) → bare g
   // CRITICAL: exact-match wins — the bare "guide" is injected; guide.md is NOT.
   assert(hasBlock(r, "bare guide"), "the bare guide's content is present (exact match injected)");
   assert(countFileBlocks(blocksText(r), GUIDE_MD) === 0, `guide.md must have ZERO blocks (exact-match wins over shorthand), got ${countFileBlocks(blocksText(r), GUIDE_MD)}`);
-  assert(hasBlock(r, "Refs guide here."), "notesExactWins.md block: import marker stripped to guide");
-  assert(!hasBlock(r, "Refs #@guide here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "Refs #@guide here."), "notesExactWins.md block: import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "Refs guide here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // Case 23 — §11: .markdown FALLBACK. sub/ext/notes.md imports "#@api"; in sub/ext/ ONLY api.markdown exists
@@ -1918,8 +1918,8 @@ await runCase(23, "md ext .markdown: #@api (only api.markdown) → api.markdown;
   assert(iNotes !== -1 && iApi !== -1, "both sub/ext/notes.md and sub/ext/api.markdown blocks must be present");
   assert(iNotes < iApi, "sub/ext/notes.md block before sub/ext/api.markdown block (pre-order)");
   assert(hasBlock(r, "Markdown API"), "sub/ext/api.markdown's DISTINCT content present (proves .markdown fallback)");
-  assert(hasBlock(r, "See api here."), "sub/ext/notes.md block: import marker stripped to api");
-  assert(!hasBlock(r, "See #@api here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "See #@api here."), "sub/ext/notes.md block: import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "See api here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // Case 24 — §11: TOP-LEVEL EXACT-ONLY. Top-level "#@specdoc" with ONLY specdoc.md present (NO bare specdoc)
@@ -1968,9 +1968,9 @@ await runCase("EDG-3", "§10 md edge: #@specdoc + #@specdoc.md (specdoc.md exist
   assert(r.text.startsWith("Review #@notesDedup.md"), "top-level #@notesDedup.md preserved verbatim (§6.4)");
   // specdoc.md injected EXACTLY ONCE (dedup on the resolved abs — both #@specdoc and #@specdoc.md collapse)
   assert(countFileBlocks(blocksText(r), SPECDOC_MD) === 1, `specdoc.md must appear exactly ONCE (dedup across shorthand forms), got ${countFileBlocks(blocksText(r), SPECDOC_MD)}`);
-  // first marker #@specdoc stripped to "specdoc"; second #@specdoc.md left VERBATIM (deduped → not recorded → not stripped)
-  assert(hasBlock(r, "Imports: specdoc and #@specdoc.md"), "first marker #@specdoc stripped to specdoc; second #@specdoc.md left VERBATIM (deduped)");
-  assert(!hasBlock(r, "Imports: #@specdoc and"), "the first (dedup-winning) marker must NOT retain #@");
+  // BOTH markers verbatim (dedup affects INJECTION — one block per resolved abs — NOT content; §6.4)
+  assert(hasBlock(r, "Imports: #@specdoc and #@specdoc.md"), "both markers preserved verbatim (dedup affects injection, not content; §6.4)");
+  assert(!hasBlock(r, "Imports: specdoc and"), "the first-stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // EDG-4 — §10: SHORTHAND WITH PATH PREFIX. notesSubPrefix.md imports "#@sub/notes"; sub/notes.md already
@@ -1990,8 +1990,8 @@ await runCase("EDG-4", "§10 md edge: #@sub/notes (sub/notes.md exists) → sub/
   assert(iNotes !== -1 && iSub !== -1 && iSubApi !== -1, "notesSubPrefix.md + sub/notes.md + sub/api.md blocks all present");
   assert(iNotes < iSub && iSub < iSubApi, "pre-order: notesSubPrefix.md before sub/notes.md before sub/api.md");
   assert(hasBlock(r, "Sub Notes"), "sub/notes.md's DISTINCT content present (proves shorthand resolved the prefixed path)");
-  assert(hasBlock(r, "See sub/notes here."), "notesSubPrefix.md block: import marker stripped to sub/notes");
-  assert(!hasBlock(r, "See #@sub/notes here."), "the resolved import marker must NOT retain #@");
+  assert(hasBlock(r, "See #@sub/notes here."), "notesSubPrefix.md block: import marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "See sub/notes here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2383,11 +2383,11 @@ await runCase(26, "§4.6 on: bare @api.md imported + stripped to api.md (prefixL
   const iApi = r.blocks.findIndex((b) => b.includes('<file name="' + API + '">'));
   assert(iNotes !== -1 && iApi !== -1, "both notesBare.md and api.md blocks must be present");
   assert(iNotes < iApi, "notesBare.md block before api.md block (pre-order depth-first)");
-  // prefixLen-1 strip: the '@' is removed, leaving `api.md` (1 char stripped, NOT 2)
-  assert(hasBlock(r, "Refs api.md here."), "prefixLen-1 strip: bare @api.md → api.md (the '@' removed)");
-  assert(!hasBlock(r, "Refs @api.md here."), "the bare @api.md marker must NOT retain the '@' (stripped)");
-  // SMOKING-GUN +2-bug GUARD: a wrong +2 strip would remove '@a' leaving 'pi.md'. Assert the bug's fingerprint ABSENT.
-  assert(!hasBlock(r, "Refs pi.md here."), "SMOKING-GUN: '+2' bug would strip '@a' → 'pi.md'; must be ABSENT (prefixLen-1 strip works)");
+  // bare-@ marker preserved verbatim (§6.4): the '@' stays (content is the file as-read; no stripping)
+  assert(hasBlock(r, "Refs @api.md here."), "bare @api.md marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "Refs api.md here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
+  // +2-prefixLen bug guard (redundant under verbatim): no stripping occurs → the bug cannot fire; 'pi.md' never appears.
+  assert(!hasBlock(r, "Refs pi.md here."), "redundant under verbatim: no stripping → +2-prefixLen bug cannot occur; 'pi.md' never appears (§6.4)");
 });
 
 // #27 — bareAt ON + existing #@notes.md (no double-match). The existing notes.md has `#@api.md` (prefixLen 2)
@@ -2400,8 +2400,8 @@ await runCase(27, "§4.6 on+#@: #@api.md matched ONCE (no double-match), injecte
   // api.md matched EXACTLY ONCE (BARE_AT_RE forbids preceding '#' → #@api.md never double-matched)
   assert(countFileBlocks(blocksText(r), API) === 1, `api.md must appear exactly ONCE (no double-match), got ${countFileBlocks(blocksText(r), API)}`);
   // prefixLen-2 strip for the #@ form (unchanged behavior; the +r.prefixLen edit == +2 here)
-  assert(hasBlock(r, "Imports api.md here."), "#@api.md stripped to api.md (prefixLen 2)");
-  assert(!hasBlock(r, "Imports #@api.md here."), "the #@api.md marker must NOT retain #@");
+  assert(hasBlock(r, "Imports #@api.md here."), "#@api.md marker preserved verbatim (§6.4)");
+  assert(!hasBlock(r, "Imports api.md here."), "the stripped form must be ABSENT (content is verbatim, not stripped)");
   // the fenced #@example.ts is STILL verbatim (code-exempt even with bareAt on)
   assert(hasBlock(r, "#@example.ts"), "fenced #@example.ts must be left VERBATIM (code-exempt, bareAt-independent)");
 });
@@ -2444,9 +2444,9 @@ await runCase("M2.T2.S1-g", "§10 dedup: #@api.md + @api.md (on) → api.md ONCE
   assert(r.paged === 0, `no paging without budget, got paged=${r.paged}`);
   // api.md injected EXACTLY ONCE (dedup on resolved abs — both #@api.md and @api.md collapse)
   assert(countFileBlocks(blocksText(r), API) === 1, `api.md must appear exactly ONCE (dedup on resolved abs), got ${countFileBlocks(blocksText(r), API)}`);
-  // first marker #@api.md stripped to api.md (prefixLen 2); second @api.md left VERBATIM (deduped → not a record → not stripped)
-  assert(hasBlock(r, "Refs api.md and @api.md."), "first #@api.md stripped to api.md; second @api.md left VERBATIM (deduped)");
-  assert(!hasBlock(r, "Refs #@api.md"), "the first (dedup-winning) marker must NOT retain #@");
+  // BOTH markers verbatim (dedup affects INJECTION — one block per resolved abs — NOT content; §6.4)
+  assert(hasBlock(r, "Refs #@api.md and @api.md."), "both markers preserved verbatim (dedup affects injection, not content; §6.4)");
+  assert(!hasBlock(r, "Refs api.md and @api.md."), "the first-stripped form must be ABSENT (content is verbatim, not stripped)");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
