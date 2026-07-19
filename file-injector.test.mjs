@@ -756,43 +756,50 @@ await runCase("M1", "merge contract: user image preserved at [0] when injecting"
 
 // ── F1/F3/F5: regression cases for the validation-report findings ──────────────
 
-await runCase("F1", "F1 — per-token dedup prevents re-injection", async () => {
-  // The sentinel mechanism is GONE (P1.M1.T1). Re-injection is now prevented by PER-TOKEN DEDUP
-  // inside injectFiles: if a `<file name="<abs>">` block for the resolved path already exists in
-  // `text`, the token is skipped — cooperation-independent (works against ANY prior copy, sentinel or
-  // not). Simulate a SECOND copy receiving the first copy's already-injected text: (a) injectFiles
-  // returns injected===0 with unchanged text; (b) the captured handler short-circuits to `continue`
-  // (no notify); and the text retains EXACTLY ONE `<file>` block for a.ts (not two).
+await runCase("F1", "F1 — verbatim delivery: re-open re-triggers injection (text unchanged, #@ preserved)", async () => {
+  // VERBATIM DELIVERY (PRD §6.4/§13.8). The old "strip #@ post-inject" design was intentionally REVERSED:
+  // injectFiles returns the prompt text byte-for-byte UNCHANGED so cancel/fork//tree re-open re-triggers
+  // injection (the keystone property — see REOPEN-* for the handler-level proof). The file BYTES live only
+  // in `blocks`/`details`; the prompt carries nothing but the user's original text. This case pins that
+  // property at the injectFiles layer: (a) text is unchanged; (b) the #@ marker survives VERBATIM; (c) a
+  // 2nd pass over the returned text RE-INJECTS (injected===1) — exactly the re-open behavior. This
+  // supersedes the prior "per-token dedup prevents re-injection" assertion, which described the abandoned
+  // strip-#@ design (see validation-report BUG-1/BUG-2).
   const first = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(first.injected === 1, `first pass must inject a.ts (got ${first.injected})`);
 
-  // (a) injectFiles-level: already-injected text → injected===0 (per-token dedup), text unchanged.
-  const dedup = await mod.injectFiles(first.text, first.images, FIX);
-  assert(dedup.injected === 0, `dedup pass must return injected===0 (got ${dedup.injected})`);
-  assert(dedup.text === first.text, "dedup pass must not alter the text (idempotent)");
+  // (a) injectFiles-level: text is returned VERBATIM (no #@ stripped, no <file> blocks appended).
+  assert(first.text === "Review #@a.ts", `first.text must be the verbatim prompt (got ${JSON.stringify(first.text)})`);
+  assert(first.blocks.length === 1, `blocks must carry the single a.ts block (got ${first.blocks.length})`);
 
-  // (b) handler-level: the second-copy handler returns continue (injectFiles injected 0), no notify.
-  const { ctx, rec } = makeMockCtx(TMPDIR);
-  const slot = captureHandler();
-  const out = await slot.cb({ text: first.text, source: "interactive", images: first.images }, ctx);
-  assert(out.action === "continue", `second copy must short-circuit to continue (got '${out.action}')`);
-  assert(rec.notify === undefined, "second copy must NOT notify (nothing re-injected)");
+  // (b) the #@ marker survives in the stored text (this is what Pi re-feeds on re-open).
+  assert(first.text.includes("#@a.ts"), "the #@ trigger must survive VERBATIM in first.text");
 
-  // Exactly ONE <file> block for a.ts in the injected blocks — the dedup prevented a duplicate.
-  const aCount = countFileBlocks(blocksText(first), A_TS);
-  assert(aCount === 1, `injected text must contain exactly 1 <file> block for a.ts (got ${aCount})`);
+  // (c) re-open simulation: a 2nd pass over the verbatim text RE-INJECTS (the re-open keystone).
+  const reopen = await mod.injectFiles(first.text, first.images, FIX);
+  assert(reopen.injected === 1, `2nd pass over verbatim text must RE-INJECT (re-open keystone), got ${reopen.injected}`);
+  assert(reopen.text === first.text, "2nd pass must keep text verbatim (idempotent on the text field)");
 });
 
-await runCase("F1b", "F1b — co-load: two non-sentinel copies do not double-inject (Issue 1)", async () => {
-  // Direct Issue 1 repro at the injectFiles layer. A prior copy (here another injectFiles call, since
-  // the sentinel is gone) injects, then a second copy processes the result. Because injectFiles no
-  // longer stamps a sentinel, the second copy relies SOLELY on per-token dedup. Assert the second
-  // pass injects nothing AND appends no blocks (first.text === second.text).
+await runCase("F1b", "F1b — co-load tradeoff: verbatim delivery means two passes both inject (BUG-2 pin)", async () => {
+  // VERBATIM DELIVERY (PRD §6.4/§13.8) is a deliberate TRADEOFF documented in the README's single-copy
+  // guidance. The old strip-#@ design seeded dedup from every `<file name="…">` block already in `text`,
+  // which prevented two co-loaded copies from double-injecting. Verbatim delivery returns the prompt text
+  // UNCHANGED — the <file> blocks now live in a SEPARATE custom message (blocks/details), never in text —
+  // so that seed is always empty for a 2nd copy: two simultaneously-loaded copies will BOTH inject every
+  // #@ file. This is the SAME property that makes re-open/fork/queued-followUp re-trigger injection
+  // (REOPEN-3). There is no in-extension fix that wouldn't re-break re-open; the README mitigates it via
+  // install/uninstall guidance. This case PINS the tradeoff so a regression back to strip-#@ would be
+  // caught (a strip-#@ build would make the 2nd pass inject 0). See validation-report BUG-1/BUG-2.
   const first = await mod.injectFiles("Review #@a.ts", [], FIX);
   assert(first.injected === 1, `first copy must inject a.ts (got ${first.injected})`);
+  // The returned text carries NO <file> blocks (they live in first.blocks) — the co-load dedup seed is empty.
+  assert(!first.text.includes("<file name="), "first.text must carry NO <file> blocks (verbatim prompt)");
   const second = await mod.injectFiles(first.text, first.images, FIX);
-  assert(second.injected === 0, `second copy must inject nothing — per-token dedup (got ${second.injected})`);
-  assert(second.text === first.text, "second copy must append NO additional blocks (first.text === second.text)");
+  // INTENDED (BUG-2): the 2nd pass re-injects because verbatim text has no <file> block to dedup against.
+  assert(second.injected === 1, `2nd pass must RE-INJECT (verbatim → empty dedup seed; co-load tradeoff), got ${second.injected}`);
+  assert(second.blocks.length === 1, "2nd pass must produce its own single a.ts block");
+  assert(second.text === first.text, "both passes keep text byte-for-byte verbatim");
 });
 
 await runCase("F1c", "F1c — structural dedup: prior @file block doesn't block a NEW file (multi-file safe)", async () => {
@@ -814,55 +821,28 @@ await runCase("F1c", "F1c — structural dedup: prior @file block doesn't block 
   assert(bCount === 1, `b.ts must appear exactly once (newly injected), got ${bCount}`);
 });
 
-await runCase("F1d", "F1d — co-load: stripping #@ post-inject makes dedup bidirectional (closes F-NEW-1 dedup→legacy gap)", async () => {
-  // Originally a validator pin for F-NEW-1 (recommendation #3): exercise a GENUINE mixed pair — a
-  // dedup copy followed by a NON-dedup (legacy) copy. The OLD limit was one-directional: a later
-  // non-cooperating legacy copy re-injected because the #@ marker survived the dedup pass. Stripping
-  // the #@ marker after injection (PRD §6.2) CLOSED that gap — the legacy copy now finds no trigger
-  // and cannot re-inject — so this case now asserts the FIXED (bidirectional) behavior. Reverse order
-  // (legacy→dedup) was already clean via per-token/structural dedup. Only TWO stale copies (user
-  // error) could still double-inject; the single-copy guidance still guards that.
-  //
-  // A faithful legacy injector: uses the repo's OWN exported formatters (identical block format) but
-  // OMITS the dedup line — exactly what the stale 182-line global copy does.
-  const legacyInject = async (text, imagesIn, ctx) => {
-    const blocks = [];
-    const images = [...imagesIn];
-    let count = 0;
-    const LEGACY_RE = /(^|(?<=\W))#@(\S+)/g; // the pre-fix \W regex
-    for (const m of text.matchAll(LEGACY_RE)) {
-      const token = mod.cleanToken(m[2]);
-      if (!token) continue;
-      const abs = mod.expandTildeAndResolve(token, ctx.cwd);
-      // NO per-token dedup — this is the bug-relevant legacy behavior
-      let st; try { st = await fs.stat(abs); } catch { continue; }
-      if (!st.isFile()) continue;
-      try { const buf = await fs.readFile(abs); blocks.push(mod.formatTextFileBlock(abs, buf.toString("utf8"))); count++; } catch { continue; }
-    }
-    if (count === 0) return { text, images: imagesIn, injected: 0 };
-    return { text: `${text}\n\n---\n\n${blocks.join("\n\n")}`, images, injected: count };
-  };
-  // Forward order: dedup copy FIRST, legacy (no-dedup) copy SECOND.
-  const first = await mod.injectFiles("Review #@a.ts", [], FIX);
-  assert(first.injected === 1, `dedup copy must inject a.ts once (got ${first.injected})`);
-  const legacyAfter = await legacyInject(first.text, first.images, FIX);
-  // FIXED (was F-NEW-1): the dedup copy stripped the #@ marker, so the later legacy copy finds no
-  // trigger → cannot re-inject. Dedup is now effectively bidirectional for any pair involving a
-  // current copy.
-  assert(legacyAfter.injected === 0, `legacy copy cannot re-inject — #@ was stripped on the dedup pass (got ${legacyAfter.injected})`);
-  // The dedup copy's single a.ts block is the ONLY one (legacy added nothing — it found no #@ trigger
-  // in the stripped text). Count it in first.blocks (the call that produced it).
-  const aCount = countFileBlocks(blocksText(first), A_TS);
-  assert(aCount === 1, `order dedup→legacy now yields exactly 1 a.ts block (got ${aCount}); F-NEW-1 gap closed by #@ stripping`);
-  // REVERSE order (legacy FIRST, dedup SECOND) MUST stay clean — the dedup copy suppresses the dup.
-  const legacyFirst = await legacyInject("Review #@a.ts", [], FIX);
-  assert(legacyFirst.injected === 1, `legacy copy alone injects a.ts once (got ${legacyFirst.injected})`);
-  const dedupAfter = await mod.injectFiles(legacyFirst.text, legacyFirst.images, FIX);
-  assert(dedupAfter.injected === 0, `dedup copy must suppress the legacy dup (got ${dedupAfter.injected})`);
-  // legacyFirst.text carries the legacy-assembled a.ts block (legacy shape: text + --- + blocks);
-  // the dedup pass suppressed re-injection. Count the single block in the legacy-assembled text.
-  const aCountRev = (legacyFirst.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
-  assert(aCountRev === 1, `reverse order (legacy→dedup) yields exactly 1 a.ts block (got ${aCountRev})`);
+await runCase("F1d", "F1d — structural dedup: a prior <file> block in text suppresses the same path's #@", async () => {
+  // VERBATIM DELIVERY (PRD §6.4/§13.8) removed the old "strip #@ post-inject" mechanism, so the prior
+  // F-NEW-1 premise (stripping makes dedup bidirectional against a legacy copy) no longer applies — a
+  // later non-cooperating copy that re-scans the text WILL re-inject (see F1b). The SURVIVING guarantee
+  // is the STRUCTURAL DEDUP SEED: injectFiles still seeds its dedup set from every `<file name="<abs>">`
+  // block already present in `text` (whether from a prior copy that appended to text, from Pi's own
+  // `@file` argv expander, or from a hand-edited prompt), and skips only those exact paths. So when the
+  // text already carries an a.ts block, a `#@a.ts` marker for the SAME path is suppressed (injected===0
+  // for it), while a genuinely-new `#@b.ts` still injects. This is the same-path counterpart to F1c's
+  // multi-file-safe direction, and it is cooperation-independent for the block-in-text case.
+  const priorText = `Review #@a.ts\n\n---\n\n<file name="${A_TS}">\n${A_TS_CONTENT}\n</file>`;
+  const r = await mod.injectFiles(`${priorText}\nAlso review #@b.ts`, [], FIX);
+  // a.ts is ALREADY present as a <file> block in text → its #@ token is suppressed (not re-injected).
+  assert(r.injected === 1, `must inject ONLY the new b.ts (a.ts block already in text), got ${r.injected}`);
+  assert(hasBlock(r, '<file name="' + B_TS + '">'), "must contain the NEW b.ts block");
+  const aCount = (r.text.match(new RegExp('<file name="' + A_TS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '">', "g")) || []).length;
+  assert(aCount === 1, `a.ts block must appear exactly ONCE (the pre-existing one; not re-injected), got ${aCount}`);
+  // VERBATIM: the prompt text (incl. the pre-existing a.ts block) is returned unchanged; our run added
+  // only b.ts to r.blocks (never to r.text).
+  assert(r.text === `${priorText}\nAlso review #@b.ts`, "r.text must be returned byte-for-byte verbatim");
+  const bCount = countFileBlocks(blocksText(r), B_TS);
+  assert(bCount === 1, `b.ts must appear exactly once (newly injected), got ${bCount}`);
 });
 
 await runCase("DUP1", "DUP1 — within-prompt same-path repeat injects ONCE (text) (Issue 1)", async () => {
@@ -2052,37 +2032,40 @@ await runCase("T1.S1-8", "scanTokens bare-@ off: 'Review @api.md here' → [] (n
   assert(Array.isArray(arr) && arr.length === 0, `bareAt:false must ignore bare @, got ${JSON.stringify(arr)}`);
 });
 
-// T1.S1-9 — bareAt ON matches both forms. '@api.md' (prefixLen 1) AND '#@b.md' (prefixLen 2) both resolve.
-await runCase("T1.S1-9", "scanTokens bare-@ on: '@api.md and #@b.md' → 2 records (prefixLen 1 + 2)", async () => {
+// T1.S1-9 — bareAt ON matches both forms. '@api.md' (bare, prefix 1) AND '#@b.md' (hash, prefix 2) both resolve.
+// VERBATIM DELIVERY (PRD §6.4/§12.16): scanTokens now returns string[] (resolved abs paths only) — there is no
+// marker bookkeeping to return because markers are never stripped. We assert on the RESOLVED paths and their
+// index-ascending ORDER (the bare @ at index 0 precedes the #@ at index 12).
+await runCase("T1.S1-9", "scanTokens bare-@ on: '@api.md and #@b.md' → 2 resolved paths (api.md + b.md, in order)", async () => {
   const arr = await mod.scanTokens(
     "@api.md and #@b.md",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
-  assert(arr.length === 2, `expected 2 records (bare @ + #@), got ${arr.length}: ${JSON.stringify(arr)}`);
-  const bare = arr.find((r) => r.prefixLen === 1);
-  const hash = arr.find((r) => r.prefixLen === 2);
-  assert(bare && bare.abs === API, `bare-@ record must be prefixLen 1 with abs api.md, got ${JSON.stringify(bare)}`);
-  assert(hash && hash.abs === B_MD, `#@ record must be prefixLen 2 with abs b.md, got ${JSON.stringify(hash)}`);
-  assert(arr[0].index < arr[1].index, "records must be sorted by index ascending");
+  assert(arr.length === 2, `expected 2 resolved paths (bare @ + #@), got ${arr.length}: ${JSON.stringify(arr)}`);
+  assert(arr[0] === API, `first path (index 0, bare @api.md) must resolve to api.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[1] === B_MD, `second path (index 12, #@b.md) must resolve to b.md, got ${JSON.stringify(arr[1])}`);
+  assert(
+    "@api.md and #@b.md".indexOf("@api.md") < "@api.md and #@b.md".indexOf("#@b.md"),
+    "records must be sorted by index ascending",
+  );
 });
 
 // T1.S1-10 — NO DOUBLE-MATCH on `#@`. BARE_AT_RE's lookbehind forbids a preceding `#`, so '#@a.md' is
-// matched ONCE (by FILE_INJECT_RE, prefixLen 2). NOTE: even if both regexes produced a candidate, dedup keys
-// on the RESOLVED abs — so a same-path double is invisible at the record level. The authoritative exclusion
-// is the verified regex itself (BARE_AT_RE is not exported, so it can't be tested directly from the .mjs).
-await runCase("T1.S1-10", "scanTokens no-double-match: '#@a.md' (bareAt:true) → ONE record, prefixLen 2, index 0", async () => {
+// matched ONCE (by FILE_INJECT_RE). NOTE: even if both regexes produced a candidate, dedup keys on the
+// RESOLVED abs — so a same-path double is invisible at the record level. The authoritative exclusion is the
+// verified regex itself (BARE_AT_RE is not exported, so it can't be tested directly from the .mjs).
+// VERBATIM DELIVERY (PRD §6.4/§12.16): scanTokens returns string[] (resolved abs paths only).
+await runCase("T1.S1-10", "scanTokens no-double-match: '#@a.md' (bareAt:true) → ONE resolved path (a.md)", async () => {
   const arr = await mod.scanTokens(
     "#@a.md",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
-  assert(arr.length === 1, `#@a.md must yield exactly ONE record (no double-match), got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0].prefixLen === 2, `the surviving record must be the #@ form (prefixLen 2), got ${arr[0].prefixLen}`);
-  assert(arr[0].index === 0, `record must be at index 0, got ${arr[0].index}`);
-  assert(arr[0].abs === A_MD, `record must resolve to a.md, got ${arr[0].abs}`);
+  assert(arr.length === 1, `#@a.md must yield exactly ONE resolved path (no double-match), got ${arr.length}: ${JSON.stringify(arr)}`);
+  assert(arr[0] === A_MD, `record must resolve to a.md, got ${JSON.stringify(arr[0])}`);
 });
 
 // T1.S1-11 — mid-word / Unicode `@` excluded. BARE_AT_RE forbids a preceding word char (\p{L}\p{N}_), so
@@ -2097,20 +2080,19 @@ await runCase("T1.S1-11", "scanTokens bare-@ mid-word excluded: 'email user@host
   assert(arr.length === 0, `mid-word @ must be excluded, got ${JSON.stringify(arr)}`);
 });
 
-// T1.S1-12 — DEDUP on resolved abs. '#@api.md' (prefixLen 2) and '@api.md' (prefixLen 1) both resolve to the
-// SAME abs (TMPDIR/api.md). Dedup keys on the resolved abs → the second candidate is dropped via localSeen.
-// The first one wins by index order (the #@ at index 0 sorts before the bare @ at index 8).
-await runCase("T1.S1-12", "scanTokens dedup: '#@api.md @api.md' → ONE record (both resolve to api.md)", async () => {
+// T1.S1-12 — DEDUP on resolved abs. '#@api.md' (hash) and '@api.md' (bare) both resolve to the SAME abs
+// (TMPDIR/api.md). Dedup keys on the resolved abs → the second candidate is dropped via localSeen, so only
+// ONE string is returned. The first one wins by index order (the #@ at index 0 sorts before the bare @).
+// VERBATIM DELIVERY (PRD §6.4/§12.16): scanTokens returns string[] (resolved abs paths only).
+await runCase("T1.S1-12", "scanTokens dedup: '#@api.md @api.md' → ONE resolved path (both resolve to api.md)", async () => {
   const arr = await mod.scanTokens(
     "#@api.md @api.md",
     TMPDIR,
     { allowAbsTilde: false, skipCode: false, tryMdExt: true, bareAt: true },
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
-  assert(arr.length === 1, `dedup must collapse to ONE record, got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0].abs === API, `record must resolve to api.md, got ${arr[0].abs}`);
-  assert(arr[0].prefixLen === 2, `first-by-index (#@) wins → prefixLen 2, got ${arr[0].prefixLen}`);
-  assert(arr[0].index === 0, `surviving record is the #@ at index 0, got ${arr[0].index}`);
+  assert(arr.length === 1, `dedup must collapse to ONE resolved path, got ${arr.length}: ${JSON.stringify(arr)}`);
+  assert(arr[0] === API, `record must resolve to api.md, got ${JSON.stringify(arr[0])}`);
 });
 
 // T1.S1-13 — code-exempt. With skipCode:true, a bare '@api.md' INSIDE a fenced code block is skipped

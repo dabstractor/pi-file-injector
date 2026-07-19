@@ -408,12 +408,15 @@ export function computeDetailOffsets(blocks: string[], details: FileDetail[]): F
  * each, and append a Pi-native `<file>` block (text/binary) or attach an ImageContent (image). The
  * whole file ALWAYS reaches the model: injected inline when it fits the remaining context budget,
  * paged via the model's `read` tool when it does not (PRD §5.5). NEVER throws (each file is isolated
- * in try/catch); tokens that miss/are directories/throw are left verbatim. The original prompt text is
- * NOT modified — blocks are appended after `\n\n---\n\n`, joined with `\n\n` (PRD §6.2). `ctx` carries
- * the budget inputs `getContextUsage()` (tokens used) and `model` (contextWindow/maxTokens); both
- * optional so a cwd-only ctx is valid. `injected` counts whole-file injections; `paged` counts files
- * delivered via the page path (PRD §5.5). Return `{injected:0, paged:0}` => caller returns
- * {action:"continue"}; otherwise {action:"transform", text, images}.
+ * in try/catch); tokens that miss/are directories/throw are left verbatim. VERBATIM DELIVERY (PRD
+ * §6.4/§13.8): the original prompt text is NOT modified — nothing is appended to it. The file BYTES
+ * live only in the returned `blocks`/`details` (the caller stashes them for `before_agent_start`'s
+ * custom message); the prompt carries nothing but the user's original text. (Markers are NOT stripped,
+ * so cancel/fork//tree re-open re-triggers injection.) `ctx` carries the budget inputs
+ * `getContextUsage()` (tokens used) and `model` (contextWindow/maxTokens); both optional so a
+ * cwd-only ctx is valid. `injected` counts whole-file injections; `paged` counts files delivered via
+ * the page path (PRD §5.5). Return `{injected:0, paged:0}` => caller returns {action:"continue"};
+ * otherwise the input handler stashes blocks/details and returns {action:"transform", text, images}.
  *
  * Internal state is carried in ONE shared `State` object (PRD §9) — `blocks`, `images`,
  * `injectedSet` (consolidated dedup: prior `<file>` blocks ∪ within-run deliveries), `remaining`
@@ -1133,9 +1136,9 @@ export async function injectFiles(
 
   // PRIOR-INJECTION SET (defense-in-depth — validator finding F-NEW-1, recommendation #2). Collect
   // EVERY `<file name="<path>">` already present in `text` — whether stamped by a prior copy of THIS
-  // extension (under the `\n\n---\n\n` separator, PRD §6.2) or by Pi's own `@file` argv expander — so
-  // per-token dedup below is robust to path-string quirks (a prior copy may have resolved against a
-  // different cwd, expanded `~` differently, or been a sentinel/legacy build). This is a SUPERSET of
+  // extension that appended to the text, by a hand-edited prompt, or by Pi's own `@file` argv expander —
+  // so per-token dedup below is robust to path-string quirks (a prior copy may have resolved against a
+  // different cwd, expanded `~` differently, or been a legacy build). This is a SUPERSET of
   // a single exact-path substring test and is strictly additive: it never suppresses a token whose
   // resolved path is NOT already in the set, so multi-file prompts (inject A then B) still work even
   // when a prior copy already injected A. NOTE: like any in-this-copy check, it cannot stop a LATER
@@ -1194,10 +1197,12 @@ export async function injectFiles(
  * Lets a user attach an ENTIRE file to their prompt by writing `#@<path>` anywhere in the submitted
  * text. On the `input` event — which fires inside `AgentSession.prompt()` for ALL input contexts
  * (interactive TUI messages, the initial CLI / `-p` / RPC message, and RPC calls alike) — every
- * `#@<path>` token is resolved, the whole file is read, and its contents are appended to the prompt in
- * Pi-native `<file name="...">...</file>` blocks below a `---` separator. Image files are attached as
- * `ImageContent` (resized to provider limits) plus a reference block; non-image binaries get a clear
- * note instead of decoded garbage.
+ * `#@<path>` token is resolved, the whole file is read, and delivered to the model in Pi-native
+ * `<file name="...">...</file>` blocks via a separate custom message in `before_agent_start`. The
+ * prompt text itself is returned byte-for-byte VERBATIM (markers are never stripped, so cancel/fork/
+ * `/tree` re-open re-triggers injection). Image files are attached as `ImageContent` (resized to
+ * provider limits) plus a reference block; non-image binaries get a clear note instead of decoded
+ * garbage.
  *
  * Trigger syntax:  `#@<path>`  — e.g. `#@src/index.ts`, `#@~/notes.md`, `#@pic.png`,
  *                  `(#@a.txt and #@b.md)`. The two-char `#@` trigger is collision-free with Pi's

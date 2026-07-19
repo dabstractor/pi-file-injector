@@ -17,15 +17,18 @@ const mod = await jiti.import(path.resolve(SCRIPT_DIR, "file-injector.ts"));
 const REPO = path.resolve(process.env.HOME, "projects/test-repo");
 const ctx = { cwd: REPO, hasUI: false, isProjectTrusted: () => true, ui: { notify: () => {} } };
 
-function blocksOf(text) {
-  return [...text.matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]);
+function blocksOf(r) {
+  // VERBATIM DELIVERY (PRD §6.4/§13.8): injectFiles returns the prompt text UNCHANGED and carries the
+  // <file> blocks in `r.blocks` (one block string each). It no longer appends blocks to the text nor
+  // returns an `action` field — so blocks come from r.blocks, not by scanning r.text.
+  return [...r.blocks.join("\n\n").matchAll(/<file name="([^"]+)">/g)].map((m) => m[1]);
 }
 
 async function run(label, prompt, bareAt) {
   const out = await mod.injectFiles(prompt, [], ctx, bareAt);
-  const files = out.action === "transform" ? blocksOf(out.text) : [];
+  const files = out.injected > 0 ? blocksOf(out) : [];
   console.log(`\n=== ${label} (bareAt=${bareAt}) ===`);
-  console.log("  action:", out.action, "| injected:", out.injected, "| paged:", out.paged);
+  console.log("  injected:", out.injected, "| paged:", out.paged);
   for (const f of files) console.log("   block:", path.relative(REPO, f));
   if (!files.length) console.log("   (no blocks)");
 }
@@ -39,16 +42,17 @@ await run("spec/PRD.md via #@ (bareAt ON)", "#@spec/PRD.md", true);
 // 3. Same but bareAt OFF — only #@ inside should resolve
 await run("spec/PRD.md via #@ (bareAt OFF)", "#@spec/PRD.md", false);
 
-// 4. Direct probe: scan the ACTUAL spec/PRD.md content for tokens
+// 4. Direct probe: scan the ACTUAL spec/PRD.md content for tokens. scanTokens now returns string[]
+//    (resolved abs paths only) — VERBATIM DELIVERY removed the marker bookkeeping (no index/prefixLen/abs).
 const prd = readFileSync(path.join(REPO, "spec/PRD.md"), "utf8");
 for (const bareAt of [true, false]) {
   const recs = await mod.scanTokens(
     prd, path.join(REPO, "spec"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt },
-    { blocks: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   console.log(`\nscanTokens(spec/PRD.md, baseDir=spec/, bareAt=${bareAt}) → ${recs.length} record(s):`);
-  for (const r of recs) console.log(`   idx=${r.index} prefixLen=${r.prefixLen} abs=${path.relative(REPO, r.abs)}`);
+  for (const r of recs) console.log(`   abs=${path.relative(REPO, r)}`);
 }
 
 // 5. Direct probe: does ARCHITECTURE.md resolve relative to spec dir vs cwd?
