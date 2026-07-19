@@ -1048,7 +1048,7 @@ export function emitText(abs: string, content: string, state: State): void {
 }
 
 /**
- * PRD §5.6 — markdown transitive imports (the six-step algorithm). Called by injectFile's markdown branch
+ * PRD §5.6 — markdown transitive imports (the five-step algorithm). Called by injectFile's markdown branch
  * (a delivered .md/.markdown is an import source). Recursion contract:
  *   • RELATIVE-ONLY (§4.5 rule 1): imports starting with / or ~ are ignored (left verbatim) — only relative
  *     tokens resolve. (Contrast: top-level user tokens allow / and ~.)
@@ -1058,40 +1058,27 @@ export function emitText(abs: string, content: string, state: State): void {
  *     so a self-import or cycle (a.md→b.md→a.md) dedups to verbatim and cannot recurse infinitely. The set
  *     of injectable files is finite and each is processed at most once — termination is guaranteed without
  *     a depth counter.
- *   • PRE-ORDER depth-first: this file's block is emitted (Step 5) BEFORE recursing into imports (Step 6),
+ *   • PRE-ORDER depth-first: this file's block is emitted (Step 4) BEFORE recursing into imports (Step 5),
  *     so the model sees a parent's context before the detail it pulls in.
+ *   • VERBATIM DELIVERY (§6.4/§12.16): markers are detected here ONLY to resolve imports — they are NEVER
+ *     stripped from the delivered content. The block is emitted on the verbatim `content` exactly as read
+ *     from disk (import markers stay as honest references; the bytes also live in the custom message, §6.2).
  *
- * Six steps (PRD §5.6):
+ * Five steps (PRD §5.6; Step 1 read/decode is in injectFile):
  *   2. Claim self (idempotent: injectFile pre-claimed abs; included for contract self-containedness).
- *   3. scanTokens(content, dirname(abs), { allowAbsTilde:false, skipCode:true, bareAt:state.bareAt }) → resolved
- *      import records. §4.6 markdown-only bare-@ opt-in: passes `bareAt: state.bareAt` (the seam P1.M2.T1.S1
- *      created — state.bareAt is derived from cfg.markdownBareAtImports in injectFiles). bareAt:false (default)
- *      → BARE_AT_RE not run → byte-for-byte identical to today (all records prefixLen 2).
- *   3.5. EXISTENCE PRE-CHECK (PRD §10 / §5.4): scanTokens records a token as soon as it RESOLVES (it does
- *      NOT stat), so a markdown import resolving to a MISSING file or DIRECTORY would otherwise have its
- *      '#@' marker stripped (Step 4) even though injectFile later returns false and nothing is injected for
- *      it. PRD §10 requires such markers be left VERBATIM. Pre-order (Step 6) emits THIS file's block BEFORE
- *      recursing, so the strip decision must be made NOW — unlike the top-level path (processTokenStream),
- *      which can inject-then-strip because the user prompt is not a pre-order block. Stat each import; keep
- *      only those that stat-succeed AND are regular files (isFile also rejects directories, matching §5.4
- *      and injectFile's own check). injectFile re-stats harmlessly on recursion. `injectable ⊆ records`, and
- *      `injectable` carries `prefixLen` (forwarded from records) so Step 4 can strip the correct marker width.
- *   4. Strip the marker from each INJECTABLE record (high→low, leaving the path) by `r.index + r.prefixLen`
- *      → `stripped` = block content. prefixLen is 2 for `#@` (r.index is the '#'), 1 for bare `@` (r.index is
- *      the '@'); both regexes' lookbehinds are zero-width, so r.index is always the marker's first char.
- *      Missing/dir imports keep the marker verbatim. Unresolved/deduped/absolute/inside-code markers were never
- *      in records and keep the marker verbatim. (byte-for-byte default: every default record has prefixLen 2,
- *      so `+ r.prefixLen` == the old `+ 2`.)
- *   5. emitText(abs, stripped, state) — the paged decision runs on the STRIPPED content (so directive text
- *      the model won't see does not bias the budget). emitText owns the subtract + paged bump (NOT count).
- *   6. Recurse into INJECTABLE imports in ENCOUNTER order: if not already claimed, await injectFile(abs)
- *      (which claims, classifies, bumps count, and recurses again if the import is itself markdown).
+ *   3. scanTokens(content, dirname(abs), { allowAbsTilde:false, skipCode:true, tryMdExt:true, bareAt:state.bareAt })
+ *      → absPaths: string[] (resolved import paths in encounter order). §4.6 markdown-only bare-@ opt-in:
+ *      passes bareAt: state.bareAt (the seam created in injectFiles — derived from cfg.markdownBareAtImports).
+ *   4. emitText(abs, content, state) — the paged decision runs on the VERBATIM content (§6.4: markers NOT
+ *      stripped). emitText owns the subtract + paged bump (NOT count).
+ *   5. Recurse into absPaths in ENCOUNTER order: if not already claimed, await injectFile(abs) (which claims,
+ *      classifies, bumps count, and recurses again if the import is itself markdown).
  *
  * PRIVATE — exercised indirectly via injectFiles (PRD §11 cases 15-19 + 20/MD1/MD2). Does NOT bump count
  * (injectFile owns the single count++ per claimed file; imports bump count in their own injectFile).
  *
  * @param abs     the importing markdown's absolute path (already claimed by injectFile; resolution base = dirname)
- * @param content the markdown's decoded UTF-8 content (buf.toString("utf8") from injectFile)
+ * @param content the markdown's decoded UTF-8 content (buf.toString("utf8") from injectFile) — delivered VERBATIM
  * @param state   the shared State (blocks/images/injectedSet/remaining/count/paged) threaded across the prompt
  * @param ctx     threaded to the recursive injectFile calls (cwd unused — imports resolve from dirname(abs))
  */
@@ -1104,62 +1091,20 @@ async function injectMarkdown(abs: string, content: string, state: State, ctx: C
   // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true),
   // markdown shorthand ON (tryMdExt:true → extensionless tokens try .md then .markdown, PRD §4.5 rule 3).
   // §4.6 — thread state.bareAt (set from cfg in injectFiles — the P1.M2.T1.S1 seam) so a markdown author who
-  // opts into markdownBareAtImports can write a bare @api.md (prefixLen 1). bareAt:false (default) → BARE_AT_RE
-  // is not run → records are byte-for-byte identical to today (all prefixLen 2).
-  const records = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
+  // opts into markdownBareAtImports can write a bare @api.md. scanTokens returns the resolved import paths as
+  // a string[] (absPaths, in encounter order); markers are detected ONLY to resolve imports, never stripped.
+  const absPaths = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
 
-  // Step 3.5 — READABILITY PRE-CHECK (PRD §5.4 / §10 / §12.5). scanTokens records a token as soon as it
-  // RESOLVES (it does NOT stat), so a markdown import resolving to a MISSING file, DIRECTORY, or a file
-  // that EXISTS but is UNREADABLE would otherwise have its '#@' marker stripped (Step 4) even though
-  // injectFile later returns false and nothing is injected for it. PRD §5.4/§12.5/§10 require such markers
-  // be left VERBATIM. Pre-order (§5.6 step 6) emits THIS file's block BEFORE recursing, so the strip
-  // decision must be made NOW (the top-level path can inject-then-strip because the user prompt is not a
-  // pre-order block; the markdown path cannot). Stat each import; keep only those that stat-succeed AND are
-  // regular files (isFile also rejects directories, matching injectFile's own check and §5.4: directory →
-  // verbatim), AND additionally gate on readability via fs.access(R_OK) so a marker is stripped ONLY when
-  // delivery will truly succeed for the text/markdown/binary case that dominates (PRD §5.4/§12.5: on any
-  // error leave the token verbatim). injectFile re-stats harmlessly on recursion.
-  // ACCEPTED NARROW RESIDUAL: the R_OK gate predicts readability, NOT resize success — a READABLE image
-  // whose resizeImage THROWS (rather than returning null) still gets stripped, because we cannot predict
-  // a resize failure without running the resize (expensive, duplicative). That is out of scope here; the
-  // full closure is the structural "strip only markers whose injectFile returned true" approach (PRD calls
-  // it "more invasive"). It is backstopped by injectFile's own try/catch (no crash, no block appended).
-  // TOCTOU: a file could become unreadable between this access and injectFile's readFile, but that races
-  // the top-level path too and is acceptable (injectFile's readFile try/catch is the final safety net).
-  // TYPE-ONLY widening: records carry prefixLen (scanTokens P1.M1.T1.S1); widening the declared element type
-  // lets Step 4 read r.prefixLen. The filter body (injectable.push(r)) forwards the WHOLE record unchanged —
-  // do NOT build a new object literal here (that would DROP prefixLen, the codebase_delta §8.2 anti-pattern).
-  // No new import: fs.constants.R_OK (=== 4) is reachable via the existing `import { promises as fs }`.
-  const injectable: { index: number; prefixLen: number; abs: string }[] = [];
-  for (const r of records) {
-    try {
-      const st = await fs.stat(r.abs);
-      if (!st.isFile()) continue; // directory/socket/etc → verbatim (§5.4) — unchanged
-      await fs.access(r.abs, fs.constants.R_OK); // gate strip on READABILITY (PRD §5.4 / §12.5)
-      injectable.push(r);
-    } catch {
-      /* missing / directory / unreadable → leave verbatim (not stripped, not injected) */
-    }
-  }
+  // Step 4 — emit THIS file's block. The paged decision runs on the VERBATIM content (import markers are NOT
+  // stripped — §6.4/§12.16: the file is delivered exactly as read from disk). emitText owns formatTextFileBlock
+  // + subtract + the paged head/directive + state.paged++.
+  emitText(abs, content, state);
 
-  // Step 4 — strip the marker from each INJECTABLE import (high→low so earlier offsets stay valid), leaving
-  // the path. `stripped` becomes THIS file's block content. Missing/dir imports keep the marker verbatim.
-  // §4.6 — strip by the marker's width: prefixLen 2 for `#@` (r.index is the '#'), 1 for bare `@` (r.index is
-  // the '@'); both regexes' lookbehinds are zero-width, so r.index is always the marker's first char.
-  let stripped = content;
-  for (const r of [...injectable].sort((a, b) => b.index - a.index)) {
-    stripped = stripped.slice(0, r.index) + stripped.slice(r.index + r.prefixLen);
-  }
-
-  // Step 5 — emit THIS file's block. The paged decision runs on the STRIPPED content (§5.6 step 5).
-  emitText(abs, stripped, state); // emitText owns formatTextFileBlock + subtract + the paged head/directive + state.paged++
-
-  // Step 6 — recurse into INJECTABLE imports, depth-first, ENCOUNTER ORDER (pre-order). Missing/dir imports
-  // are absent here (they would no-op in injectFile anyway). The injectedSet re-check is belt-and-suspenders
-  // (cross-subtree dedup since the scan).
-  for (const r of injectable) {
-    if (state.injectedSet.has(r.abs)) continue; // already claimed (e.g. by a sibling subtree meanwhile)
-    await injectFile(r.abs, state, ctx); // claims abs, classifies, bumps count, recurses again if markdown
+  // Step 5 — recurse into the resolved imports, depth-first, ENCOUNTER ORDER (pre-order). The injectedSet
+  // re-check is belt-and-suspenders (cross-subtree dedup since the scan).
+  for (const abs2 of absPaths) {
+    if (state.injectedSet.has(abs2)) continue; // already claimed (e.g. by a sibling subtree meanwhile)
+    await injectFile(abs2, state, ctx); // claims abs, classifies, bumps count, recurses again if markdown
   }
 }
 
