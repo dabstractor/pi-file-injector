@@ -1,0 +1,62 @@
+name: Publish to npm
+
+# Ships a new version to npm ONLY when you push a `v*` tag.
+#
+# Local publish flow:
+#   npm version patch            # or minor / major / prerelease
+#   git push --follow-tags       # pushes the version bump commit + the v<x.y.z> tag
+#
+# The tag push is the trigger — nothing publishes until you explicitly create and push a tag,
+# so you keep full manual control over when versions go out.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Never let two publishes of the same tag race; never cancel an in-flight publish.
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify git tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"   # strip leading 'v' from e.g. v0.1.1
+          echo "package.json: $PKG_VERSION"
+          echo "git tag:      $TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag 'v$TAG_VERSION' does not match package.json version '$PKG_VERSION'."
+            echo "::error::Bump package.json (npm version) before tagging, or fix the tag."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          registry-url: 'https://registry.npmjs.org'
+
+      # The tests and the prepublishOnly typecheck both resolve pi through the global install
+      # (they read `npm root -g`), so install pi globally before running anything.
+      - name: Install pi globally (for tests + typecheck to resolve pi)
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: Run tests
+        run: npm test
+
+      # `npm publish` runs the `prepublishOnly` script (typecheck) automatically before uploading.
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
