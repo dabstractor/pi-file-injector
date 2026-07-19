@@ -9,6 +9,7 @@ const jiti = createJiti(import.meta.url, {
   alias: {
     "@earendil-works/pi-coding-agent": PIPKG + "/dist/index.js",
     "@earendil-works/pi-ai": PIPKG + "/node_modules/@earendil-works/pi-ai/dist/compat.js",
+    "@earendil-works/pi-tui": PIPKG + "/node_modules/@earendil-works/pi-tui/dist/index.js",
   },
 });
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
