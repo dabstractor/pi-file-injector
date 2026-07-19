@@ -1262,7 +1262,7 @@ export default function (pi: ExtensionAPI) {
     const whole = injected - paged;
     const msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
     if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 unified whole/paged wording; guarded for print/json headless modes (api_verification §5)
-    return { action: "transform" as const, text, images }; // rewrite prompt with injected content + merged images
+    return { action: "transform" as const, text: event.text, images }; // §6.4 — text VERBATIM (event.text, unchanged; the prompt is never modified so cancel/fork/re-open re-triggers injection; §13.8)
   });
 
   // §6.2 publish the stashed files as ONE custom message, appended after the user message. Fires once per
