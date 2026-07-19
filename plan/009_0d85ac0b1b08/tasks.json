@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Remove stripping from the injection engine and input handler (file-injector.ts)",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Remove the two stripping sites (top-level prompt in injectFiles, markdown content in injectMarkdown), simplify scanTokens to return string[] and processTokenStream to return void, and make the input handler return event.text verbatim. All changes are in file-injector.ts. The subtasks within T1 are tightly coupled by the scanTokens return-type cascade and MUST be implemented atomically in one pass (S1->S2->S3) for the file to remain type-consistent. T2 follows to update the input handler return and verify the delivery pipeline is unaffected.",
           "tasks": [
             {
@@ -77,7 +77,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Input handler returns event.text verbatim; verify delivery/renderer unaffected",
-              "status": "Ready",
+              "status": "Complete",
               "description": "The input handler (L1306-1324) currently destructures `text` from injectFiles and returns it as the transform text. After T1, that `text` is already the verbatim prompt (injectFiles no longer strips). This task makes the return explicit (text: event.text) and verifies — read-only — that before_agent_start, computeDetailOffsets, and renderInjectedMessage are unaffected by the verbatim change (they consume blocks/details, never prompt text).",
               "subtasks": [
                 {
@@ -102,7 +102,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "Verify before_agent_start, computeDetailOffsets, renderInjectedMessage unaffected (read-only)",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S3",
@@ -139,7 +139,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Migrate top-level prompt assertions (~20): r.text/out.text now verbatim",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
