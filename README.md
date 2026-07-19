@@ -38,9 +38,9 @@ Diff #@a.ts vs #@b.ts
 See #@a.ts.
 ```
 
-On submit, each file shows up as a compact green `read <path>` line directly below your message — one line per file, indistinguishable from the `read` tool. Press `ctrl+o` to expand any of them to the full contents. The `#@` trigger is stripped from each reference, so `Review #@a.ts` appears in your message as `Review a.ts`, with the file delivered to the model underneath — never pasted into your message bubble.
+On submit, each file shows up as a compact green `read <path>` line directly below your message — one line per file, indistinguishable from the `read` tool. Press `ctrl+o` to expand any of them to the full contents. `#@` triggers stay in your message exactly as you typed them (`Review #@a.ts` stays `Review #@a.ts`), so cancelling and re-opening, forking, or re-submitting re-triggers injection. The file bytes are delivered to the model underneath — never pasted into your message bubble.
 
-Markdown files can import other files. If `spec.md` itself contains `#@api.md`, a single `#@spec.md` delivers both — `spec.md` first, then `api.md` — and the import marker is stripped from `spec.md` the same way a top-level marker is:
+Markdown files can import other files. If `spec.md` itself contains `#@api.md`, a single `#@spec.md` delivers both — `spec.md` first, then `api.md`. The import marker stays in `spec.md` verbatim (same as a top-level marker):
 
 ```text
 #@spec.md          # spec.md contains: see #@api.md
@@ -69,7 +69,7 @@ Text uses Pi's native block format, the same one `@file` uses:
 </file>
 ```
 
-That's what the model receives. You won't see it as raw text in the chat — each injected file renders as a green `read <path>` line (just like the `read` tool), with `ctrl+o` to expand. Your own message shows only what you typed.
+That's what the model receives. You won't see it as raw text in the chat — each injected file renders as a green `read <path>` line (just like the `read` tool), with `ctrl+o` to expand. Your own message shows exactly what you typed — including the `#@` markers — so re-opening or forking re-triggers injection automatically.
 
 Images are matched by their real bytes, not just the extension. A text file renamed `fake.png` is injected as text, not attached as a broken image. The check cuts both ways: a real image saved with the wrong extension — a PNG named `photo.jpg`, say — is not attached, because its bytes don't match the `.jpg` signature; it's delivered as a binary note instead. Rename it to its real type to attach it. An empty (0-byte) image attaches nothing.
 
