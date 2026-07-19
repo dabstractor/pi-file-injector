@@ -1,0 +1,89 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "Multi-file expanded-view correctness fix",
+      "status": "Ready",
+      "description": "Fix the Major bug (Issue 1) where the expanded (ctrl+o) view of multi-file injections renders corrupted content for every file after the first. The root cause is a single string-literal typo in computeDetailOffsets: SEP is \"\\\\n\\\\n\" (4 chars) instead of \"\\n\\n\" (2 chars), causing contentStart offsets to drift by +2 per preceding block. The fix restores correct multi-file expanded rendering and adds regression tests to prevent recurrence.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Separator fix and multi-file regression coverage",
+          "status": "Planned",
+          "description": "Fix the SEP literal in computeDetailOffsets (and matching docstring/comment), then add regression tests that exercise multi-file expanded rendering through the real handler pipeline — the exact gap that allowed the bug to ship.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Fix computeDetailOffsets separator constant and docstrings",
+              "status": "Planned",
+              "description": "Correct the string-literal typo in computeDetailOffsets: change SEP from \"\\\\n\\\\n\" (4 chars: backslash-n-backslash-n) to \"\\n\\n\" (2 chars: two real newlines) so it matches the actual blocks.join(\"\\n\\n\") used to assemble message.content at line 1286. Also fix the two docstring/comment references on lines 343 and 355 that describe the same join.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Fix SEP literal and matching docstrings/comments in computeDetailOffsets",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": [],
+                  "prd_selectors": ["h2.2", "h3.0"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/009_0d85ac0b1b08/bugfix/001_5505be07608d/architecture/system_context.md §'The Bug (Issue 1)'. The bug is at file-injector.ts line 354: `const SEP = \"\\\\n\\\\n\";` — a 4-char string (backslash-n-backslash-n) that must be the 2-char string `\"\\n\\n\"` (two real newlines). Lines 457 and 1286 already use the correct `\"\\n\\n\"`. The function computeDetailOffsets is at line 353; the docstring JSDoc block starts at line 339.\n2. INPUT: No prior subtask input — this is the root fix. The file is file-injector.ts in the project root.\n3. LOGIC: Make exactly THREE edits in file-injector.ts, all within the computeDetailOffsets function and its JSDoc:\n   (a) Line 354: Change `const SEP = \"\\\\n\\\\n\";` to `const SEP = \"\\n\\n\";`\n   (b) Line 355: Change the comment `// absolute char offset of each block within blocks.join(\"\\\\n\\\\n\")` to use `blocks.join(\"\\n\\n\")` (remove the double-backslashes).\n   (c) Line 343: Change the JSDoc line `*  \\`blocks.join(\"\\\\n\\\\n\")\\` depends on every PRIOR block's length` to use `blocks.join(\"\\n\\n\")` (remove the double-backslashes).\n   Do NOT change any other line. Do NOT change line 457 or line 1286 (they are already correct). The fix must ensure `SEP.length === 2` (matching `\"\\n\\n\".length === 2` used in blocks.join at line 1286). After the fix, run `node ./file-injector.test.mjs` — all 156 existing tests must still pass (they use single-block messages where drift is zero, so the fix does not break them).\n4. OUTPUT: The corrected computeDetailOffsets function whose SEP constant produces offsets matching the real blocks.join(\"\\n\\n\") assembly. Verified by the regression tests in P1.M1.T2.\n5. DOCS: none — no user-facing/config/API surface change. The fix is internal (display-only offset computation). The README already describes the correct expanded-view behavior at line 41 ('Press ctrl+o to expand any of them to the full contents')."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "Add multi-file expanded-view regression tests",
+              "status": "Planned",
+              "description": "Add regression tests that exercise the expanded (ctrl+o) view with multiple files through the real computeDetailOffsets + renderInjectedMessage pipeline — the exact gap that allowed Issue 1 to ship. Includes both a unit-level offset test (crafting blocks directly) and an E2E test through the real input/before_agent_start handler chain.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "Add REND-MULTI-OFFSET unit test: computeDetailOffsets with multiple crafted blocks",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": ["h2.2", "h3.0", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/009_0d85ac0b1b08/bugfix/001_5505be07608d/architecture/regression_test_design.md for the full test design. The existing REND-OFFSET test (file-injector.test.mjs line ~2733) tests the offset tier with a SINGLE block — this new test extends it to MULTIPLE blocks to catch the drift bug. All renderer tests use the helper pattern: `runCase(name, desc, async fn)`, `assert(cond, msg)`, `textOf(child)` = `child.render(REND_W).join(\"\\n\")`, and `REND_THEME = { fg: (_k, t) => t, bg: (_k, t) => t, bold: (t) => t }`. Place this test right AFTER the existing REND-OFFSET test block.\n2. INPUT: The fixed computeDetailOffsets from P1.M1.T1.S1 (SEP now uses real \"\\n\\n\", length 2). The existing test infrastructure: `runCase`, `assert`, `mod` (jiti-loaded module), `REND_THEME`, `REND_W`, `textOf`.\n3. LOGIC: Add a new test case named 'REND-MULTI-OFFSET' that:\n   (a) Crafts two `<file>` blocks directly (no file I/O):\n       `const block0 = '<file name=\"/abs/a.ts\">\\nfunction a() { return 1; }\\n</file>'`\n       `const block1 = '<file name=\"/abs/b.ts\">\\nfunction b() { return 2; }\\n</file>'`\n   (b) Builds `const blocks = [block0, block1]` and `const content = blocks.join(\"\\n\\n\")`.\n   (c) Creates details WITHOUT pre-set offsets: `const details = [{ path: \"/abs/a.ts\", kind: \"text\" }, { path: \"/abs/b.ts\", kind: \"text\" }]`.\n   (d) Calls `mod.computeDetailOffsets(blocks, details)` to populate contentStart/contentLen.\n   (e) Asserts: `content.slice(details[0].contentStart, details[0].contentStart + details[0].contentLen) === 'function a() { return 1; }'` (first file — correct even pre-fix since starts[0]===0).\n   (f) Asserts: `content.slice(details[1].contentStart, details[1].contentStart + details[1].contentLen) === 'function b() { return 2; }'` (second file — THIS is the assertion that fails pre-fix with drift +2).\n   (g) Also render expanded via `mod.renderInjectedMessage({ details: { files: details }, content }, { expanded: true }, REND_THEME)` and assert each body child (at indices 1 and 3 — odd indices, since even indices are read lines) contains the correct content via `textOf()`.\n4. OUTPUT: A passing test case 'REND-MULTI-OFFSET' that would FAIL before the SEP fix (details[1] slices wrong bytes) and PASSES after it. Increment the total test count.\n5. DOCS: none — test-only, no user-facing/config/API surface change."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S2",
+                  "title": "Add REND-MULTI-E2E integration test: real handler chain with multiple files",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": ["h2.2", "h3.0", "h2.4"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/009_0d85ac0b1b08/bugfix/001_5505be07608d/architecture/regression_test_design.md for the full design. This is the PRIMARY regression test — it exercises the exact path that was untested: the real input → before_agent_start handler chain with multiple files. Follow the DELIV-2 pattern (file-injector.test.mjs line ~2477) which uses `captureAllHandlers()` → `input[0]` → `before_agent_start[0]`. The existing fixtures A_TS (a.ts = 'function a() { return 1; }') and B_TS (b.ts = 'function b() { return 2; }') are already set up at the top of the test file. TMPDIR is the temp fixture dir. Place this test after the existing DELIV-6 block or after the REND-MULTI-OFFSET test from P1.M1.T2.S1, in the delivery/renderer section.\n2. INPUT: The fixed computeDetailOffsets from P1.M1.T1.S1. The existing test infrastructure: `captureAllHandlers()`, `makeMockCtx(cwd)`, `runCase`, `assert`, `mod`, `REND_THEME`, `textOf`, `TMPDIR`, `A_TS`, `B_TS`, `FIX`.\n3. LOGIC: Add a new test case named 'REND-MULTI-E2E' that:\n   (a) Captures handlers: `const h = captureAllHandlers()` (ONE factory → shared `pending` closure).\n   (b) Creates mock context: `const { ctx } = makeMockCtx(TMPDIR)`.\n   (c) Drives input with a 2-file prompt: `await h.input[0]({ text: 'Diff #@a.ts vs #@b.ts', source: 'interactive', images: [] }, ctx)` — verify `out.action === 'transform'`.\n   (d) Drives before_agent_start: `const result = await h.before_agent_start[0]({}, ctx)` — this calls computeDetailOffsets internally (line 1282).\n   (e) Extract the message: `const msg = result.message` — verify `msg.details.files.length === 2`.\n   (f) Render expanded: `const box = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME)`.\n   (g) For each file i (0 and 1), find the body child (at index `2*i + 1` — read line at even index, body at odd index) and assert its text via `textOf(box.children[2*i + 1])` contains the file's actual content ('function a() { return 1; }' for file 0, 'function b() { return 2; }' for file 1).\n   (h) KEY ASSERTION: the second file's body (index 3) must equal 'function b() { return 2; }' EXACTLY — this fails pre-fix (shows 'nction b() { return 2; }\\n<' due to +2 drift).\n   Also add a 3-file variant (optional but recommended): create a temporary c.ts fixture, prompt '#@a.ts #@b.ts #@c.ts', and assert the THIRD file's body is correct (drift would be +4 pre-fix). If adding c.ts, write it in the test's fn body using `fsSync.writeFileSync(path.join(TMPDIR, 'c.ts'), 'function c() { return 3; }')` and clean up in a finally block.\n4. OUTPUT: A passing test case 'REND-MULTI-E2E' that drives the real handler chain with multiple files and asserts every file's expanded body is correct. This test FAILS before the fix and PASSES after it. Increment the total test count.\n5. DOCS: none — test-only, no user-facing/config/API surface change."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T3",
+              "title": "Sync changeset-level documentation",
+              "status": "Planned",
+              "description": "Review and update README.md and any overview docs to reflect the multi-file expanded-view fix. The README already describes the correct behavior ('Press ctrl+o to expand any of them to the full contents' at line 41), so this task evaluates whether any additional changelog note, clarification, or feature-strength blurb is warranted. Per SOW §5 Mode B, this is the catch-all that prevents a coherent delta from shipping with stale documentation.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T3.S1",
+                  "title": "Review README.md for expanded-view multi-file documentation accuracy",
+                  "status": "Planned",
+                  "story_points": 0.5,
+                  "dependencies": ["P1.M1.T1.S1", "P1.M1.T2.S1", "P1.M1.T2.S2"],
+                  "prd_selectors": ["h2.0", "h2.2", "h3.0"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/009_0d85ac0b1b08/bugfix/001_5505be07608d/architecture/system_context.md §'Documentation Surface'. README.md line 41 says 'Press ctrl+o to expand any of them to the full contents.' — this already describes the correct behavior that the fix RESTORES. No docs/ directory exists; no CHANGELOG.md exists. The bug was display-only (model delivery was always correct).\n2. INPUT: All completed subtasks: the fixed computeDetailOffsets (P1.M1.T1.S1) and the regression tests (P1.M1.T2.S1, P1.M1.T2.S2).\n3. LOGIC: Review README.md for any statement about the expanded view or multi-file rendering that is now inaccurate or could be strengthened. Specifically check:\n   (a) Line 41: 'Press ctrl+o to expand any of them to the full contents.' — verify this remains accurate (it does; the fix restores it).\n   (b) Line 72: 'with ctrl+o to expand' — same check.\n   (c) The 'Diff #@a.ts vs #@b.ts' example at line 37 — verify no claim about expanded rendering is wrong.\n   If the README is already accurate (likely): no changes needed — just confirm this in a commit message or PR description. If a changelog or bugfix note would add value (e.g., noting that multi-file expansion is now regression-tested): add it. Use judgment — do NOT add unnecessary documentation noise for a display-only bugfix that restores already-documented behavior.\n4. OUTPUT: README.md either unchanged (confirmed accurate) or with a minor note if warranted. The changeset ships with no stale documentation.\n5. DOCS: This IS the documentation task. If README.md is touched, update it here; if not, confirm accuracy and move on."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
