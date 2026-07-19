@@ -832,12 +832,18 @@ type Ctx = {
 };
 
 /**
- * PRD §9 / §5.6 step 3 — scan a text (user prompt OR markdown content) for `#@` tokens that resolve,
- * WITHOUT injecting. Pure (no I/O, no state mutation beyond the per-text localSeen set). Per-text dedup
- * via localSeen; global state.injectedSet check skips already-claimed paths (prior <file> blocks OR files
- * injected earlier this run / in a parent recursion). Returns { index; abs }[] in text order.
+ * PRD §9 / §5.6 step 3 — scan a text (user prompt OR markdown content) for `#@`/`@` import markers,
+ * resolving each to an absolute path WITHOUT injecting. Pure (no I/O, no state mutation beyond the
+ * per-text localSeen set). Per-text dedup via localSeen; global state.injectedSet check skips already-
+ * claimed paths (prior <file> blocks OR files injected earlier this run / in a parent recursion).
  *
- * opts.skipCode: when true, scanTokens precomputes code regions once and skips any `#@` match whose
+ * VERBATIM DELIVERY (PRD §6.4 / §12.16): markers are detected here ONLY to resolve imports — they are
+ * NEVER stripped from the text, so no index/prefixLen bookkeeping is returned. The returned paths are
+ * the resolved absolute file paths, in encounter order (the depth-first recursion in processTokenStream
+ * relies on this ordering). Resolution logic is unchanged: cleanToken → isAbsoluteOrTilde →
+ * resolveImportPath → dedup → code-region skip.
+ *
+ * opts.skipCode: when true, scanTokens precomputes code regions once and skips any marker whose
  *   start index lies inside a fenced block or inline code span (PRD §5.6.1). null codeRanges when false →
  *   inCode is never called → top-level (user-prompt) behavior is unchanged. Markdown imports (T2.S3)
  *   pass skipCode:true.
@@ -846,33 +852,33 @@ type Ctx = {
  *   `<exact>.md` then `<exact>.markdown` (markdown-import shorthand, PRD §4.5 rule 3). Top-level user-prompt
  *   scan passes `false` (§4.4 exact-only → top-level behavior is byte-for-byte identical to today).
  * opts.bareAt: OPTIONAL. When truthy, scanTokens ALSO matches bare `@path` markers (BARE_AT_RE, PRD §4.6)
- *   alongside the `#@` markers, returning a union of candidate records sorted by index. Each record carries
- *   `prefixLen` (2 for `#@`, 1 for a bare `@`) so a consumer can strip the correct marker width. Markdown-
- *   only / opt-in; the two regexes never double-match the same `#@` (BARE_AT_RE forbids a preceding `#`).
+ *   alongside the `#@` markers, returning a union of candidate paths sorted by index. Markdown-only /
+ *   opt-in; the two regexes never double-match the same `#@` (BARE_AT_RE forbids a preceding `#`).
  *   When absent/false, ONLY `#@` matches run → byte-for-byte identical to the single-regex form.
  *
- * Returns { index; prefixLen; abs }[] in text order (prefixLen is the marker char width: 2 for `#@`, 1 for `@`).
+ * Returns string[] — the resolved absolute paths in encounter order (markers detected, never stripped:
+ * PRD §6.4 / §12.16).
  */
 export async function scanTokens(
   text: string,
   baseDir: string,
   opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt?: boolean },
   state: State,
-): Promise<{ index: number; prefixLen: number; abs: string }[]> {
+): Promise<string[]> {
   const localSeen = new Set<string>();
-  const out: { index: number; prefixLen: number; abs: string }[] = [];
+  const out: string[] = [];
   // §5.6.1 — when scanning markdown content, precompute code regions once and skip `#@` matches whose
   // start index lies inside a fenced block or inline code span (the markdown escape hatch, §4.5 rule 3).
   // null when skipCode:false (top-level user-prompt scan) → inCode is never called → no behavior change.
   const codeRanges = opts.skipCode ? computeCodeRanges(text) : null;
-  // Candidate markers: `#@` always (prefixLen 2); bare `@` only when opts.bareAt (prefixLen 1). BARE_AT_RE
-  // forbids a preceding `#`, so `#@file` appears once (via FILE_INJECT_RE), never twice. When bareAt is
-  // absent/false, cands holds only the FILE_INJECT_RE matches in index-ascending order (matchAll yields
-  // ascending), so the sort is a no-op and the per-candidate body below is byte-for-byte identical to the
-  // prior single-loop form.
-  const cands: { idx: number; token: string; prefixLen: number }[] = [];
-  for (const m of text.matchAll(FILE_INJECT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 2 });
-  if (opts.bareAt) for (const m of text.matchAll(BARE_AT_RE)) cands.push({ idx: m.index!, token: m[2], prefixLen: 1 });
+  // Candidate markers: `#@` always; bare `@` only when opts.bareAt. BARE_AT_RE forbids a preceding `#`,
+  // so `#@file` appears once (via FILE_INJECT_RE), never twice. When bareAt is absent/false, cands holds
+  // only the FILE_INJECT_RE matches in index-ascending order (matchAll yields ascending), so the sort is
+  // a no-op and the per-candidate body below is byte-for-byte identical to the prior single-loop form.
+  // `idx` is retained because it is load-bearing for the code-region exemption (inCode(c.idx, …)).
+  const cands: { idx: number; token: string }[] = [];
+  for (const m of text.matchAll(FILE_INJECT_RE)) cands.push({ idx: m.index!, token: m[2] });
+  if (opts.bareAt) for (const m of text.matchAll(BARE_AT_RE)) cands.push({ idx: m.index!, token: m[2] });
   cands.sort((a, b) => a.idx - b.idx);
   for (const c of cands) {
     if (codeRanges && inCode(c.idx, codeRanges)) continue; // §5.6.1 — skip markers inside code
@@ -883,20 +889,21 @@ export async function scanTokens(
     if (!abs) continue; // nothing resolved → leave verbatim (missing/dir/non-regular)
     if (state.injectedSet.has(abs) || localSeen.has(abs)) continue; // dedup on RESOLVED abs → leave verbatim
     localSeen.add(abs);
-    out.push({ index: c.idx, prefixLen: c.prefixLen, abs });
+    out.push(abs);
   }
   return out;
 }
 
 /**
  * PRD §9 / §12.17 — top-level processor. Scan the text ONCE (before any injection), then inject each
- * resolved token depth-first via injectFile. Returns the start indices of markers that resolved, in scan
- * order, for `#@` stripping by injectFiles. Scan-before-inject gives cross-subtree dedup (a later token
+ * resolved path depth-first via injectFile. Scan-before-inject gives cross-subtree dedup (a later token
  * whose path an earlier import claimed is left verbatim). PRIVATE — exercised indirectly via injectFiles.
  *
- * The belt-and-suspenders `state.injectedSet.has(r.abs)` re-check is a NO-OP at top level in T1.S2
- * (scanTokens' localSeen already made each abs unique in records); it becomes load-bearing in T2 when
- * injectFile recurses into markdown imports.
+ * VERBATIM DELIVERY (PRD §6.4 / §12.16): the prompt text is NEVER modified here — markers are detected
+ * only to resolve imports (see scanTokens); nothing is stripped, so there is no index accumulator to
+ * return. This function returns Promise<void> and injects each resolved abs depth-first. The belt-and-
+ * suspenders `state.injectedSet.has(abs)` re-check stays for cross-subtree dedup once injectFile recurses
+ * into markdown imports.
  *
  * `opts.tryMdExt` is threaded straight through to scanTokens/resolveImportPath: the top-level user-prompt
  * call site passes `false` (§4.4 exact-only), and the markdown-import path passes `true` (§4.5 shorthand).
@@ -904,18 +911,15 @@ export async function scanTokens(
 async function processTokenStream(
   text: string,
   baseDir: string,
-  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt: boolean },
+  opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt?: boolean },
   state: State,
   ctx: Ctx,
-): Promise<number[]> {
-  const records = await scanTokens(text, baseDir, opts, state); // scan once, before any injection (opts carries tryMdExt)
-  const resolved: number[] = [];
-  for (const r of records) {
-    if (state.injectedSet.has(r.abs)) continue; // cross-subtree dedup since scan (no-op at top level in T1.S2)
-    const ok = await injectFile(r.abs, state, ctx); // claims abs, emits block(s); never throws
-    if (ok) resolved.push(r.index);
+): Promise<void> {
+  const absPaths = await scanTokens(text, baseDir, opts, state); // scan once, before any injection (opts carries tryMdExt)
+  for (const abs of absPaths) {
+    if (state.injectedSet.has(abs)) continue; // cross-subtree dedup since scan
+    await injectFile(abs, state, ctx); // claims abs, emits block(s); never throws
   }
-  return resolved;
 }
 
 /**
