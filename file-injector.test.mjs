@@ -2747,6 +2747,39 @@ await runCase("REND-OFFSET", "offset tier: detail with contentStart/contentLen (
     `tier-1 slice is the FULL body (not the regex-truncated 'a'), got ${JSON.stringify(bodyChild.slice(0, 80))}`);
 });
 
+// REND-MULTI-OFFSET — §12.22 offset tier, MULTI-BLOCK (the gap that let the SEP bug ship, bugfix §h3.0 Issue 1).
+// REND-OFFSET uses a SINGLE block (starts[0]===0, drift zero regardless of SEP.length); this sibling crafts TWO
+// blocks so details[1].contentStart depends on SEP.length matching the real join separator. Pre-T1.S1
+// (SEP="\\n\\n", length 4 vs join "\n\n" length 2): details[1] slices "nction b() { return 2; }\n<" (drift +2 —
+// missing "fu", trailing garbage). Post-T1.S1 (SEP.length 2): exact body. This is the minimal test that would
+// have caught the bug (regression_test_design.md §"Minimal Unit Test Alternative"). NO file I/O — crafts blocks
+// directly (the E2E handler-chain version is T2.S2 REND-MULTI-E2E).
+await runCase("REND-MULTI-OFFSET", "§12.22 multi-block offset tier: computeDetailOffsets + expanded render — EACH file's body is exact (the +2/block drift regression)", async () => {
+  const block0 = '<file name="/abs/a.ts">\nfunction a() { return 1; }\n</file>';
+  const block1 = '<file name="/abs/b.ts">\nfunction b() { return 2; }\n</file>';
+  const blocks = [block0, block1];
+  const content = blocks.join("\n\n");              // the real assembly (file-injector.ts L1286) — 2-char separator
+  const details = [{ path: "/abs/a.ts", kind: "text" }, { path: "/abs/b.ts", kind: "text" }];
+  mod.computeDetailOffsets(blocks, details);       // populates contentStart/contentLen (mutates details in place)
+  // (a) FIRST file — correct even pre-fix (starts[0]===0). Pins the baseline (if this fails, the test is malformed).
+  const sliceA = content.slice(details[0].contentStart, details[0].contentStart + details[0].contentLen);
+  assert(sliceA === "function a() { return 1; }",
+    `a.ts offset slice is exact (starts[0]===0, drift zero even pre-fix), got ${JSON.stringify(sliceA)}`);
+  // (b) SECOND file — THE regression assertion. Pre-T1.S1 (SEP.length 4): drift +2 → "nction b() { return 2; }\n<".
+  //     Post-T1.S1 (SEP.length 2): exact body. This line FAILS before the SEP fix and PASSES after it.
+  const sliceB = content.slice(details[1].contentStart, details[1].contentStart + details[1].contentLen);
+  assert(sliceB === "function b() { return 2; }",
+    `b.ts offset slice is exact (NO +2 drift — SEP.length must match the join separator), got ${JSON.stringify(sliceB)}`);
+  // (c) END-TO-END through the renderer: expanded view, each body child (odd indices 1 and 3) carries the content.
+  const expanded = mod.renderInjectedMessage({ details: { files: details }, content }, { expanded: true }, REND_THEME);
+  const bodyA = textOf(expanded.children[1]);       // [0]=read a.ts (+hint), [1]=body a.ts
+  const bodyB = textOf(expanded.children[3]);       // [2]=read b.ts, [3]=body b.ts
+  assert(bodyA.includes("function a() { return 1; }"),
+    `expanded body child [1] (a.ts) carries the exact content, got ${JSON.stringify(bodyA.slice(0, 80))}`);
+  assert(bodyB.includes("function b() { return 2; }"),
+    `expanded body child [3] (b.ts) carries the exact content (NO drift), got ${JSON.stringify(bodyB.slice(0, 80))}`);
+});
+
 // REND-PAGED-DIR — §6.3 paged directive in the expanded view (P1.M2.T2.S1). A paged detail carrying `directive` +
 // content renders, when expanded, the head body FOLLOWED BY the directive text (the <paged: …> resume instructions).
 // Crafts the detail directly (independent of P1.M2.T1.S1 offsets + paging fixtures — mirrors REND-OFFSET's isolation).

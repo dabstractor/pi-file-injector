@@ -40,14 +40,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Add multi-file expanded-view regression tests",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Add regression tests that exercise the expanded (ctrl+o) view with multiple files through the real computeDetailOffsets + renderInjectedMessage pipeline — the exact gap that allowed Issue 1 to ship. Includes both a unit-level offset test (crafting blocks directly) and an E2E test through the real input/before_agent_start handler chain.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Add REND-MULTI-OFFSET unit test: computeDetailOffsets with multiple crafted blocks",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -63,7 +63,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "Add REND-MULTI-E2E integration test: real handler chain with multiple files",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
