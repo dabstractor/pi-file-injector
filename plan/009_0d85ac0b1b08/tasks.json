@@ -132,7 +132,7 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Migrate stripped->verbatim assertions in file-injector.test.mjs",
-              "status": "Researching",
+              "status": "Ready",
               "description": "file-injector.test.mjs (2812 lines) is the primary test gate. It currently asserts ~78 stripping-related expectations across three categories: (a) top-level prompt assertions where r.text/out.text was checked for stripped prompts (e.g. r.text === 'Review a.ts'), (b) markdown block content assertions where markers were checked as stripped (hasBlock pairs asserting the marker was removed), and (c) partial-strip / verbatim-prompt assertions. All must flip from 'stripped' to 'verbatim'.",
               "subtasks": [
                 {
@@ -173,7 +173,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S3",
                   "title": "Migrate partial-strip + verify verbatim-prompt assertions (~19 cases)",
-                  "status": "Researching",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
@@ -192,14 +192,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Migrate marker assertions in relative-imports.test.mjs and import-behavior.test.mjs",
-              "status": "Planned",
+              "status": "Researching",
               "description": "These two focused test suites check import resolution correctness (file-relative vs cwd-relative). They search joined block content via has()/blocksText() for markers. Most assertions check content markers like 'B-FILE-RELATIVE' to prove the correct file was injected — these are unchanged. A few check marker presence/stripping and must be updated for verbatim delivery.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Update marker-presence expectations in relative-imports.test.mjs and import-behavior.test.mjs",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2"
