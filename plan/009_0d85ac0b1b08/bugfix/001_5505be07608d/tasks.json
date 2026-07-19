@@ -4,14 +4,14 @@
       "type": "Phase",
       "id": "P1",
       "title": "Multi-file expanded-view correctness fix",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Fix the Major bug (Issue 1) where the expanded (ctrl+o) view of multi-file injections renders corrupted content for every file after the first. The root cause is a single string-literal typo in computeDetailOffsets: SEP is \"\\\\n\\\\n\" (4 chars) instead of \"\\n\\n\" (2 chars), causing contentStart offsets to drift by +2 per preceding block. The fix restores correct multi-file expanded rendering and adds regression tests to prevent recurrence.",
       "milestones": [
         {
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Separator fix and multi-file regression coverage",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Fix the SEP literal in computeDetailOffsets (and matching docstring/comment), then add regression tests that exercise multi-file expanded rendering through the real handler pipeline — the exact gap that allowed the bug to ship.",
           "tasks": [
             {
@@ -40,7 +40,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Add multi-file expanded-view regression tests",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add regression tests that exercise the expanded (ctrl+o) view with multiple files through the real computeDetailOffsets + renderInjectedMessage pipeline — the exact gap that allowed Issue 1 to ship. Includes both a unit-level offset test (crafting blocks directly) and an E2E test through the real input/before_agent_start handler chain.",
               "subtasks": [
                 {
@@ -63,7 +63,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "Add REND-MULTI-E2E integration test: real handler chain with multiple files",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -81,14 +81,14 @@
               "type": "Task",
               "id": "P1.M1.T3",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Review and update README.md and any overview docs to reflect the multi-file expanded-view fix. The README already describes the correct behavior ('Press ctrl+o to expand any of them to the full contents' at line 41), so this task evaluates whether any additional changelog note, clarification, or feature-strength blurb is warranted. Per SOW §5 Mode B, this is the catch-all that prevents a coherent delta from shipping with stale documentation.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T3.S1",
                   "title": "Review README.md for expanded-view multi-file documentation accuracy",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 0.5,
                   "dependencies": [
                     "P1.M1.T1.S1",

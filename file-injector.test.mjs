@@ -2780,6 +2780,61 @@ await runCase("REND-MULTI-OFFSET", "§12.22 multi-block offset tier: computeDeta
     `expanded body child [3] (b.ts) carries the exact content (NO drift), got ${JSON.stringify(bodyB.slice(0, 80))}`);
 });
 
+// REND-MULTI-E2E — §h3.0 Issue 1 E2E regression (bugfix PRD §h2.4 "no automated end-to-end test that injects ≥2
+// files"). The unit REND-MULTI-OFFSET crafts blocks + calls computeDetailOffsets manually; THIS test drives the
+// REAL input → before_agent_start handler chain (which calls computeDetailOffsets internally at L1284) with a
+// 2-file prompt, then renders expanded and asserts EACH file's body child carries the file's ACTUAL content.
+// Pre-T1.S1 (SEP length 4 vs join length 2): children[3] (b.ts body) renders corrupted (+2 drift — shifted start,
+// trailing garbage from the next block). Post-T1.S1 (SEP length 2, LANDED b1f0727): exact bodies. This is the
+// end-to-end proof of the SEP fix through the full pipeline.
+await runCase("REND-MULTI-E2E", "§6.3 multi-file expanded (ctrl+o) E2E: real input→before_agent_start→renderer — EACH file's body is exact (the +2/block drift regression, full handler chain)", async () => {
+  const { ctx } = makeMockCtx(TMPDIR);              // cwd + hasUI + isProjectTrusted + ui.notify
+  const h = captureAllHandlers();                    // ONE factory → input[0] + before_agent_start[0] share `pending`
+  // (a) drive input with a 2-file prompt
+  const out = await h.input[0]({ text: "Diff #@a.ts vs #@b.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `input must transform a 2-file prompt, got '${out.action}'`);
+  // (b) drive before_agent_start — this INTERNALLY calls computeDetailOffsets(blocks, details) (file-injector.ts L1284)
+  //     before publishing. Do NOT call computeDetailOffsets manually (that's the unit test's job; this is E2E).
+  const result = await h.before_agent_start[0]({}, ctx);
+  assert(result && result.message, `before_agent_start must return {message} for a 2-file prompt, got ${JSON.stringify(result)}`);
+  const msg = result.message;
+  assert(msg.details && msg.details.files.length === 2,
+    `details.files has 2 entries (a.ts + b.ts), got ${msg.details?.files?.length}`);
+  // (c) render EXPANDED — the renderer's tier-1 offset slice fires automatically (offsets already populated by the handler)
+  const box = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME);
+  // (d) expanded-Box layout for 2 text files: [0]=read a.ts (+hint), [1]=body a.ts, [2]=read b.ts, [3]=body b.ts.
+  //     Body children at ODD indices. textOf may have trailing padding → use .includes (NOT ===).
+  const bodyA = textOf(box.children[1]);             // a.ts body — baseline (starts[0]===0, drift zero even pre-fix)
+  const bodyB = textOf(box.children[3]);             // b.ts body — THE regression assertion (drift +2 pre-T1.S1)
+  assert(bodyA.includes("export function add"),
+    `a.ts expanded body (children[1]) carries the REAL a.ts content (A_TS_CONTENT), got ${JSON.stringify(bodyA.slice(0, 80))}`);
+  assert(bodyB.includes("export const VALUE = 42"),
+    `b.ts expanded body (children[3]) carries the REAL b.ts content (B_TS_CONTENT) — NO +2 drift, got ${JSON.stringify(bodyB.slice(0, 80))}`);
+});
+
+// REND-MULTI-3FILE — §h3.0 Issue 1 cumulative-drift variant (regression_test_design.md Test B). 3 files → the
+// THIRD file's drift would be +4 pre-T1.S1 (2 preceding blocks × +2). Proves the drift is cumulative, not +2 once.
+await runCase("REND-MULTI-3FILE", "§6.3 3-file expanded E2E: THIRD file's body is exact (cumulative +4 drift pre-fix)", async () => {
+  const cTs = path.join(TMPDIR, "c.ts");
+  fsSync.writeFileSync(cTs, "function c() { return 3; }");   // test-local fixture (cleaned up below)
+  try {
+    const { ctx } = makeMockCtx(TMPDIR);
+    const h = captureAllHandlers();
+    const out = await h.input[0]({ text: "Review #@a.ts #@b.ts #@c.ts", source: "interactive", images: [] }, ctx);
+    assert(out.action === "transform", `input must transform a 3-file prompt, got '${out.action}'`);
+    const result = await h.before_agent_start[0]({}, ctx);   // computeDetailOffsets runs internally
+    const msg = result.message;
+    assert(msg.details.files.length === 3, `details.files has 3 entries, got ${msg.details.files.length}`);
+    const box = mod.renderInjectedMessage(msg, { expanded: true }, REND_THEME);
+    // [0]=read a.ts, [1]=body a.ts, [2]=read b.ts, [3]=body b.ts, [4]=read c.ts, [5]=body c.ts
+    const bodyC = textOf(box.children[5]);                   // c.ts body — cumulative +4 drift pre-T1.S1
+    assert(bodyC.includes("function c() { return 3; }"),
+      `c.ts expanded body (children[5]) carries the exact content — NO cumulative +4 drift, got ${JSON.stringify(bodyC.slice(0, 80))}`);
+  } finally {
+    fsSync.rmSync(cTs, { force: true });                     // clean up the test-local fixture
+  }
+});
+
 // REND-PAGED-DIR — §6.3 paged directive in the expanded view (P1.M2.T2.S1). A paged detail carrying `directive` +
 // content renders, when expanded, the head body FOLLOWED BY the directive text (the <paged: …> resume instructions).
 // Crafts the detail directly (independent of P1.M2.T1.S1 offsets + paging fixtures — mirrors REND-OFFSET's isolation).
