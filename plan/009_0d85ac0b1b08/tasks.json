@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Engine simplification: scanTokens->string[], processTokenStream->void, injectMarkdown verbatim, injectFiles verbatim",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Remove all stripping logic from the injection engine. This is one atomic refactor across four functions because the scanTokens return-type change cascades to every consumer. The three subtasks (S1, S2, S3) are implemented in sequence within a single pass — the file will not type-check until all three are done. After this task: scanTokens returns Promise<string[]> (resolved abs paths), processTokenStream returns Promise<void>, injectMarkdown emits verbatim content (Steps 3.5+4 deleted), injectFiles returns the original prompt text verbatim.",
               "subtasks": [
                 {
@@ -58,7 +58,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "injectFiles: delete resolvedIdx/strippedText; return original prompt verbatim",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -84,7 +84,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Input handler: change return to text: event.text (explicit verbatim)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S3"

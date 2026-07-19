@@ -1165,34 +1165,27 @@ export async function injectFiles(
   };
 
   // process the USER PROMPT: baseDir = cwd, absolute/tilde allowed, no code-skipping.
-  // processTokenStream scans ONCE (before any injection) then calls injectFile per record (PRD §12.17),
-  // returning the start indices of markers that ACTUALLY injected. Failed tokens (missing/dir/error)
-  // and deduped repeats are never returned → they keep '#@' verbatim (PRD §6.2). scanTokens' per-text
-  // localSeen + state.injectedSet give cross-subtree dedup (a later token whose path an earlier import
-  // claimed is left verbatim); processTokenStream's belt-and-suspenders injectedSet re-check is a no-op
-  // at top level in T1.S2 (each abs is already unique in records) but load-bearing for T2 recursion.
-  const resolvedIdx = await processTokenStream(
+  // processTokenStream scans ONCE (before any injection) then calls injectFile per resolved abs (PRD §12.17);
+  // it returns void — it does NOT report marker indices, because markers are NEVER stripped from the prompt
+  // (§6.4/§13.8: the user message is returned byte-for-byte verbatim so cancel/fork//tree re-open re-triggers
+  // injection). Failed tokens (missing/dir/error) and deduped repeats are never injected → they keep '#@'
+  // verbatim (§6.2). scanTokens' per-text localSeen + state.injectedSet give cross-subtree dedup (a later
+  // token whose path an earlier import claimed is left verbatim); processTokenStream's belt-and-suspenders
+  // injectedSet re-check is a no-op at top level (each abs is already unique in absPaths) but load-bearing
+  // for markdown recursion.
+  await processTokenStream(
     text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
 
   if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0, blocks: [], details: [] }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
-  // Strip the #@ trigger from each inline marker — the PATH stays put as a readable reference. The
-  // model doesn't need the #@ syntax (the appended <file name="abs"> blocks carry the data), and
-  // every #@ is 2 tokens of pure noise. Reached only when count > 0, so the nothing-injected path
-  // above still returns the prompt byte-for-byte (missing/dir/error tokens keep their #@ verbatim).
-  // §6.2 — strip the '#@' trigger ONLY from tokens that ACTUALLY injected. Failed tokens
-  // (missing/dir/error) and deduped repeats were never returned, so they keep '#@' verbatim.
-  // INDEX-BASED SPLICE (not substring replace): an injected match can be a prefix of another token
-  // (e.g. '#@a.ts' ⊂ '#@a.ts.bak'), so a substring replace would corrupt the longer token. Group 1
-  // of FILE_INJECT_RE is zero-width → m.index is exactly the '#'; removing 2 chars drops exactly
-  // '#@'. Process high→low so earlier offsets stay valid.
-  let strippedText = text;
-  for (const i of [...resolvedIdx].sort((a, b) => b - a)) {
-    strippedText = strippedText.slice(0, i) + strippedText.slice(i + 2);
-  }
-  // §6.4 — the user message is JUST the stripped prompt (no appended blocks, no `\n\n---\n\n`). The blocks +
-  // details are returned for the caller (P1.M1.T2.S1 stashes them for the before_agent_start custom message).
-  return { text: strippedText, images: state.images, injected: state.count, paged: state.paged, blocks: state.blocks, details: state.details };
+  // §6.4 / §13.8 — the user message is the ORIGINAL `text`, byte-for-byte VERBATIM. Markers are NEVER stripped
+  // (no `#@` removal, no appended blocks, no `\n\n---\n\n`): stripping discards the triggers from the STORED
+  // message, and Pi re-feeds that stored text on cancel / fork / `/tree`-navigate (`navigateTree` prefills the
+  // editor from `targetEntry.message.content`, with no extension hook to override), so a stripped prompt would
+  // never re-trigger injection. The file BYTES live only in the returned `blocks`/`details` (the caller — the
+  // input handler — stashes them for `before_agent_start`'s custom message); the prompt carries nothing but the
+  // user's original text. (The count===0 path above already returns this same `text` verbatim.)
+  return { text, images: state.images, injected: state.count, paged: state.paged, blocks: state.blocks, details: state.details };
 }
 
 /**
