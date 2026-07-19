@@ -2857,6 +2857,64 @@ await runCase("REOPEN-4", "negative control: a stored prompt with NO #@ re-trigg
   assert(out.action === "continue", `a prompt with NO #@ must NOT inject (action:continue) — this is the trap REOPEN-3 avoids by preserving #@, got '${out.action}'`);
 });
 
+// ── P1.M2.T3.S2 (plan/009): markdown verbatim regression (import markers preserved in delivered content) ──
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Pins PRD §5.6 (Step 4: emit the VERBATIM content — import markers are NOT stripped) + §6.4 (delivered
+// content is never modified). Models the FULL chain: top-level #@parent.md → parent.md contains a #@/@import
+// marker → the target is injected → the marker survives LITERALLY in parent.md's <file> block (NOT stripped to
+// the bare path). A stripping regression (the pre-plan-009 injectMarkdown Step 3.5/4) would flip the
+// hasBlock(marker) assert to ✗. Each case writes its OWN self-contained fixtures (CRLF-E2E pattern, L1655) —
+// do NOT touch buildFixtures (shared by 28+ cases). REUSE hasBlock/FIX/runCase/assert/fsSync/TMPDIR/path — no
+// new helpers. Prefix MDV- (no collision with DELIV-/F1/T1.S1-/REOPEN-/M2.T2.S1-/MD1/MD2/CRLF-E2E/EDG-).
+
+// MDV-1 — #@ IMPORT-MARKER CHAIN (verbatim in delivered content). The canonical case: a top-level #@mdVerbatim.md
+// whose content contains #@apiVerbatim.md. The import RESOLVES (apiVerbatim.md is injected) AND the marker
+// SURVIVES verbatim in mdVerbatim.md's block (not stripped to "apiVerbatim.md").
+await runCase("MDV-1", "md verbatim: top-level #@mdVerbatim.md → its #@apiVerbatim.md marker survives VERBATIM in the block (NOT stripped) while apiVerbatim.md still injects (§5.6/§6.4)", async () => {
+  // Self-contained fixtures (CRLF-E2E pattern): unique non-colliding names, written into TMPDIR.
+  const MD_VERBATIM = path.join(TMPDIR, "mdVerbatim.md");
+  const API_VERBATIM = path.join(TMPDIR, "apiVerbatim.md");
+  fsSync.writeFileSync(MD_VERBATIM, "See #@apiVerbatim.md for details.\n");
+  fsSync.writeFileSync(API_VERBATIM, "# API Verbatim\n\nImport-chain target content.\n");
+  const r = await mod.injectFiles("Review #@mdVerbatim.md", [], FIX);   // bareAt defaults false — #@ needs no bareAt
+  // (a) top-level prompt is VERBATIM (§6.4): the #@mdVerbatim.md marker survives in r.text.
+  assert(r.text === "Review #@mdVerbatim.md", `r.text must be the verbatim prompt (#@ preserved — §6.4), got ${JSON.stringify(r.text)}`);
+  // (b) BOTH files injected, pre-order depth-first (mdVerbatim.md then its import apiVerbatim.md).
+  assert(r.injected === 2, `expected injected===2 (mdVerbatim.md + apiVerbatim.md), got ${r.injected}`);
+  assert(Array.isArray(r.blocks) && r.blocks.length === 2, `r.blocks must have length 2 (parent + import), got ${JSON.stringify(r.blocks?.length)}`);
+  // (c) THE KEYSTONE: the import marker SURVIVES VERBATIM in mdVerbatim.md's delivered block (§5.6 Step 4 / §6.4).
+  assert(hasBlock(r, "See #@apiVerbatim.md for details."), `mdVerbatim.md block: the import marker #@apiVerbatim.md must be PRESERVED VERBATIM (§5.6/§6.4), got blocks=${JSON.stringify(r.blocks)}`);
+  // (d) the STRIPPED form is ABSENT (proves the # survived — content is verbatim, not stripped to bare path).
+  assert(!hasBlock(r, "See apiVerbatim.md for details."), `the stripped form 'See apiVerbatim.md' must be ABSENT (content is verbatim, §6.4) — a stripping regression would make this PRESENT, got blocks=${JSON.stringify(r.blocks)}`);
+  // (e) apiVerbatim.md was STILL INJECTED despite the marker being preserved (the import resolved+injected).
+  assert(hasBlock(r, '<file name="' + API_VERBATIM + '">'), `apiVerbatim.md must STILL be injected (the import resolved), got blocks=${JSON.stringify(r.blocks)}`);
+});
+
+// MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@
+// variant: a top-level #@mdBare.md whose content contains a BARE @apiBare.md. With bareAt:true (4th param),
+// the bare import RESOLVES (apiBare.md is injected) AND the bare marker SURVIVES verbatim in mdBare.md's block
+// (not stripped to "apiBare.md"). Pins the same contract for the §4.6 opt-in bare-@ path.
+await runCase("MDV-2", "md verbatim (bare-@ on): top-level #@mdBare.md → its BARE @apiBare.md marker survives VERBATIM in the block (NOT stripped) while apiBare.md still injects (§4.6/§5.6/§6.4)", async () => {
+  // Self-contained fixtures (CRLF-E2E pattern): unique non-colliding names, written into TMPDIR.
+  const MD_BARE = path.join(TMPDIR, "mdBare.md");
+  const API_BARE = path.join(TMPDIR, "apiBare.md");
+  fsSync.writeFileSync(MD_BARE, "See @apiBare.md for details.\n");
+  fsSync.writeFileSync(API_BARE, "# API Bare\n\nBare-at import target content.\n");
+  const r = await mod.injectFiles("Review #@mdBare.md", [], FIX, true);   // 4th param bareAt=true (§4.6) — enables bare-@ markdown imports
+  // (a) top-level prompt is VERBATIM (§6.4): the #@mdBare.md marker survives in r.text (the bare @ is INSIDE
+  //     mdBare.md's content, delivered verbatim; the top-level scan is #@-only regardless of bareAt — L1177).
+  assert(r.text === "Review #@mdBare.md", `r.text must be the verbatim prompt (#@ preserved — §6.4), got ${JSON.stringify(r.text)}`);
+  // (b) BOTH files injected (mdBare.md + its bare-@ import apiBare.md).
+  assert(r.injected === 2, `expected injected===2 (mdBare.md + apiBare.md via bare-@ import), got ${r.injected}`);
+  assert(Array.isArray(r.blocks) && r.blocks.length === 2, `r.blocks must have length 2 (parent + bare-@ import), got ${JSON.stringify(r.blocks?.length)}`);
+  // (c) THE KEYSTONE: the BARE import marker SURVIVES VERBATIM in mdBare.md's delivered block (§5.6 Step 4 / §6.4).
+  assert(hasBlock(r, "See @apiBare.md for details."), `mdBare.md block: the bare import marker @apiBare.md must be PRESERVED VERBATIM (§4.6/§5.6/§6.4), got blocks=${JSON.stringify(r.blocks)}`);
+  // (d) the STRIPPED form is ABSENT (proves the @ survived — content is verbatim, not stripped to bare path).
+  assert(!hasBlock(r, "See apiBare.md for details."), `the stripped form 'See apiBare.md' must be ABSENT (content is verbatim, §6.4) — a stripping regression would make this PRESENT, got blocks=${JSON.stringify(r.blocks)}`);
+  // (e) apiBare.md was STILL INJECTED via the bare-@ import (bareAt on → BARE_AT_RE ran → resolved).
+  assert(hasBlock(r, '<file name="' + API_BARE + '">'), `apiBare.md must STILL be injected (the bare-@ import resolved under markdownBareAtImports), got blocks=${JSON.stringify(r.blocks)}`);
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));

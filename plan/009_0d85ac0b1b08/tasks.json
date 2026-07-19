@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Stop stripping #@ markers; preserve the prompt verbatim",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Plan 008 ships a working extension whose input handler strips #@ from the user prompt and strips resolved #@/bare-@ markers from delivered markdown content before storing the message. This phase reverses that: the prompt is never modified. The input handler returns event.text byte-for-byte intact; delivered markdown files keep their import markers verbatim. Root cause (verified in agent-session.ts): Pi re-feeds the STORED user-message content on cancel/fork/tree-navigate — if #@ was stripped from the stored message, re-submission finds no trigger and files silently vanish. Preserving verbatim makes re-submission reliably re-trigger injection. See architecture/system_context.md and architecture/stripping_logic_analysis.md for verified line numbers.",
       "milestones": [
         {
@@ -125,7 +125,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Migrate tests to verbatim assertions; add re-open regression; sync README",
-          "status": "Planned",
+          "status": "Researching",
           "description": "After M1 changes the engine to verbatim delivery, the existing tests (~78 stripping-related assertions across three test files) will FAIL because they assert stripped prompts/markers. This milestone migrates every assertion from 'stripped' to 'verbatim' expectations, adds new re-open/re-submit regression tests (PRD §11 case #42), and syncs the README for the verbatim behavior (Mode B). Tests must all pass via `npm test` (which chains all three test files with &&).",
           "tasks": [
             {
@@ -218,7 +218,7 @@
               "type": "Task",
               "id": "P1.M2.T3",
               "title": "Add re-open / re-submit regression tests (PRD §11 case #42 + §10 new rows)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "The core value of verbatim delivery is that cancel/fork/tree-navigate re-submission re-triggers injection. No existing test covers this — it's a NEW regression guard. The test must model the Pi constraint: the stored user-message text is re-fed to a fresh input invocation, and injection must re-trigger because #@ survived in the stored text.",
               "subtasks": [
                 {
@@ -242,7 +242,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T3.S2",
                   "title": "Add markdown verbatim regression test (import markers preserved in delivered content)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S2"
@@ -261,14 +261,14 @@
               "type": "Task",
               "id": "P1.M2.T4",
               "title": "Sync changeset-level documentation (README.md)",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Mode B changeset-level documentation sync. The README currently describes stripping behavior (lines 41, 43, 72) that no longer matches the implementation. This task updates those passages to describe verbatim delivery: #@ triggers stay in the message as typed, so cancel/fork/re-open re-trigger injection. This task depends on ALL implementing subtasks (P1.M1 + P1.M2.T1/T2/T3) because it summarizes the complete behavioral delta.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T4.S1",
                   "title": "Update README.md lines 41, 43, 72 for verbatim prompt behavior",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S2",
