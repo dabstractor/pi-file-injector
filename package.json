@@ -1,6 +1,6 @@
 {
   "name": "pi-file-injector",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "#@file — inject the whole file into your Pi prompt, every time and everywhere, only when you want it. Renders as a compact read-tool line.",
   "author": "Dustin Schultz",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "pi-coding-agent",
     "file-injection",
     "context",
-    "prompt",
+    "pi-extension",
     "ai",
     "agents",
     "cli"
