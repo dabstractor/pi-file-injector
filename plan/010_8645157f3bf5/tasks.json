@@ -159,14 +159,14 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Hermetic URL tests",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Create url-injection.test.mjs with comprehensive coverage: URL detection (detection regexes + URL_SHAPE_RE gate), content-type dispatch (HTML→defuddle markdown, text/json/xml→raw, image→attach), collision table (prose tokens untouched, #@ disjoint), shared budget/dedup between triggers, and ALL failure/guard modes (non-2xx, DNS throw, 20s timeout, Content-Length > 1MB, mid-stream overflow, over-budget→verbatim no paging, SPA <200 chars, enableUrls:false→no fetch, PDF/octet-stream). Every verbatim case asserts r.text === prompt. Tests stub globalThis.fetch and NEVER hit the network.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Detection + dispatch + collision tests",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S3"
@@ -184,7 +184,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "Failure / guard tests (all → verbatim, no block, no network when disabled)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S3",

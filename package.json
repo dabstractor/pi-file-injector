@@ -47,7 +47,7 @@
   },
   "scripts": {
     "typecheck": "node ./scripts/typecheck.mjs",
-    "test": "node ./file-injector.test.mjs && node ./import-behavior.test.mjs && node ./relative-imports.test.mjs",
+    "test": "node ./file-injector.test.mjs && node ./import-behavior.test.mjs && node ./relative-imports.test.mjs && node ./url-injection.test.mjs",
     "prepublishOnly": "npm run typecheck"
   },
   "peerDependencies": {
