@@ -1328,6 +1328,7 @@ export async function injectFiles(
   imagesIn: ImageContent[],
   ctx: Ctx,
   bareAt = false, // §4.6 — markdown bare-@ enabled? (derived from cfg in the input handler; default false for direct unit tests)
+  enableUrls = true, // [P1.M1.T2.S3] §4 — URL #<url> injection enabled? Default true so direct unit tests get the branch; the input handler passes the real `cfg.enableUrls !== false` (default-enabled; see architecture Refinement #2).
 ): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number; blocks: string[]; details: FileDetail[] }> {
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
@@ -1390,6 +1391,28 @@ export async function injectFiles(
   // for markdown recursion.
   await processTokenStream(
     text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
+
+  // [P1.M1.T2.S3] §8 URL branch — scan #<url> tokens and inject via injectUrl (T2.S1). Shares the
+  // SAME `state` as the #@file path above (blocks/details/images/injectedSet/remaining/count), so
+  // budget, dedup, and count are coherent across BOTH triggers. Placement is load-bearing: AFTER
+  // processTokenStream (files claim injectedSet first) and BEFORE the count===0 check (injectUrl's
+  // count++ keeps the early return open for URL-only prompts). Pipeline: matchAll(URL_INJECT_RE,
+  // group 2 = token) → cleanToken (strip trailing punct, §4.3) → URL_SHAPE_RE shape gate →
+  // normalize to absolute form → dedup on state.injectedSet (absolute key → #example.com and
+  // #https://example.com collapse) → await injectUrl (never throws; false → token left verbatim).
+  // enableUrls===false → loop body skipped entirely → ZERO network egress (§4 air-gapped opt-out).
+  if (enableUrls) {
+    for (const m of text.matchAll(URL_INJECT_RE)) {
+      const tok = cleanToken(m[2]);
+      if (tok && URL_SHAPE_RE.test(tok)) {
+        const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
+        if (!state.injectedSet.has(abs)) {
+          state.injectedSet.add(abs);
+          await injectUrl(abs, state, ctx);
+        }
+      }
+    }
+  }
 
   if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0, blocks: [], details: [] }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
@@ -1464,9 +1487,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
-    if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
+    if (!event.text?.includes("#")) return { action: "continue" }; // [P1.M1.T2.S3] cheap pre-check: both triggers (#@file, #<url>) contain '#' (§12.4)
 
-    const { text, images, injected, paged, blocks, details } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start
+    const { text, images, injected, paged, blocks, details } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true, cfg.enableUrls !== false); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start; [P1.M1.T2.S3] §4 — enableUrls default-enabled (Refinement #2: !== false, NOT === true); false gates ALL network egress
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered (no stash set → before_agent_start returns undefined)
 
     // §6.2 hand the built blocks+details to before_agent_start (the custom message). Only stashed when

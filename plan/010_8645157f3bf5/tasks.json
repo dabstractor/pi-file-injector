@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Engine + Dependencies",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Add the 5 hard npm dependencies and install them; extend FileInjectorConfig with enableUrls (default true); add the URL_INJECT_RE + URL_SHAPE_RE detection constants; verify tsc --strict passes. Then implement the injectUrl pipeline (fetch, content-type dispatch, defuddle HTML→markdown extraction, image byte path, cap/timeout/budget guards, all-failures→verbatim), add FileDetail.kind 'url' + a readLine url branch, and wire the URL scan+inject loop into injectFiles + the input handler. All #@file behavior unchanged; npm run typecheck clean.",
           "tasks": [
             {
@@ -84,7 +84,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "The URL pipeline + integration",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Implement injectUrl and its helper functions (fetch, content-type dispatch, defuddle HTML→markdown, image byte path, cap/timeout/budget guards, SPA fallback, all-failures→verbatim), add FileDetail.kind 'url' + a readLine url branch for display, and wire the URL scan+inject loop into injectFiles + broaden the input handler pre-check. Mirrors spec §3 + §8; honors all four architecture refinements.",
               "subtasks": [
                 {
@@ -127,7 +127,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S3",
                   "title": "Wire the URL scan+inject loop into injectFiles + broaden the input handler pre-check",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1",
@@ -166,7 +166,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Detection + dispatch + collision tests",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S3"
