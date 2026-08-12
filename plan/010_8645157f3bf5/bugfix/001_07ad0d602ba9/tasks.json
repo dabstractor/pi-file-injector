@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "URL Shape Gate and Notify Bugfix Release",
-      "status": "Planned",
+      "status": "Ready",
       "description": "Fix the two bugs identified in the end-to-end validation PRD: BUG-001 (Major) — the URL_SHAPE_RE gate matches common code-file extensions as alpha-TLD hostnames, causing unwanted network fetches and content injection for everyday coding prose like '#main.go'. BUG-002 (Minor) — the status toast says '#@ injected' even for URL-only injections. Both fixes are localized to file-injector.ts and its test suite, with no API surface changes.",
       "milestones": [
         {
@@ -69,7 +69,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "BUG-002: Trigger-aware status notify for URL-only injections",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Make the input handler's notify toast trigger-aware so that URL-only prompts do not report '#@ injected'. Use the existing details[].kind field to distinguish URL vs file injections and produce appropriate wording for each case (files only, URLs only, mixed).",
           "tasks": [
             {
@@ -99,14 +99,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Regression tests for URL-only and mixed notify wording",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add handler-level tests that drive the real input handler with URL-only and mixed prompts and assert the notify toast wording is trigger-aware (no '#@' for URL-only).",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "Add regression tests for URL-only and mixed prompt notify wording",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M2.T1.S1"
@@ -127,21 +127,21 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Changeset-level documentation sync",
-          "status": "Planned",
+          "status": "Ready",
           "description": "Update README.md to honestly document the code-extension deny-list behavior and correct the false-confidence framing about '#3.14/#v1.2/#fff rejected' that gave users the impression #filename.ext was safe.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Ready",
               "description": "Update README.md's URL detection section to reflect the tightened URL shape gate and the code-extension deny-list. Correct the false-confidence framing and document the workaround for blocked domains.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Update README.md URL detection documentation",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

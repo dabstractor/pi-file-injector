@@ -3046,6 +3046,109 @@ around their main article body content on the page.</p>
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// BUG-002 comprehensive regression suite (P1.M2.T2.S1). Extends the BUG2-* group with the two remaining
+// notify branches (mixed + file-only-exact) and the plural URL wording. BUG2-1 (above) owns URL-only
+// SINGULAR; BUG2-4 here owns URL-only PLURAL; BUG2-2 is the ONLY test of the mixed branch; BUG2-3 is a
+// byte-for-byte regression guard on the original file-only wording (passes pre- AND post-fix).
+// NOTE: BUG2-2 and BUG2-4 REQUIRE the sibling's three-branch notify fix (file-injector.ts L1551-1564) to
+// pass — they assert NEW wording. BUG2-3 passes either way (the urlCount===0 branch is byte-identical).
+// ──────────────────────────────────────────────────────────────────────────────
+
+// BUG2_RICH_HTML — the calibrated ~3KB article (defuddle yields ~1024 chars ≥ the 200-char SPA floor).
+// Identical wording to BUG2-1's inline html so behavior matches; extracted here so BUG2-2/4 share it DRY.
+// A trivial "<p>hi</p>" may extract <200 chars → SPA fallback → injected===0 → notify never fires.
+const BUG2_RICH_HTML = `<!doctype html><html><head><title>Example Domain</title></head><body>
+<article>
+<h1>Welcome to the Example Domain</h1>
+<p>This domain is for use in illustrative examples in documents. You may use this domain in literature without
+prior coordination or asking for permission. It is a long paragraph that contains substantial prose content
+designed to exceed the two hundred character minimum threshold that the SPA empty extraction guard enforces.</p>
+<p>More information about this example domain can be found in the RFC documents and the IANA registry. The domain
+is reserved for documentation and testing purposes so that developers have a stable placeholder to reference in
+tutorials, configuration samples, and integration test suites across many different kinds of software products.</p>
+<p>A third paragraph ensures the extracted markdown comfortably clears the minimum threshold even after defuddle
+strips navigation chrome, sidebars, footers, cookie banners, and other boilerplate that modern web pages include
+around their main article body content on the page.</p>
+</article></body></html>`;
+
+// richHtmlRes(html) — a Response-shaped object (ok/status/headers/body.getReader/text) for ONE fetch call.
+// Call per-fetch (do NOT share one response across calls — the reader's `done` flag is single-use, so a
+// shared object would return done=true on the 2nd call → empty body → SPA fallback → injected===0).
+function richHtmlRes(html) {
+  const buf = Buffer.from(html, "utf8");
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (k) => (k.toLowerCase() === "content-type" ? "text/html" : null) },
+    body: {
+      getReader: () => {
+        let done = false;
+        return {
+          read: async () => {
+            if (done) return { done: true, value: undefined };
+            done = true;
+            return { done: false, value: buf }; // one chunk; Buffer IS a Uint8Array
+          },
+        };
+      },
+    },
+    text: async () => buf.toString("utf8"), // readers' no-reader fallback (not used when getReader exists)
+  };
+}
+
+// BUG2-2 — MIXED prompt notify (the only test of the mixed branch). A `#@file` + `#url` prompt must yield
+// BOTH axes in one toast: "#@ injected 1 whole, 1 URL". a.ts (~97 chars, no budget → whole) + 1 URL (stub,
+// whole) → injected=2, urlCount=1, fileCount=1, fileWhole=1, paged=0 → mixed branch.
+await runCase("BUG2-2", "BUG-002: mixed #@file + #url → notify has BOTH axes", async () => {
+  const origFetch = globalThis.fetch;
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  try {
+    globalThis.fetch = async () => richHtmlRes(BUG2_RICH_HTML);
+    const out = await slot.cb({ text: "#@a.ts and #example.com", source: "interactive", images: [] }, ctx);
+    assert(out.action === "transform", `handler must transform; got ${out.action}`);
+    assert(rec.notify, "notify must fire (a file AND a URL were injected)");
+    assert(rec.notify.m === "#@ injected 1 whole, 1 URL",
+      `mixed notify must be '#@ injected 1 whole, 1 URL'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(rec.notify.m.includes("#@"), "mixed notify must still contain '#@' (files present)");
+    assert(rec.notify.t === "info", `notify type must be 'info'; got ${rec.notify.t}`);
+  } finally { globalThis.fetch = origFetch; }
+});
+
+// BUG2-3 — FILE-ONLY single-file regression (byte-for-byte). a.ts whole, no URLs → urlCount=0 → the
+// byte-identical file-only branch. PASSES before AND after the fix → guards that the file-only wording
+// never drifts. No fetch stub (no URL in the prompt).
+await runCase("BUG2-3", "BUG-002 regression: file-only '#@a.ts' → '#@ injected 1 whole' (byte-for-byte)", async () => {
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "#@a.ts", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform; got ${out.action}`);
+  assert(rec.notify && rec.notify.m === "#@ injected 1 whole",
+    `file-only notify must be exactly '#@ injected 1 whole'; got ${JSON.stringify(rec.notify && rec.notify.m)}`);
+  assert(rec.notify.t === "info", `notify type must be 'info'; got ${rec.notify.t}`);
+});
+
+// BUG2-4 — URL-ONLY plural (exercises the plural branch + multi-URL scan). Both tokens pass URL_SHAPE_RE +
+// the CODE_EXTENSIONS gate (.com/.org are TLDs, not code extensions); both fetch (stub) → injected=2,
+// urlCount=2, fileCount=0 → URL-only branch "injected 2 URLs" (plural because urlCount>1). richHtmlRes is
+// called per-fetch (2 calls) — each gets a FRESH response with its own single-use reader `done` closure.
+await runCase("BUG2-4", "BUG-002: URL-only plural → 'injected 2 URLs' (no #@)", async () => {
+  const origFetch = globalThis.fetch;
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  try {
+    globalThis.fetch = async () => richHtmlRes(BUG2_RICH_HTML);
+    const out = await slot.cb({ text: "#example.com and #example.org", source: "interactive", images: [] }, ctx);
+    assert(out.action === "transform", `handler must transform; got ${out.action}`);
+    assert(rec.notify, "notify must fire (2 URLs were injected)");
+    assert(rec.notify.m === "injected 2 URLs",
+      `URL-only plural notify must be 'injected 2 URLs'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(!rec.notify.m.includes("#@"), `URL-only notify must NOT contain '#@'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(rec.notify.t === "info", `notify type must be 'info'; got ${rec.notify.t}`);
+  } finally { globalThis.fetch = origFetch; }
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
