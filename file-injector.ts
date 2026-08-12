@@ -5,6 +5,8 @@ import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { Defuddle } from "defuddle/node";
+import { parseHTML } from "linkedom";
 
 const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
 /** PRD §4.6 — markdown opt-in bare-`@` imports (the wiki-style `@path` shorthand). The lookbehind forbids a
@@ -74,6 +76,16 @@ const MD_EXTS = new Set(["md", "markdown"]);
  *  Derived from the 2000×2000 resize cap worst case: max(1,⌈2000/512⌉)·max(1,⌈2000/512⌉)·170 + 85 =
  *  4·4·170 + 85 = 2805. Consumed by estimateImageTokens (T2.S2). Defined here per the constants cluster. */
 const IMAGE_FALLBACK_TOKENS = 2805;
+
+/** §3.3 guard 1 — AbortController timeout for URL fetches (no paging for URLs; the read tool can't fetch). */
+const URL_TIMEOUT_MS = 20_000;
+/** §3.3 guard 2 — 1 MB download cap (pre-download Content-Length check + mid-stream abort in the capped readers). */
+const URL_MAX_BYTES = 1_000_000;
+/** §3.4 SPA / empty-extraction floor — defuddle output shorter than this is treated as a JS-rendered shell (verbatim + notify). */
+const URL_MIN_CONTENT = 200;
+/** §3.3 — a desktop browser User-Agent (some hosts 403 the default fetch UA; never trust-dependent). */
+const BROWSER_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
  *  bytes match the declared image type before attaching. A mislabeled file (text body named
@@ -456,7 +468,7 @@ export function computeDetailOffsets(blocks: string[], details: FileDetail[]): F
  *  entries are added in injectFile in S2. The kind union is forward-looking. */
 export interface FileDetail {
   path: string; // absolute resolved path (the <file name=…>)
-  kind: "text" | "image" | "binary" | "paged";
+  kind: "text" | "image" | "binary" | "paged" | "url"; // +"url": added by T2.S1 (producer); the readLine renderer branch lands in T2.S2. url details render via readLine's default branch until then (the kind union member is safe — no exhaustive switch on .kind).
   chars?: number; // text: content length; paged: FULL content length
   lines?: number; // text: total line count
   range?: string; // paged: ":<startLine>-…" resume range (read-tool style)
@@ -733,6 +745,173 @@ export function estimateImageTokens(resized: ResizedImage | null): number {
   return tilesW * tilesH * 170 + 85;
 }
 
+// ---------- §3 URL injection (consumed by the URL loop in injectFiles — T2.S3) ------------------
+// All four functions below are PRIVATE (no `export`): the module-surface allowlist guard in
+// file-injector.test.mjs rejects any unregistered export. They are exercised via injectFiles →
+// injectUrl (the injectMarkdown precedent: a private recursion driver exercised through the public entry).
+
+/** §3.2/§6.1 — the URL injection block. Same `<file name="…">\n…\n</file>` envelope as formatTextFileBlock,
+ *  but `name` is the absolute URL (NOT a home-relative path). Consumed by injectUrl's text/html + raw-text
+ *  paths. NOT exported (private; exercised via injectFiles → injectUrl, per the injectMarkdown precedent). */
+function formatUrlBlock(url: string, content: string): string {
+  return '<file name="' + url + '">\n' + content + '\n</file>';
+}
+
+/** §3.3 guard 2 — stream-read `res.body` as a UTF-8 STRING, aborting (→ null) if accumulated bytes exceed
+ *  `cap`. Pre-download, injectUrl checks `Content-Length > cap` first; this enforces the cap MID-stream
+ *  (servers may lie or omit Content-Length). Falls back to `res.text()` (with a length check) when the body
+ *  has no reader. Returns null on overflow → caller leaves the token verbatim (§3.3). Used for text/html/
+ *  json/xml (NOT images — see readBytesCapped). */
+async function readBodyCapped(res: Response, cap: number): Promise<string | null> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const t = await res.text();
+    return t.length > cap ? null : t;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > cap) return null; // overflow → verbatim (§3.3)
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** §3.3/§5.2 — BYTE-oriented capped reader for the image path. Identical streaming/abort logic to
+ *  readBodyCapped but returns a raw Buffer (NO .toString) so binary image bytes are NOT UTF-8-corrupted.
+ *  The spec §8 pseudocode's Buffer.from(htmlString,"utf8") corrupts images; this reader is the fix.
+ *  Fed into resizeImage(new Uint8Array(buf), mime). Returns null on overflow → verbatim. */
+async function readBytesCapped(res: Response, cap: number): Promise<Buffer | null> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const b = Buffer.from(await res.arrayBuffer());
+    return b.length > cap ? null : b;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > cap) return null; // overflow → verbatim (§3.3)
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks); // raw bytes — no decode
+}
+
+/**
+ * §3 — fetch a URL and inject its content into `state`, routing by Content-Type:
+ *   • text/html (or sniffed leading '<') → §3.2 defuddle extract → markdown  (Refinements A/B/C)
+ *   • text/plain | markdown | json | xml | rss | atom            → raw text, verbatim (no extraction)
+ *   • image/*                                                    → §5.2 resize + attach (Refinement D byte reader)
+ *   • anything else (PDF, octet-stream, …)                       → verbatim (§3.5)
+ *
+ * Three §3.3 guards — any failing leaves the `#<url>` token VERBATIM (NO paging — the read tool can't
+ * fetch URLs, §3.3): (1) AbortController 20s timeout; (2) Content-Length > URL_MAX_BYTES pre-download
+ * (skip) + stream-abort at URL_MAX_BYTES via the capped readers; (3) shared-budget over-limit
+ * (state.remaining !== null && cost > state.remaining). Successful injection subtracts `cost` from the
+ * shared `remaining` (like any delivered file) and bumps state.count.
+ *
+ * §3.4 SPA fallback: if defuddle yields < URL_MIN_CONTENT chars (a JS-rendered shell), leave the token
+ * verbatim AND emit a notify (guarded on ctx.hasUI): "#<url>: page appears JS-rendered; left as reference".
+ *
+ * §3.5 NEVER THROWS: non-2xx / DNS / TLS / timeout / cap / over-budget / empty-extraction / unhandled
+ * content-type / ANY thrown error → return false (verbatim, no block appended). The whole body is wrapped
+ * in try/catch with the timeout cleared in `finally`.
+ *
+ * @returns true iff a block (and/or image) was emitted (count bumped exactly once); false → verbatim.
+ *          PRIVATE — consumed by the URL loop in injectFiles (T2.S3); exercised via injectFiles in tests.
+ */
+async function injectUrl(url: string, state: State, ctx: Ctx): Promise<boolean> {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), URL_TIMEOUT_MS); // §3.3 guard 1
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: "follow",
+      headers: { "User-Agent": BROWSER_UA },
+    });
+    if (!res.ok) return false; // §3.5 non-2xx → verbatim
+    const len = Number(res.headers.get("content-length") || 0);
+    if (len && len > URL_MAX_BYTES) return false; // §3.3 guard 2a — too big, don't download
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+    // ── IMAGE path (Refinement D: BYTE reader) ──
+    if (ct.startsWith("image/")) {
+      const buf = await readBytesCapped(res, URL_MAX_BYTES); // raw Buffer — no UTF-8 decode
+      if (buf === null) return false; // §3.3 guard 2b — overflowed mid-stream
+      const mime = ct.split(";")[0].trim(); // strip params ("image/png; charset=…")
+      const resized = await resizeImage(new Uint8Array(buf), mime); // async Worker; null on failure (mirror L968)
+      const cost = estimateImageTokens(resized); // §5.6.2 tile estimate
+      if (state.remaining !== null && cost > state.remaining) return false; // §3.3 guard 3 — over-budget → verbatim
+      state.images.push({
+        type: "image",
+        data: resized?.data ?? buf.toString("base64"), // null => raw base64 of ORIGINAL bytes
+        mimeType: resized?.mimeType ?? mime, // null => original mime
+      });
+      state.blocks.push(formatImageBlock(url, resized)); // mirror L972 (name = url)
+      state.details.push({
+        path: url,
+        kind: "image",
+        dimensionHint: resized ? formatDimensionNote(resized) ?? undefined : undefined, // mirror L973
+      });
+      subtract(state, cost); // §5.6.2 mirror L974
+      state.count++;
+      return true;
+    }
+
+    // ── STRING reader for text/html/json/xml (images already handled above) ──
+    const html = await readBodyCapped(res, URL_MAX_BYTES);
+    if (html === null) return false; // §3.3 guard 2b — overflowed mid-stream
+
+    let body: string;
+    if (ct.startsWith("text/html") || /^\s*</.test(html)) {
+      // §3.2 HTML pipeline — Refinements A/B/C
+      const { document } = parseHTML(html); // (B) ONE arg — NOT parseHTML(html, {url})
+      const doc = document as any; // polyfills need `any` (styleSheets not on the TS DOM type)
+      if (!doc.styleSheets) doc.styleSheets = []; // (C) defuddle reads styleSheets
+      if (doc.defaultView && !doc.defaultView.getComputedStyle)
+        // (C) defuddle reads getComputedStyle
+        doc.defaultView.getComputedStyle = () => ({ display: "" });
+      doc.URL = url; // (B) set base URL AFTER parsing
+      const r = await Defuddle(doc as Document, url, { markdown: true }); // (A) async FUNCTION; result.content IS markdown
+      const md = (r.content ?? "").trim();
+      if (md.length < URL_MIN_CONTENT) {
+        // §3.4 SPA / empty-extraction
+        if (ctx.hasUI) ctx.ui?.notify(`${url}: page appears JS-rendered; left as reference`, "info");
+        return false; // verbatim + notify
+      }
+      body = (r.title ? `# ${r.title}\n\n` : "") + md; // r.title: required string, may be ""
+    } else if (
+      ct.startsWith("text/") ||
+      ct.includes("json") ||
+      ct.includes("xml") ||
+      ct.includes("markdown")
+    ) {
+      body = html; // §3.1 raw text — verbatim (no extraction)
+    } else {
+      return false; // §3.5 unhandled content-type → verbatim
+    }
+
+    const cost = Math.ceil(body.length / 4); // §3.3 token estimate (≈4 chars/token)
+    if (state.remaining !== null && cost > state.remaining)
+      return false; // §3.3 guard 3 — over-budget → verbatim (NO paging)
+
+    state.blocks.push(formatUrlBlock(url, body)); // <file name="URL">\n…\n</file>
+    state.details.push({ path: url, kind: "url", chars: body.length }); // FileDetail.kind "url" (Task 3)
+    subtract(state, cost); // shared budget
+    state.count++;
+    return true;
+  } catch {
+    return false; // §3.5 timeout/network/throw → verbatim (never throws)
+  } finally {
+    clearTimeout(to); // always release the AbortController timer
+  }
+}
+
 // ---------- §6.3 chat renderer (registered for "fileInjector.injected") -------------------------
 // Replicates the read tool's completed-call look: a green (toolSuccessBg) Box, one `read <path>` line per
 // file when collapsed, full/highlighted content when expanded. blocks (message.content) and details.files
@@ -854,6 +1033,11 @@ type Ctx = {
   getContextUsage?: () =>
     { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
   model?: { contextWindow: number; maxTokens: number } | undefined;
+  hasUI?: boolean; // §3.4 SPA fallback — emit a notify guarded on ctx.hasUI (the real pi ctx already has this)
+  // §3.4 SPA notify target. The param type mirrors pi's ExtensionUIContext.notify union exactly
+  // ("info" | "warning" | "error") so this widened local Ctx stays ASSIGNABLE to the real ExtensionContext
+  // passed at L1460 (a looser `level: string` would fail contravariant param checking under --strict).
+  ui?: { notify(message: string, type?: "info" | "warning" | "error"): void };
 };
 
 /**

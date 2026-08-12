@@ -91,7 +91,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "injectUrl + helpers (fetch pipeline, content-type dispatch, defuddle extraction, image byte path, guards)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",
@@ -113,7 +113,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "FileDetail.kind 'url' union member + readLine url renderer branch",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Verified at file-injector.ts — FileDetail.kind union is at L437: `kind: 'text' | 'image' | 'binary' | 'paged';`. readLine is at L803-818 with branches for binary (L811), image (L813), paged (L815), and a final text fallback at L818: `return \\`${title} ${pathPart}\\`;`. The pathPart at L805 uses tildify(d.path) — for URLs we must NOT tildify (URLs are not home-relative; tildify would mangle them if the URL happens to start with the home path, which is impossible but semantically wrong). The expanded-view body recovery in renderInjectedMessage (~L770) works generically: it regexes <file> blocks from message.content and matches by index to details — a kind:'url' body (markdown) is handled identically to kind:'text'.\n2. INPUT: The existing FileDetail interface (L435-456) and readLine function (L803-818).\n3. LOGIC:\n   - L437: add 'url' to the kind union → `kind: 'text' | 'image' | 'binary' | 'paged' | 'url';`\n   - L803-818 (readLine): insert a `url` branch BEFORE the final text fallback return at L818. The branch must NOT use tildify (pass d.path raw — it holds the URL). It returns title + theme.fg('accent', d.path) with NO range/hint suffix (identical to the text branch but without tildify). Example: `if (d.kind === 'url') { return \\`${title} ${theme.fg('accent', d.path)}\\`; }` — insert this between the paged branch (L815) and the final return (L818).\n   - Update the FileDetail.kind JSDoc (L430-434 area) to list 'url' alongside the existing kinds.\n   - No changes to renderInjectedMessage — the generic body-recovery by index already handles url bodies (markdown text).\n4. OUTPUT: FileDetail.kind now accepts 'url'. readLine renders `read <url>` (green, no tildify, no range). Consumed by P1.M1.T2.S1 (which pushes kind:'url' details) and by the existing renderer.\n5. DOCS: [Mode A] Update the FileDetail.kind JSDoc to list 'url'. This rides WITH the work.",
