@@ -30,10 +30,50 @@ const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
  *  Leaves ordinary `#word` prose untouched: `#Heading`, `#1234` (issue ref), `#fff` (hex), `#3.14`,
  *  `#v1.2` (final label numeric → fails the alpha-TLD gate), and `C#`/`objective-C#` (mid-word, never a
  *  candidate) all fail to match. Accepted shapes include `#example.com/path`, `#https://x.com/y`,
- *  `#sub.example.co.uk/a`. Residual benign false-positive: `#node.js` matches the shape (alpha TLD `js`)
- *  but won't resolve → the no-op fallback (PRD §3.5, P1.M1.T2) leaves it verbatim. Wires into the URL loop
- *  as `URL_SHAPE_RE.test(cleanToken(m[2]))` (P1.M1.T2.S3). NOT exported. */
+ *  `#sub.example.co.uk/a`. [BUG-001] Code-extension deny-list: a scheme-less, PATH-LESS (bare
+ *  `word.ext`) token whose final label (after the last '.', lowercased) is a known code/file extension
+ *  (e.g. `#main.go`, `#notes.md`, `#config.json`, `#node.js`) is treated as a LOCAL FILE reference, NOT a
+ *  URL — the URL scan loop skips it before fetch (see `CODE_EXTENSIONS`). This eliminates the
+ *  false-positive class created by the final-label `[a-z]{2,}` gate (which accepts every 2+ letter alpha
+ *  string as a "TLD"). A slash-bearing scheme-less token (e.g. `#example.com/img.png`) is a real domain +
+ *  path and is NOT gated. Explicit-scheme tokens (`#https://…`, `#http://…`, `#ftp://…`) bypass the
+ *  deny-list entirely — use that form to force-fetch a domain whose TLD collides with a code extension
+ *  (e.g. `#https://node.js`, `#https://foo.sh`). Wires into the URL loop as
+ *  `URL_SHAPE_RE.test(cleanToken(m[2]))` (P1.M1.T2.S3). NOT exported. */
 const URL_SHAPE_RE = /^((https?|ftp):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
+/** [BUG-001] Code-extension deny-list. A scheme-less, PATH-LESS (bare `word.ext`) token whose final
+ *  label (the substring after the LAST '.', lowercased) is in this Set is treated as a LOCAL FILE
+ *  reference, NOT a URL — the URL scan loop skips it (no fetch, no normalization, no injection). This
+ *  targets the exact BUG-001 false-positive shape (`#main.go`, `#notes.md`, `#config.json`, `#node.js`)
+ *  where the alpha-TLD gate's final label IS the extension; a slash-bearing scheme-less token (e.g.
+ *  `#example.com/img.png`) is a real domain + path and is NOT gated (its alpha-TLD final label is the
+ *  TLD, not the path extension). Explicit-scheme tokens (#https://…, #http://…, #ftp://…) bypass this
+ *  list entirely. Covers the common coding / config / doc / image / archive extensions. NOT a real-TLD
+ *  list: com/org/net/io/dev/app/ai/co/me/xyz etc. are deliberately ABSENT so legitimate domains still
+ *  fetch (DET-1, DET-2). A few entries overlap real ccTLDs (.sh, .py): in a coding agent these mean a
+ *  script / Python file; force-fetch via #https://foo.sh. Trivially extendable — it is a plain Set.
+ *  NOT exported. */
+const CODE_EXTENSIONS: Set<string> = new Set([
+  // programming languages
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt", "kts", "cs", "cpp",
+  "cc", "cxx", "c", "h", "hpp", "hxx", "swift", "php", "pl", "pm", "lua", "r", "scala", "clj",
+  "cljs", "cljc", "ex", "exs", "erl", "hs", "ml", "mli", "fs", "fsi", "vb", "dart", "groovy", "el",
+  "scm", "rkt", "zig", "nim", "jl", "d", "f", "f90", "pas", "cob", "asm", "s", "v",
+  // web / markup
+  "html", "htm", "css", "scss", "sass", "less", "styl", "vue", "svelte", "astro",
+  // config / data
+  "xml", "json", "json5", "jsonc", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "sql",
+  "graphql", "gql", "proto", "csv", "tsv", "properties", "gradle", "cmake",
+  // scripts
+  "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "awk",
+  // images
+  "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif", "heic", "avif",
+  // documents
+  "md", "markdown", "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "tex", "bib",
+  "rst", "adoc",
+  // binary / archives / build artifacts
+  "db", "sqlite", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "lock", "log", "min", "map", "wasm",
+]);
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -1396,6 +1436,19 @@ export async function injectFiles(
     for (const m of text.matchAll(URL_INJECT_RE)) {
       const tok = cleanToken(m[2]);
       if (tok && URL_SHAPE_RE.test(tok)) {
+        // [BUG-001] Code-extension deny-list: a scheme-less, PATH-LESS (bare `word.ext`) token
+        // whose final label is a known code/file extension is a LOCAL FILE reference, not a URL —
+        // skip it (no fetch, no normalization, no injection). This targets the exact false-positive
+        // class where the alpha-TLD gate's final label IS the extension (`#main.go`, `#notes.md`,
+        // `#config.json`, `#node.js`). A slash-bearing scheme-less token (`#example.com/img.png`) is a
+        // real domain + path — its alpha-TLD final label is the TLD (`com`), not the path extension, so
+        // it is NOT gated (it fetches). Explicit-scheme tokens (#https://…/#http://…/#ftp://…) bypass
+        // this check entirely (URL_SHAPE_RE Alternative A). See CODE_EXTENSIONS + the JSDoc on
+        // URL_SHAPE_RE. Mirrors the scheme test used by the normalization below it.
+        if (!/^https?:\/\//i.test(tok) && !/^ftp:\/\//i.test(tok) && !tok.includes("/")) {
+          const finalLabel = tok.slice(tok.lastIndexOf(".") + 1).toLowerCase();
+          if (CODE_EXTENSIONS.has(finalLabel)) continue;
+        }
         const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
         if (!state.injectedSet.has(abs)) {
           state.injectedSet.add(abs);

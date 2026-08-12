@@ -397,16 +397,18 @@ await runCase("COL-3", "collision: foo#example.com mid-word → not matched, NO 
   }
 });
 
-// COL-4 — #node.js IS url-shaped (alpha TLD 'js') → fetch IS called → 404 → verbatim (no block).
-// This is the case that distinguishes "URL-shaped but unresolvable" from "not URL-shaped".
-await runCase("COL-4", "collision: #node.js URL-shaped → 404 → verbatim (fetch CALLED, no block)", async () => {
+// COL-4 — [BUG-001] #node.js final label 'js' is a known code extension → the code-extension
+// deny-list (P1.M1.T1.S1) now treats it as a FILE reference, NOT a URL → ZERO fetch. (Previously this
+// asserted fetch CALLED + 404; the deny-list gates scheme-less code-extension tokens BEFORE the fetch,
+// so #node.js no longer reaches the network. The explicit-scheme form #https://node.js still fetches.)
+await runCase("COL-4", "collision: #node.js code-extension → deny-list → ZERO fetch + verbatim", async () => {
   const calls = [];
   try {
     globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ status: 404, ok: false }); };
     const r = await mod.injectFiles("#node.js", [], FIX, false, true);
-    assert(calls.length === 1, `#node.js IS url-shaped → fetch must be called; calls=${calls.length}`);
-    assert(r.injected === 0, `404 → verbatim, no block; got injected===${r.injected}`);
-    assert(!hasBlock(r, '<file name="https://node.js">'), "no block appended on 404");
+    assert(calls.length === 0, `#node.js final label 'js' is a code extension → must NOT fetch; calls=${calls.length}`);
+    assert(r.injected === 0, `no block; got injected===${r.injected}`);
+    assert(!hasBlock(r, '<file name="https://node.js">'), "no block appended");
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -443,6 +445,30 @@ await runCase("NORM-1", "dedup: #example.com + #https://example.com → ONE inje
     assert(calls.length === 1, `deduped before fetch; calls=${JSON.stringify(calls)}`);
     assert(r.details.length === 1 && r.details[0].kind === "url", `one url detail; got details=${JSON.stringify(r.details)}`);
     assert(hasBlock(r, '<file name="https://example.com">'), 'single <file name="https://example.com"> envelope present');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CODE-EXTENSION DENY-LIST (BUG-001) — scheme-less #<word>.<code-ext> is a FILE ref, not a URL.
+// ══════════════════════════════════════════════════════════════════════════════
+console.log("\nCODE-EXTENSION DENY-LIST (BUG-001)");
+
+// DENY-1 — [BUG-001] a scheme-less token whose final label is a known code extension ('main.go' ->
+// 'go') is treated as a LOCAL FILE reference: ZERO fetch, ZERO injection, prompt verbatim. The fetch
+// SPY (not the absence of a stub) proves the no-network invariant. enableUrls===true (default) — this
+// is the on-by-default false-positive class. Explicit-scheme forms (#https://main.go) bypass the
+// deny-list and are covered by the broader regression matrix in P1.M1.T2.S1.
+await runCase("DENY-1", "deny-list: 'edit #main.go' → code-extension final label → ZERO fetch + verbatim", async () => {
+  const calls = [];
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); }; // spy — would be a bug if called
+    const r = await mod.injectFiles("edit #main.go", [], FIX, false, true); // enableUrls===true (5th param)
+    assert(calls.length === 0, `#main.go final label 'go' is a code extension → must NOT fetch; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected; injected=${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended");
+    assert(r.text === "edit #main.go", `prompt preserved verbatim; got ${JSON.stringify(r.text)}`);
   } finally {
     globalThis.fetch = origFetch;
   }
