@@ -1,0 +1,52 @@
+# Bug Fix Requirements
+
+## Overview
+End-to-end validation of the file-injector + URL-injector extension against the PRD. The full automated suite (159 + 23 + 38 + 21 tests) passes and `npm run typecheck` is clean. I verified the core behaviors directly through the real jiti-loaded extension: `#@file` injection (text/image/binary/missing/paged), markdown transitive imports (relative-only resolution, file-relative vs cwd disambiguation, fenced + inline code-region exemption, dedup-bounded cycle termination, extension shorthand), paged-delivery line math (single-long-line and 10k-line cases produce correct headLines/startLine), the BUG-1-safe renderer body recovery via contentStart/contentLen offsets, the before_agent_start stash handoff (no stale leak, no phantom when input is skipped), verbatim prompt delivery, loop-prevention/steer short-circuits, the 4-source config precedence with trusted-only project gating, the autocomplete provider remap/delegate, and URL dispatch (HTML/text/image/binary/JSON/XML + timeout/cap/over-budget/SPA/enableUrls guards). Two issues found. (1) MAJOR: the URL shape gate matches every common code-file extension as an alpha-TLD hostname, so everyday coding prose like `edit #main.go` or `see #notes.md` triggers an actual network fetch (on by default), and when the dotted domain resolves (main.go is real) the fetched page is injected into the model's context — contradicting the PRD §2.3 claim that the only false-positive is `#node.js` and that it is a 'benign no-op'. (2) MINOR: the status toast says '#@ injected' even for URL-only injections. The implementation is otherwise faithful and robust; the major issue is a design-level false-positive scope that the hermetic test suite (all-404 stubs, only `#node.js` asserted) does not surface.
+
+
+## Critical Issues (Must Fix)
+Issues that prevent core functionality from working.
+
+None.
+
+
+## Major Issues (Should Fix)
+Issues that significantly impact user experience or functionality.
+
+### Issue 1: URL detector fires network fetches (and injects content) for the common `#filename.ext` pattern in coding prompts
+**Severity**: Major
+**ID**: BUG-001
+**Location**: file-injector.ts:36 (URL_SHAPE_RE) and file-injector.ts:1396-1402 (URL scan loop in injectFiles)
+
+**Description**:
+URL_SHAPE_RE (file-injector.ts:36) treats ANY `#<word>.<2+alpha-letters>` token as a URL because the dotted-host alternative `(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}` matches every programming-language file extension as an 'alpha TLD' (md, go, py, rs, cs, java, ts, tsx, png, json, yaml, csv, ...). Because `enableUrls` defaults to `true` (file-injector.ts:1322/1483 use `cfg.enableUrls !== false`), the URL scan loop (file-injector.ts:1396-1402) fetches `https://<word>.<tld>` for prose like `edit #main.go`, `see #notes.md`, `load #config.json`, `view #image.png`, `run #script.py`, etc. This is a coding agent where `#filename.ext` references are extremely common. Two concrete harms: (1) UNWANTEDED NETWORK EGRESS — every such reference issues a DNS query + HTTP request the user never asked for (privacy / network-hygiene); (2) UNWANTED CONTENT INJECTION — when the dotted domain actually resolves (e.g. `main.go` is the real Go language site), the fetched HTML is extracted by defuddle and INJECTED into the model's context, so `refactor #main.go` delivers the Go homepage to the model instead of referencing a local Go file. The spec/PRD §2.3 collision table claims `#node.js` is 'the only residual false-positive class' and that it is 'benign' because 'node.js won't resolve' — that safety rationale is demonstrably false for real domains like main.go, and it dramatically under-represents the scope (every code-file extension, not just `node.js`). The README (line ~202) compounds this by framing the gate as 'deliberately rejects #3.14, #v1.2, #fff' without warning users that `#filename.ext` triggers live fetches. This is spec-compliant at the regex level but the spec's stated safety guarantee is broken in practice and the impact is on-by-default for the primary use case.
+
+**Steps to Reproduce**:
+Isolated repro (hermetic fetch stub): load the real extension via jiti; set globalThis.fetch to record calls; run injectFiles('edit #main.go', [], {cwd, hasUI:false, isProjectTrusted:()=>true, ui:{notify:()=>{}}}, false, true). Observed: fetch IS called with 'https://main.go'. Repeat for 'see #notes.md' -> fetch 'https://notes.md'; 'load #config.json' -> 'https://config.json'; 'view #image.png' -> 'https://image.png'; 'run #script.py' -> 'https://script.py'; 'use #utils.rs' -> 'https://utils.rs'; 'test #spec.tsx' -> 'https://spec.tsx'; 'ref #app.cs' -> 'https://app.cs'; 'build #lib.java' -> 'https://lib.java'; 'open #data.csv' -> 'https://data.csv'. For the content-injection harm: stub fetch to return a 200 text/html body (a realistic Go-homepage HTML ≥200 chars) and run injectFiles('refactor #main.go now', ...). Observed: injected===1 and the resulting <file name="https://main.go"> block contains 'Go Programming Language' and 'concurrency mechanisms' — i.e. the Go homepage is delivered to the model from a prompt that referenced a local file. The hermetic url-injection.test.mjs suite does NOT catch this because every fetch there is stubbed to 404 (so every false-positive is a silent 'no-op') and the only false-positive shape asserted is `#node.js` (case COL-4).
+
+
+## Minor Issues (Nice to Fix)
+Small improvements or polish items.
+
+### Issue 1: Status notify reads '#@ injected N whole' for URL-only injections, which is misleading
+**Severity**: Minor
+**ID**: BUG-002
+**Location**: file-injector.ts:1494
+
+**Description**:
+The input handler's notify text is hardcoded as `#@ injected ${whole} whole${paged > 0 ? ', ' + paged + ' paged' : ''}` (file-injector.ts:1494). When a prompt injects ONLY a URL (e.g. `Summarize #example.com`), the user sees the toast '#@ injected 1 whole' even though no `#@file` was involved — the injection was a `#<url>`. The URL-injection feature spec (§9 integration table) did not change the notify wording, so this is technically spec-compliant, but it is a real, observable UX inconsistency: the toast references the wrong trigger for URL-only prompts (and the `whole`/`paged` axis is also meaningless for URLs, which can never be paged).
+
+**Steps to Reproduce**:
+Drive the real input handler: register handlers via mod.default({on,registerMessageRenderer}); run session_start then input with text 'see #example.com', hasUI:true, and a ui.notify collector; stub fetch to return a ≥200-char text/html 200 response. Observed notify: {m:'#@ injected 1 whole', t:'info'} for a prompt that contained no `#@`.
+
+## Testing Summary
+- Total bugs found: 2
+- Critical: 0
+- Major: 1
+- Minor: 1
+
+## Recommendations
+- Tighten URL_SHAPE_RE so a scheme-less token is only treated as a URL when it cannot be confused with a file reference — e.g. require an explicit scheme for bare tokens, or reject tokens whose final label is a known code-extension / generic TLD, or require a path/query/port to look 'URL-like'. At minimum, document the false-positive class honestly (the README's '#3.14/#v1.2/#fff rejected' framing gives false confidence that `#filename.ext` is safe).
+- Consider gating scheme-less URL detection behind an opt-in (mirroring markdownBareAtImports) or defaulting enableUrls to false, so the on-by-default behavior does not perform network egress for ambiguous tokens.
+- Make the status notify trigger-aware (e.g. 'injected N whole' for URLs, or count URLs separately) so a URL-only prompt does not report '#@ injected'.
+- Add a non-hermetic test that asserts NO fetch occurs for representative `#filename.ext` prose (main.go, notes.md, config.json, etc.), so regressions of this class are caught.
