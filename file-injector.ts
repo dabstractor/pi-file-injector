@@ -14,6 +14,24 @@ const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
  *  (PRD §4.6 literal `/(^|(?<=[^\w#]))@(\S+)/g` is the ASCII-equivalent form; this Unicode form is the
  *  recommendation.) Wires into scanTokens via `opts.bareAt` (markdown-only / opt-in, P1.M2). */
 const BARE_AT_RE = /(^|(?<![\p{L}\p{N}_#]))@(\S+)/gu;
+/** PRD §2.1/§2.2 — detects a `#<url>` candidate: a `#` at start-of-string OR after a non-word char
+ *  (Unicode `\p{L}\p{N}_`, matching FILE_INJECT_RE's boundary), NOT followed by `@`. The candidate token is
+ *  captured in group 2 (mirrors the group-2 convention of FILE_INJECT_RE/BARE_AT_RE). The `(?!@)` negative
+ *  lookahead makes `#@` disjoint — it is claimed EXCLUSIVELY by FILE_INJECT_RE and NEVER matched here (the
+ *  two triggers are disjoint per PRD §2.1). The Unicode lookbehind `(?<![\p{L}\p{N}_])` + the `u` flag mirror
+ *  the shipped FILE_INJECT_RE (architecture Refinement #1) — NOT the PRD §2.2 literal `(?<=\W)` ASCII form.
+ *  Wires into the URL scan loop via `text.matchAll(URL_INJECT_RE)` → `m[2]` (P1.M1.T2.S3). NOT exported. */
+const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
+/** PRD §2.3 — an anchored shape gate: a candidate token is treated as a URL iff it has an explicit scheme
+ *  (`https?|ftp`) OR a dotted host whose final label is an alpha TLD (2+ letters); optional `:port` and
+ *  optional `/path`. Case-insensitive (`i` flag; no `u` flag — no `\p{}` classes or lookbehind here).
+ *  Leaves ordinary `#word` prose untouched: `#Heading`, `#1234` (issue ref), `#fff` (hex), `#3.14`,
+ *  `#v1.2` (final label numeric → fails the alpha-TLD gate), and `C#`/`objective-C#` (mid-word, never a
+ *  candidate) all fail to match. Accepted shapes include `#example.com/path`, `#https://x.com/y`,
+ *  `#sub.example.co.uk/a`. Residual benign false-positive: `#node.js` matches the shape (alpha TLD `js`)
+ *  but won't resolve → the no-op fallback (PRD §3.5, P1.M1.T2) leaves it verbatim. Wires into the URL loop
+ *  as `URL_SHAPE_RE.test(cleanToken(m[2]))` (P1.M1.T2.S3). NOT exported. */
+const URL_SHAPE_RE = /^((https?|ftp):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",

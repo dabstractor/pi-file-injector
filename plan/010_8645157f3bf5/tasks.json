@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Foundations: dependencies, config, detection regexes",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Add the hard npm dependencies and install them; extend the config interface with enableUrls; add the two URL detection regex constants. These are prerequisites for the pipeline (M1.T2) which imports defuddle/linkedom and references the regexes. Also verify tsc --strict resolves the new dependency types.",
               "subtasks": [
                 {
@@ -51,7 +51,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "URL_INJECT_RE + URL_SHAPE_RE detection regex constants",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Verified at file-injector.ts L9-16 — the shipped FILE_INJECT_RE and BARE_AT_RE use the Unicode lookbehind form `(?<![\\p{L}\\p{N}_])` with the `u` flag, NOT the spec's literal `(?<=\\W)`. URL_INJECT_RE MUST match this convention for consistency (plan/010_8645157f3bf5/architecture/system_context.md Refinement #1). The two regexes are DISJOINT: URL_INJECT_RE has a `(?!@)` negative lookahead so #@ is never matched as a URL candidate.\n2. INPUT: The existing regex block at L9-16 (FILE_INJECT_RE at L9, BARE_AT_RE at L16).\n3. LOGIC: Add two constants AFTER BARE_AT_RE (after L16, before the MIME_BY_EXT block at L17):\n   - `const URL_INJECT_RE = /(^|(?<![\\p{L}\\p{N}_]))#(?!@)(\\S+)/gu;` — a # at start-of-string or after a non-word char (Unicode), NOT followed by @. The `u` flag is mandatory. Capture group 2 is the URL candidate token.\n   - `const URL_SHAPE_RE = /^((https?|ftp):\\/\\/\\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}(?::\\d+)?(?:\\/\\S*)?)$/i;` — a candidate token is a URL iff it has a scheme OR a dotted host with an alpha TLD. Case-insensitive. This gate rejects #Heading, #1234, #fff, #3.14, #v1.2 as ordinary prose (no dot or numeric TLD) while accepting #example.com, #https://x.com/y, #sub.example.co.uk/a.\n   Add JSDoc above each constant. URL_INJECT_RE JSDoc must note: the `(?!@)` disjointness with #@ (file trigger), the Unicode lookbehind convention mirroring FILE_INJECT_RE, and that capture group 2 is the token. URL_SHAPE_RE JSDoc must note: the alpha-TLD/dot/scheme shape gate and that #Heading/#1234/#fff/#3.14/#v1.2 are left untouched as prose.\n4. OUTPUT: Two new module-level const regexes, available for the URL loop in P1.M1.T2.S3 and the constants in P1.M1.T2.S1. No runtime behavior change yet (nothing reads them until the loop is wired).\n5. DOCS: [Mode A] JSDoc on both constants. This rides WITH the work.",
@@ -67,7 +67,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S4",
                   "title": "Typecheck-shim decision: verify tsc --strict resolves defuddle/node + linkedom types",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
