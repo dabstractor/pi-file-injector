@@ -24,7 +24,9 @@ Or, directly from git:
 pi install git:github.com/dabstractor/pi-file-injector
 ```
 
-Restart Pi if a session is already open. To uninstall, run `pi remove npm:pi-file-injector`.
+Restart Pi if a session is already open. To uninstall, run `pi remove npm:pi-file-injector` (or `pi remove git:github.com/dabstractor/pi-file-injector` / the local path you used with `-e` for git/local installs).
+
+> **⚠️ Only one copy at a time.** This extension deduplicates injections *within* a single loaded copy; it cannot deduplicate against a second, concurrently-loaded copy. If two copies are active at once (e.g. a global npm/git install *and* a `-e ./file-injector.ts` dev copy), **every `#@file` is injected twice** and image cost doubles. If you are upgrading from an older `pi-file-injector`, remove the prior install (`pi remove …` for every install kind — npm, git, and local path) before installing this version. Check with `pi list` and confirm `pi-file-injector` appears only once.
 
 ## Usage
 
@@ -197,6 +199,7 @@ URL injection is on by default. Set `enableUrls` to `false` to disable **all** n
 - **URLs: no caching.** Every injection fetches fresh — cancelling and re-opening, forking, or re-submitting re-fetches the page.
 - **URLs: JS-rendered pages fall back to verbatim.** Extraction works on server-delivered HTML only. A single-page app that loads its content with JavaScript usually yields too little to extract, so the `#<url>` token is left as a reference (with a short notice) instead.
 - **URLs never page.** Unlike `#@file` (which pages oversize files through the `read` tool), an over-budget URL is left verbatim — the `read` tool can't fetch a URL.
+- **URLs need a dotted, alphabetic hostname.** A `#<url>` token must be a `http(s)://`/`ftp://` URL **or** a bare host whose final label is 2+ letters (e.g. `example.com`, `api.example.co.uk`). This deliberately rejects `#3.14`, `#v1.2`, `#fff` and other token-like text. As a side effect, **raw IP addresses and `localhost` are not detected as URLs** — `#127.0.0.1:8080`, `#localhost:3000/api`, and even `#http://127.0.0.1` are left verbatim with no fetch and no error. To inject a local dev server, give it a resolvable hostname (an `/etc/hosts` alias, a `*.local` name, or a real domain) rather than an IP or `localhost`.
 
 ## `#@` versus `@
 

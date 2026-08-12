@@ -318,19 +318,10 @@ function headSlice(content: string): string {
   return s;
 }
 
-/** Count the COMPLETE lines fully contained in the head slice, so the directive can resume at the next
- *  line with ZERO data loss (Pi read offset is 1-indexed). A line is complete if it ends with '\n'
- *  within the head; the line count therefore equals the number of newlines in the head. If the head
- *  ends mid-line, that final partial line is NOT counted as complete — the directive re-reads it in
- *  full (redundant tail, never data loss). The directive resumes at (newlineCount + 1). */
-function headStartLine(head: string): number {
-  let n = 0;
-  for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 0x0A) n++;
-  return n + 1; // 1-indexed: first line AFTER the complete lines delivered in the head
-}
-
 /** Count complete lines in the head (for the directive's "first N lines injected" wording). Equals
- *  the number of newlines, since every newline terminates a complete line. */
+ *  the number of newlines, since every newline terminates a complete line. The directive resumes at
+ *  the line AFTER these complete lines, i.e. (newlineCount + 1) — computed inline at the call site
+ *  to avoid a trivially-wrapped single-use helper (startLine = headLines + 1, 1-indexed). */
 function headCompleteLineCount(head: string): number {
   let n = 0;
   for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 0x0A) n++;
@@ -1233,7 +1224,7 @@ export function emitText(abs: string, content: string, state: State): void {
     // directive pointing past EOF, causing a spurious read error for content already delivered).
     //
     // FINDING 1: derive the directive's resume offset from the ACTUAL line count of the head
-    // (headStartLine = newlines+1; headCompleteLineCount = newlines). The old hardcoded
+    // (resume offset = newlines+1; headCompleteLineCount = newlines). The old hardcoded
     // offset:2001 assumed the 8192-char head equals 2000 lines, which is only true for ~4-char
     // lines; for realistic files it silently lost the lines between the head's real end and
     // line 2000 (up to 100% for long-lined files). The directive now points exactly past the
@@ -1251,7 +1242,7 @@ export function emitText(abs: string, content: string, state: State): void {
     } else {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
       const headLines = headCompleteLineCount(head);
-      const startLine = headLines + 1; // == headStartLine(head)
+      const startLine = headLines + 1; // 1-indexed: first line AFTER the complete lines delivered in the head
       const directiveBlock = formatPagedDirectiveBlock(abs, content.length, startLine, headLines); // §6.3 — hoist; the directive block still reaches the model via content (display-only fix); its inner text is stored on the detail for the expanded view
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(directiveBlock);

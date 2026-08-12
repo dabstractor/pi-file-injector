@@ -1,0 +1,5 @@
+{
+  "hasIssues": true,
+  "issueCount": 3,
+  "summary": "PASS with 3 minor issues (1 dead-code helper, 2 README documentation gaps: URL IP/localhost limitation and concurrent-copy double-injection hazard). No critical/major defects; the extension is functionally correct end-to-end (files, images, URLs, markdown imports all verified via real-pi E2E + a request-capturing mock provider)."
+}
