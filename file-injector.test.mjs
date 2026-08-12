@@ -3149,8 +3149,94 @@ await runCase("BUG2-4", "BUG-002: URL-only plural → 'injected 2 URLs' (no #@)"
   } finally { globalThis.fetch = origFetch; }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ISSUE-IMG-URL (validation-report Issue 2) — image-URL-aware notify. A URL-delivered image is
+// kind:"image" but its `path` is the absolute https:// URL pushed by injectUrl (vs. a local-file
+// image whose `path` is a filesystem path). The notify must count it as a URL, so an image-URL-
+// only prompt reports "injected 1 URL" (NOT "#@ injected 1 whole") — the same glyph/trigger
+// mismatch BUG-002 eliminated for text URLs. imageRes() mirrors url-injection.test.mjs makeRes()
+// (the byte reader path injectUrl's image branch consumes).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// imageRes() — a Response-shaped object for an image/png fetch (single-chunk reader; Buffer IS a Uint8Array).
+// Per-fetch (each call returns a FRESH response with its own single-use reader `done` closure).
+function imageRes() {
+  // Non-ASCII bytes (PNG header + high bytes). resizeImage returns null on tiny/invalid input →
+  // fallback path (raw base64 + count++), which is all the notify assertion needs (injected===1).
+  const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xee, 0xdd, 0xcc]);
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (k) => (k.toLowerCase() === "content-type" ? "image/png" : null) },
+    body: {
+      getReader: () => {
+        let done = false;
+        return {
+          read: async () => {
+            if (done) return { done: true, value: undefined };
+            done = true;
+            return { done: false, value: buf }; // one chunk; Buffer IS a Uint8Array
+          },
+        };
+      },
+    },
+    text: async () => buf.toString("utf8"), // readers' no-reader fallback (not used when getReader exists)
+  };
+}
+
+// ISSUE-IMG-URL-1 — image-URL-ONLY prompt (singular). `#https://example.com/cat.png` returns
+// image/png → injectUrl image branch → 1 image detail (kind "image", path = the https URL) →
+// urlCount=1, fileCount=0 → URL-only branch "injected 1 URL". MUST NOT say '#@ injected'.
+await runCase("ISSUE-IMG-URL-1", "Issue 2: image-URL-only prompt → 'injected 1 URL' (not '#@ injected')", async () => {
+  const origFetch = globalThis.fetch;
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  try {
+    globalThis.fetch = async () => imageRes();
+    const out = await slot.cb({ text: "see #https://example.com/cat.png", source: "interactive", images: [] }, ctx);
+    assert(out.action === "transform", `handler must transform (an image URL WAS injected); got ${out.action}`);
+    assert(rec.notify, "notify must fire (an image URL WAS injected)");
+    assert(rec.notify.m === "injected 1 URL",
+      `image-URL-only notify must be 'injected 1 URL'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(!rec.notify.m.includes("#@"), `image-URL-only notify must NOT contain '#@'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(rec.notify.t === "info", `notify type must be 'info'; got ${rec.notify.t}`);
+  } finally { globalThis.fetch = origFetch; }
+});
+
+// ISSUE-IMG-URL-2 — MIXED local-file + image-URL prompt. `#@a.ts` (whole) + `#https://…/cat.png` (image)
+// → injected=2, urlCount=1 (the image URL), fileCount=1 (a.ts) → mixed branch "#@ injected 1 whole, 1 URL".
+// The image URL must land in the URL axis, NOT the file axis (else it'd be "#@ injected 2 whole").
+await runCase("ISSUE-IMG-URL-2", "Issue 2: mixed #@file + image-URL → '#@ injected 1 whole, 1 URL'", async () => {
+  const origFetch = globalThis.fetch;
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  try {
+    globalThis.fetch = async () => imageRes();
+    const out = await slot.cb({ text: "#@a.ts and #https://example.com/cat.png", source: "interactive", images: [] }, ctx);
+    assert(out.action === "transform", `handler must transform; got ${out.action}`);
+    assert(rec.notify, "notify must fire (a file AND an image URL were injected)");
+    assert(rec.notify.m === "#@ injected 1 whole, 1 URL",
+      `mixed image-URL notify must be '#@ injected 1 whole, 1 URL'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(rec.notify.t === "info", `notify type must be 'info'; got ${rec.notify.t}`);
+  } finally { globalThis.fetch = origFetch; }
+});
+
+// ISSUE-IMG-LOCAL — LOCAL image file stays on the FILE axis (negative control). A `#@fake.png` local
+// image (F3 fixture: image-ext + text body fails the magic-number sniff → text path, kind "text") is
+// NOT a URL-delivered image → must still report the file axis. (Guards that the scheme detector does
+// not over-count local files as URLs.) a.ts-style whole; urlCount=0 → "#@ injected 1 whole".
+await runCase("ISSUE-IMG-LOCAL", "Issue 2 control: local image file stays on the file axis ('#@ injected')", async () => {
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  const out = await slot.cb({ text: "#@fake.png", source: "interactive", images: [] }, ctx);
+  assert(out.action === "transform", `handler must transform; got ${out.action}`);
+  assert(rec.notify, "notify must fire (a local file WAS injected)");
+  assert(rec.notify.m === "#@ injected 1 whole",
+    `local-file notify must be '#@ injected 1 whole' (NOT counted as a URL); got ${JSON.stringify(rec.notify.m)}`);
+});
+
 // 10. Summary + cleanup + exit.
-// ──────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
 console.log(`Result: ${passed} passed, ${failed} failed.`);
 if (failed > 0) {

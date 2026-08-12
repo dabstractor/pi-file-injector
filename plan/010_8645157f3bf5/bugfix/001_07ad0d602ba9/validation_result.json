@@ -1,0 +1,5 @@
+{
+  "hasIssues": true,
+  "issueCount": 2,
+  "summary": "PRD BUG-001 and BUG-002 are already fixed and independently verified non-reproducible; 2 new minor issues found (stale URL spec table; image-URL-only notify wording)."
+}

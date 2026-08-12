@@ -1548,8 +1548,13 @@ export default function (pi: ExtensionAPI) {
     //     (URLs can never be paged: injectUrl returns false on over-budget with NO paging).
     //   • both > 0 (mixed)                   → files keep the '#@ injected … whole[, … paged]' axis, then ", N URL[s]".
     // 1:1 invariant: details.length === injected (every count++ pairs with exactly one details.push).
-    const urlCount = details.filter((d) => d.kind === "url").length; // text/html/json/xml URLs; image-URLs are kind:"image" (count as files — out of scope)
-    const fileCount = injected - urlCount; // non-url kinds (text/image/binary/paged) are all files
+    // Image-aware (Issue 2 from validation report): a URL-delivered image is kind:"image" but its `path` is the
+    // absolute https:// URL pushed by injectUrl (vs. a local-file image whose `path` is a filesystem path).
+    // Detect via scheme so an image-URL-only prompt reports as a URL ("injected 1 URL"), NOT "#@ injected" —
+    // the same glyph/trigger mismatch BUG-002 eliminated for text URLs.
+    const isUrlDelivered = (d: { path: string }) => /^https?:\/\//i.test(d.path);
+    const urlCount = details.filter((d) => d.kind === "url" || (d.kind === "image" && isUrlDelivered(d))).length; // text/html/json/xml URLs (kind "url") + URL-delivered images (kind "image" w/ scheme path)
+    const fileCount = injected - urlCount; // non-url kinds (local text/image/binary/paged) are all files
     let msg: string;
     if (urlCount === 0) {
       // FILES ONLY — byte-for-byte the ORIGINAL string (Case 9 / notify cluster assert this verbatim).

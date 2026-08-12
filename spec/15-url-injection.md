@@ -93,10 +93,13 @@ untouched (they're ordinary `#word` prose). Scheme-less matches are fetched as `
 | `#fff` (hex) / `#tag` | ❌ none | no dot/scheme |
 | `C#` / `objective-C#` | ❌ none | mid-word (`#` not at boundary); no dot |
 | `#v1.2` / `#3.14` | ❌ none | final label numeric → fails alpha-TLD |
-| `#node.js` | ⚠️ URL shape → **no-op** | alpha TLD `js` matches shape; `node.js` won't resolve → left verbatim (§3.5) |
+| `#node.js` | ❌ none (deny-listed) | bare `word.ext` with a known code/file extension (`js`) → local-file reference, denied by the `CODE_EXTENSIONS` deny-list **before** fetch (not URL-shaped; no network egress). Use `#https://node.js` to fetch the real site. |
 
-The last row is the only residual false-positive class (`#word.letters`), and the no-op
-fallback makes it benign — exactly the behavior "if the URL doesn't exist it's a no-op."
+Bare `#word.<ext>` tokens whose final label is a known code/file extension (`#main.go`,
+`#notes.md`, `#config.json`, `#node.js`, …) are **deny-listed as local-file references**
+by `CODE_EXTENSIONS` in the URL scan loop — they make **no** fetch and inject nothing. The
+README is authoritative for this behavior; use `#https://…` (explicit scheme) to bypass the
+deny-list and force a fetch.
 
 ---
 
@@ -260,7 +263,7 @@ text files). Images delivered via URL go through the existing image branch.
 | `#example.com` re-opened (cancel/re-open, fork) | **re-fetched** (no cache). |
 | `#example.com` mid-word `foo#example.com` | not matched (`#` not at boundary). |
 | `#v1.2` / `#3.14` | not URL-shaped → untouched prose. |
-| `#node.js` | URL-shaped → resolves false → verbatim (no-op). |
+| `#node.js` | deny-listed as a local-file reference (code extension `js`) → no fetch, untouched prose. Use `#https://node.js` to fetch. |
 | `ftp://` scheme | supported by `URL_SHAPE_RE`; fetch via `fetch` (Node supports it). |
 
 ---
