@@ -397,18 +397,20 @@ await runCase("COL-3", "collision: foo#example.com mid-word → not matched, NO 
   }
 });
 
-// COL-4 — [BUG-001] #node.js final label 'js' is a known code extension → the code-extension
-// deny-list (P1.M1.T1.S1) now treats it as a FILE reference, NOT a URL → ZERO fetch. (Previously this
-// asserted fetch CALLED + 404; the deny-list gates scheme-less code-extension tokens BEFORE the fetch,
-// so #node.js no longer reaches the network. The explicit-scheme form #https://node.js still fetches.)
-await runCase("COL-4", "collision: #node.js code-extension → deny-list → ZERO fetch + verbatim", async () => {
+// COL-4 — [BUG-001] #node.js: final label 'js' is in CODE_EXTENSIONS → the deny-list gate rejects
+// it BEFORE fetch (NOT because URL_SHAPE_RE fails — it passes; the gate is the guard). The fetch SPY
+// (not the absence of a stub) proves ZERO egress, and r.text==="#node.js" proves nothing was stripped.
+// The explicit-scheme form #https://node.js still fetches (see BUG1-12 in the BUG-001 BYPASS section).
+await runCase("COL-4", "collision: #node.js is a code-extension token → DENIED (no fetch), verbatim", async () => {
   const calls = [];
+  const prompt = "#node.js";
   try {
     globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ status: 404, ok: false }); };
-    const r = await mod.injectFiles("#node.js", [], FIX, false, true);
-    assert(calls.length === 0, `#node.js final label 'js' is a code extension → must NOT fetch; calls=${calls.length}`);
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `#node.js final label 'js' is a code extension → must NOT fetch; calls=${JSON.stringify(calls)}`);
     assert(r.injected === 0, `no block; got injected===${r.injected}`);
     assert(!hasBlock(r, '<file name="https://node.js">'), "no block appended");
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -451,24 +453,205 @@ await runCase("NORM-1", "dedup: #example.com + #https://example.com → ONE inje
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CODE-EXTENSION DENY-LIST (BUG-001) — scheme-less #<word>.<code-ext> is a FILE ref, not a URL.
+// BUG-001 REGRESSION — code-extension tokens must NOT fetch.
+//
+// Scheme-less tokens whose final label ∈ CODE_EXTENSIONS are denied BEFORE fetch (no egress, no
+// injection). Each case spies on globalThis.fetch and asserts ZERO calls. These FAIL if S1's
+// CODE_EXTENSIONS gate is removed — the regression guard for BUG-001. enableUrls===true (5th param)
+// in every case: this is the ON-BY-DEFAULT false-positive class (the original BUG-001 blind spot).
+// (Consolidates S1's former DENY-1 — BUG1-1 now owns the #main.go no-fetch assertion.)
 // ══════════════════════════════════════════════════════════════════════════════
-console.log("\nCODE-EXTENSION DENY-LIST (BUG-001)");
+console.log("\nBUG-001 REGRESSION: code-extension tokens must NOT fetch");
 
-// DENY-1 — [BUG-001] a scheme-less token whose final label is a known code extension ('main.go' ->
-// 'go') is treated as a LOCAL FILE reference: ZERO fetch, ZERO injection, prompt verbatim. The fetch
-// SPY (not the absence of a stub) proves the no-network invariant. enableUrls===true (default) — this
-// is the on-by-default false-positive class. Explicit-scheme forms (#https://main.go) bypass the
-// deny-list and are covered by the broader regression matrix in P1.M1.T2.S1.
-await runCase("DENY-1", "deny-list: 'edit #main.go' → code-extension final label → ZERO fetch + verbatim", async () => {
+// BUG1-1 — #main.go: final label 'go' ∈ CODE_EXTENSIONS → denied before fetch. (Formerly S1's DENY-1;
+// consolidated here — BUG1-1 is the canonical #main.go case.)
+await runCase("BUG1-1", "no-fetch: #main.go (ext 'go' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#main.go";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); }; // SPY — proves ZERO egress
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch; // ALWAYS restore — a leaked stub poisons later cases / hits real network
+  }
+});
+
+// BUG1-2 — #notes.md: final label 'md' ∈ CODE_EXTENSIONS (markdown) → denied before fetch.
+await runCase("BUG1-2", "no-fetch: #notes.md (ext 'md' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#notes.md";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-3 — #config.json: final label 'json' ∈ CODE_EXTENSIONS → denied before fetch.
+await runCase("BUG1-3", "no-fetch: #config.json (ext 'json' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#config.json";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-4 — #image.png: final label 'png' ∈ CODE_EXTENSIONS (image) → denied before fetch.
+await runCase("BUG1-4", "no-fetch: #image.png (ext 'png' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#image.png";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-5 — #script.py: final label 'py' ∈ CODE_EXTENSIONS → denied before fetch.
+await runCase("BUG1-5", "no-fetch: #script.py (ext 'py' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#script.py";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-6 — #utils.rs: final label 'rs' ∈ CODE_EXTENSIONS (Rust) → denied before fetch.
+await runCase("BUG1-6", "no-fetch: #utils.rs (ext 'rs' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#utils.rs";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-7 — #spec.tsx: final label 'tsx' ∈ CODE_EXTENSIONS → denied before fetch.
+await runCase("BUG1-7", "no-fetch: #spec.tsx (ext 'tsx' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#spec.tsx";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-8 — #app.cs: final label 'cs' ∈ CODE_EXTENSIONS (C#) → denied before fetch.
+await runCase("BUG1-8", "no-fetch: #app.cs (ext 'cs' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#app.cs";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-9 — #lib.java: final label 'java' ∈ CODE_EXTENSIONS → denied before fetch.
+await runCase("BUG1-9", "no-fetch: #lib.java (ext 'java' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#lib.java";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-10 — #data.csv: final label 'csv' ∈ CODE_EXTENSIONS → denied before fetch.
+await runCase("BUG1-10", "no-fetch: #data.csv (ext 'csv' ∈ CODE_EXTENSIONS) → zero calls, verbatim", async () => {
+  const calls = [];
+  const prompt = "#data.csv";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 0, `must NOT fetch for ${prompt}; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `nothing injected for ${prompt}; got ${r.injected}`);
+    assert(r.text === prompt, `prompt returned byte-for-byte; got ${JSON.stringify(r.text)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// BUG1-11 — the CONTENT-INJECTION harm guard. A 200-OK text/html RICH_HTML response is 'waiting'
+// (the Go homepage), yet #main.go is denied → fetch never fires → injected===0 and no Go-homepage
+// block. WITHOUT the gate this FAILS (fetch → defuddle extracts the Go homepage → injects it).
+// RICH_HTML (≥200 chars) is deliberate: a trivial body would trigger the SPA fallback and mask the
+// regression (injected===0 for the wrong reason).
+await runCase("BUG1-11", "harm: refactor #main.go now → Go homepage NOT injected (gate denies before fetch)", async () => {
   const calls = [];
   try {
-    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); }; // spy — would be a bug if called
-    const r = await mod.injectFiles("edit #main.go", [], FIX, false, true); // enableUrls===true (5th param)
-    assert(calls.length === 0, `#main.go final label 'go' is a code extension → must NOT fetch; calls=${JSON.stringify(calls)}`);
-    assert(r.injected === 0, `nothing injected; injected=${r.injected}`);
-    assert(r.blocks.length === 0, "no block appended");
-    assert(r.text === "edit #main.go", `prompt preserved verbatim; got ${JSON.stringify(r.text)}`);
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ ct: "text/html", body: RICH_HTML, status: 200, ok: true }); };
+    const r = await mod.injectFiles("refactor #main.go now", [], FIX, false, true);
+    assert(calls.length === 0, `#main.go denied → no fetch; calls=${JSON.stringify(calls)}`);
+    assert(r.injected === 0, `no content injected (Go homepage must NOT reach the model); got ${r.injected}`);
+    assert(!hasBlock(r, "https://main.go"), 'no <file name="https://main.go"> block');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BUG-001 BYPASS — explicit-scheme tokens still fetch (the deny-list is scheme-less only).
+//
+// BUG1-12 — the deny-list gates SCHEME-LESS tokens only. #https://node.js carries an explicit
+// https:// scheme → it BYPASSES the gate → fetch IS called. Proves the fix's scope: a user can
+// always force a URL by writing the scheme. (Gate-independent: passes with or without S1's gate.)
+// ══════════════════════════════════════════════════════════════════════════════
+console.log("\nBUG-001 BYPASS: explicit-scheme tokens still fetch (deny-list is scheme-less only)");
+
+// BUG1-12 — #https://node.js: explicit scheme bypasses the deny-list → fetch IS called (404 → verbatim).
+await runCase("BUG1-12", "bypass: #https://node.js → explicit scheme STILL fetches (404 → verbatim)", async () => {
+  const calls = [];
+  const prompt = "#https://node.js";
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ status: 404, ok: false }); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(calls.length === 1, `explicit scheme bypasses deny-list → fetch IS called; calls=${calls.length}`);
+    assert(calls[0] === "https://node.js", `fetched the exact URL; got ${calls[0]}`);
+    assert(r.injected === 0, `404 → verbatim; got injected===${r.injected}`);
+    assert(r.text === prompt, `prompt verbatim; got ${JSON.stringify(r.text)}`);
   } finally {
     globalThis.fetch = origFetch;
   }

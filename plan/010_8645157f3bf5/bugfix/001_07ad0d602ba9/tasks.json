@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "BUG-001: Eliminate code-extension false-positives in URL detection",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Tighten the URL shape gate so scheme-less tokens whose final label is a known code/file extension (go, md, py, rs, ts, json, png, csv, etc.) are NOT treated as URLs. This prevents unwanted network egress and content injection for everyday '#filename.ext' coding prompts while preserving legitimate bare-domain URL detection (example.com, api.example.co.uk) and explicit-scheme URLs (#https://anything).",
           "tasks": [
             {
@@ -41,14 +41,14 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "Regression tests for the tightened URL shape gate",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Update the COL-4 test case (#node.js now blocked by the deny-list) and add comprehensive no-fetch regression tests for representative #filename.ext patterns. Add a test proving that even a 200-OK response for a false-positive domain no longer injects content.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "Update COL-4 and add no-fetch regression tests for #filename.ext patterns",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
