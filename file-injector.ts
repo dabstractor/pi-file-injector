@@ -174,7 +174,11 @@ export async function resolveImportPath(
 
 /** §4.6 — config shape. markdownBareAtImports: also match bare "@path" in markdown (opt-in). Loaded on
  *  session_start (P1.M2.T1.S1); missing/malformed → {} → markdownBareAtImports undefined → false downstream. */
-interface FileInjectorConfig { markdownBareAtImports?: boolean; }
+interface FileInjectorConfig {
+  markdownBareAtImports?: boolean;
+  /** Default true; when false, URL tokens (#<url>) are ignored entirely and NO network request is made (air-gapped opt-out). Read alongside markdownBareAtImports from the same four sources/precedence (spec §4). */
+  enableUrls?: boolean;
+}
 
 /** §4.6 — the camelCase key under which this extension's config may live inside Pi's settings.json (a
  *  conventional JSON-settings key; distinct from the package `name`). settings.json is open-schema (Pi
