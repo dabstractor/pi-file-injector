@@ -465,10 +465,12 @@ export function computeDetailOffsets(blocks: string[], details: FileDetail[]): F
  *  Consumed forward by the renderer (T2.S2) to draw collapsed `read <path>` lines; it is renderer metadata
  *  only and is NEVER sent to the model as separate text. In S1, emitText pushes `kind: "text"` (whole +
  *  sub-head) and `kind: "paged"` entries; image (`kind:"image"`, dimensionHint) and binary (`kind:"binary"`)
- *  entries are added in injectFile in S2. The kind union is forward-looking. */
+ *  entries are added in injectFile in S2. `kind:"url"` entries (path = the URL itself, no tildify) are
+ *  pushed by injectUrl (P1.M1.T2.S1) and rendered by readLine's url branch (P1.M1.T2.S2 — raw URL, no
+ *  range/hint). The kind union is forward-looking. */
 export interface FileDetail {
   path: string; // absolute resolved path (the <file name=…>)
-  kind: "text" | "image" | "binary" | "paged" | "url"; // +"url": added by T2.S1 (producer); the readLine renderer branch lands in T2.S2. url details render via readLine's default branch until then (the kind union member is safe — no exhaustive switch on .kind).
+  kind: "text" | "image" | "binary" | "paged" | "url"; // +"url": producer injectUrl (T2.S1); renderer = readLine url branch (T2.S2, raw URL no tildify). Safe — no exhaustive switch on .kind.
   chars?: number; // text: content length; paged: FULL content length
   lines?: number; // text: total line count
   range?: string; // paged: ":<startLine>-…" resume range (read-tool style)
@@ -1012,6 +1014,10 @@ function readLine(d: FileDetail, theme: any): string {
   }
   if (d.kind === "paged") {
     return `${title} ${pathPart}${theme.fg("warning", d.range ?? "")}`;
+  }
+  if (d.kind === "url") {
+    // PRD §6 — raw URL (d.path holds the URL), NOT tildified; no range/dimensionHint suffix.
+    return `${title} ${theme.fg("accent", d.path)}`;
   }
   return `${title} ${pathPart}`; // whole text (no suffix)
 }
