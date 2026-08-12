@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Foundations: dependencies, config, detection regexes",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Add the hard npm dependencies and install them; extend the config interface with enableUrls; add the two URL detection regex constants. These are prerequisites for the pipeline (M1.T2) which imports defuddle/linkedom and references the regexes. Also verify tsc --strict resolves the new dependency types.",
               "subtasks": [
                 {
@@ -67,7 +67,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S4",
                   "title": "Typecheck-shim decision: verify tsc --strict resolves defuddle/node + linkedom types",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -91,7 +91,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "injectUrl + helpers (fetch pipeline, content-type dispatch, defuddle extraction, image byte path, guards)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",
