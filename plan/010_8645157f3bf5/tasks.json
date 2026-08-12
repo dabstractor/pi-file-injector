@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "URL Web-Content Injection (#<url>)",
-      "status": "Planned",
+      "status": "Researching",
       "description": "Add a second trigger — #<url> — to the file-injector extension. When the user writes #example.com or #https://example.com/x anywhere in a prompt and submits, the extension fetches the page via global fetch, extracts main content via defuddle, converts to markdown, and injects it into the model's context through the SAME fileInjector.injected custom message and green read-line renderer that #@file already uses. All failure modes leave the token verbatim. The entire #@file path stays byte-for-byte identical. Architecture findings: see plan/010_8645157f3bf5/architecture/system_context.md (verified integration points + 4 refinements), external_deps.md (defuddle/linkedom API + type declarations), and code_map.md (line-level integration map).",
       "milestones": [
         {
@@ -152,14 +152,14 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Tests + Changeset Docs",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Add a new hermetic test file url-injection.test.mjs covering detection, dispatch, failure/guard modes, and collision behavior — stubbing globalThis.fetch to never hit the network. Chain it into package.json scripts.test as the 4th file. Then sync changeset-level README.md documentation (Mode B) to surface the new #<url> capability. Depends on M1 (engine + deps).",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "Hermetic URL tests",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Create url-injection.test.mjs with comprehensive coverage: URL detection (detection regexes + URL_SHAPE_RE gate), content-type dispatch (HTML→defuddle markdown, text/json/xml→raw, image→attach), collision table (prose tokens untouched, #@ disjoint), shared budget/dedup between triggers, and ALL failure/guard modes (non-2xx, DNS throw, 20s timeout, Content-Length > 1MB, mid-stream overflow, over-budget→verbatim no paging, SPA <200 chars, enableUrls:false→no fetch, PDF/octet-stream). Every verbatim case asserts r.text === prompt. Tests stub globalThis.fetch and NEVER hit the network.",
               "subtasks": [
                 {
@@ -184,7 +184,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "Failure / guard tests (all → verbatim, no block, no network when disabled)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S3",
@@ -205,14 +205,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Mode B final task. Update README.md (currently describes only #@file) so the package's user-facing overview reflects the new #<url> capability. This task depends on ALL implementing subtasks (M1 + M2.T1) so it runs last and can summarize the complete delta.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "README #<url> section + config + limits + wiring",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T2.S3",

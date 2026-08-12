@@ -449,6 +449,250 @@ await runCase("NORM-1", "dedup: #example.com + #https://example.com → ONE inje
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── FAILURE / GUARD CASES (§3.5 / §3.3 / §3.4 / §4) ──
+//
+// The whole safety model of URL injection is "on any problem, leave the prompt untouched and let
+// the model fetch it itself." Every case below proves ONE failure path leaves the `#<url>` token
+// VERBATIM (r.text === prompt byte-for-byte), appends NO block (r.injected===0, empty blocks),
+// never throws, and — for the §4 air-gapped case — makes ZERO network calls when enableUrls===false.
+// injectUrl is PRIVATE, so each case drives it via mod.injectFiles(prompt, [], CTX, bareAt, enableUrls).
+//
+// Two non-obvious gotchas baked into the stubs below (documented once here, not per-case):
+//  GOTCHA 1 — URL_TIMEOUT_MS (file-injector.ts L81) is a PRIVATE module const (20_000ms) and is NOT
+//    exported, so it cannot be injected/reduced. The real 20s cannot be exercised hermetically; the
+//    timeout case (FAIL-3) SIMULATES it by stubbing fetch to reject with an AbortError-like error
+//    (catch { return false } → verbatim). The 20s *magnitude* is deliberately NOT asserted here.
+//  GOTCHA 2 — `remaining` (the context budget) is DERIVED, not a settable field. Formula
+//    (file-injector.ts L1338-1347): reserve = ctx.model?.maxTokens ?? DEFAULT_RESERVE(8192);
+//    remaining = max(0, contextWindow - tokens - reserve - MARGIN(8192)). The over-budget case
+//    (FAIL-6) uses LOW_BUDGET_CTX below so remaining = 16394 - 0 - 8192 - 8192 = 10.
+//
+// Two small test-local helpers (do NOT re-declare S1's makeRes/FIX/runCase/assert/RICH_HTML):
+
+// ctx WITH a notify spy (mirrors file-injector.test.mjs L160-200 makeMockCtx ui shape) — for the SPA
+// case. ctx.hasUI===true is required for ctx.ui?.notify(...) to fire (the SPA branch is guarded on it).
+function ctxWithNotifySpy() {
+  const notes = [];
+  return {
+    ctx: { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes.push({ m, t }) } },
+    notes,
+  };
+}
+
+// ctx WITH a derived low remaining (≈10 tokens, NO model → reserve=DEFAULT_RESERVE=8192) — for the
+// over-budget case. getContextUsage yields {tokens:0, contextWindow:16394} ⇒ remaining = 10. No
+// hasUI here ⇒ SPA notify would be a no-op even if it fired (it must NOT fire — the body is ≥200).
+const LOW_BUDGET_CTX = { cwd: TMPDIR, getContextUsage: () => ({ tokens: 0, contextWindow: 16394 }) };
+
+console.log("\nFAILURE / GUARD");
+
+// FAIL-1 — non-2xx response → verbatim, no block (§3.5). The !res.ok guard returns false; with count
+// staying 0 the count===0 early-return hands back the ORIGINAL `text` ref + empty blocks/details.
+await runCase("FAIL-1", "guard: non-2xx (404) → verbatim, no block, injected===0", async () => {
+  const prompt = "Read #example.com";
+  const calls = [];
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ ok: false, status: 404 }); };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+    assert(r.details.length === 0, "no detail appended on failure");
+    assert(calls.length === 1, `fetch WAS called (404 is still a network round-trip); calls=${calls.length}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-2 — DNS/TLS/network rejection → verbatim (§3.5). fetch rejects with a generic Error; injectUrl's
+// catch { return false } swallows it (NEVER throws out). The fact that `r` resolves at all is the proof
+// there was no uncaught rejection.
+await runCase("FAIL-2", "guard: DNS/network rejection → verbatim, no uncaught rejection", async () => {
+  const prompt = "Read #example.com";
+  try {
+    globalThis.fetch = async () => Promise.reject(new Error("ENOTFOUND example.com"));
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-3 — timeout (AbortError sim) → verbatim (§3.5). URL_TIMEOUT_MS is a PRIVATE const (20_000ms,
+// file-injector.ts L81) and is NOT exported — the real 20s cannot be exercised hermetically. Instead we
+// SIMULATE the abort by rejecting with an AbortError-like error (name:'AbortError'); injectUrl's catch
+// { return false } → verbatim. (Optional wiring sanity: assert the 2nd fetch arg carries an AbortSignal,
+// proving the AbortController is actually wired up even though we don't wait on it.)
+await runCase("FAIL-3", "guard: timeout (AbortError sim) → verbatim (URL_TIMEOUT_MS private; magnitude not asserted)", async () => {
+  const prompt = "Read #example.com";
+  const capturedSignals = [];
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (init?.signal) capturedSignals.push(init.signal);
+      const e = new Error("aborted");
+      e.name = "AbortError";
+      return Promise.reject(e);
+    };
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+    assert(capturedSignals.length === 1 && capturedSignals[0] instanceof AbortSignal, "fetch must be called with an AbortSignal (timeout wiring present)");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-4 — Content-Length >1MB (guard 2a, pre-download) → verbatim AND body reader NEVER called (§3.3).
+// The pre-check `if (len && len > URL_MAX_BYTES) return false` runs BEFORE readBodyCapped, so the body
+// reader spy must record ZERO invocations. content-length '1500000' > URL_MAX_BYTES(1_000_000).
+await runCase("FAIL-4", "guard: Content-Length >1MB → verbatim, body reader NEVER called", async () => {
+  const prompt = "Read #example.com";
+  const readerCalls = [];
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k) => {
+          const lk = k.toLowerCase();
+          if (lk === "content-type") return "text/html";
+          if (lk === "content-length") return "1500000"; // > URL_MAX_BYTES(1_000_000)
+          return null;
+        },
+      },
+      body: {
+        // SPY — records every getReader() call so we can prove the pre-download guard skipped the body.
+        getReader: () => { readerCalls.push(1); return { read: async () => ({ done: true }) }; },
+      },
+      text: async () => "",
+    });
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+    assert(readerCalls.length === 0, `getReader must NOT be called when Content-Length exceeds cap; calls=${readerCalls.length}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-5 — mid-stream overflow (guard 2b) → verbatim (§3.3). Content-Length is ABSENT (len=0 ⇒ the
+// guard-2a pre-check `len && len>cap` is FALSE) so control reaches readBodyCapped, which streams ONE
+// chunk >1MB and returns null at the first read → false. This ISOLATES guard 2b from guard 2a above.
+await runCase("FAIL-5", "guard: mid-stream >1MB (absent Content-Length) → verbatim", async () => {
+  const prompt = "Read #example.com";
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k) => {
+          const lk = k.toLowerCase();
+          if (lk === "content-type") return "text/html";
+          if (lk === "content-length") return null; // ABSENT ⇒ len=0 ⇒ pre-check false ⇒ reach readBodyCapped
+          return null;
+        },
+      },
+      body: {
+        getReader: () => {
+          let i = 0;
+          return {
+            // ONE chunk of 1_100_000 bytes then done. size(1_100_000) > cap(1_000_000) ⇒ readBodyCapped
+            // returns null on the FIRST read → false (verbatim). Uint8Array (not Buffer) keeps it general.
+            read: async () => (i++ === 0 ? { done: false, value: new Uint8Array(1_100_000) } : { done: true }),
+          };
+        },
+      },
+      text: async () => "",
+    });
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-6 — over-budget → verbatim, NO paging (§3.3). CTX=LOW_BUDGET_CTX (remaining≈10). RICH_HTML yields
+// ≥200 chars of markdown (passes the SPA floor — SPA runs BEFORE over-budget per the ordering gotcha) and
+// a cost ≈ 256 ≫ 10 ⇒ guard 3 fires → false. URLs NEVER page (the read tool can't fetch a URL), so we
+// assert NO `<paged:` block. No hasUI on LOW_BUDGET_CTX ⇒ a notify would be a silent no-op (and must NOT
+// fire anyway, since the SPA branch is not taken).
+await runCase("FAIL-6", "guard: over-budget (remaining≈10) → verbatim, NO paging, markdown ≥200 (not SPA)", async () => {
+  const prompt = "Read #example.com";
+  try {
+    globalThis.fetch = async () => makeRes({ ct: "text/html", body: RICH_HTML }); // ≥200 chars ⇒ not SPA
+    const r = await mod.injectFiles(prompt, [], LOW_BUDGET_CTX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `over-budget URL must be verbatim; injected=${r.injected}`);
+    assert(r.blocks.length === 0, `no block appended on failure; blocks=${JSON.stringify(r.blocks)}`);
+    assert(!r.blocks.some((b) => b.includes("<paged:")), "URLs NEVER page (read tool can't fetch a URL)");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-7 — SPA / empty-extraction (§3.4). defuddle yields < URL_MIN_CONTENT(200) chars ⇒ false +
+// ctx.ui.notify("<url>: page appears JS-rendered; left as reference", "info") (guarded on ctx.hasUI).
+// A deliberately minimal `<p>short</p>` HTML keeps the extracted markdown WELL under 200 so the SPA
+// branch fires deterministically; we assert on the NOTIFY behavior (robust) rather than a fragile char count.
+await runCase("FAIL-7", "guard: SPA <200 chars → verbatim + notify (ctx.hasUI===true, type 'info')", async () => {
+  const prompt = "Read #example.com";
+  const { ctx, notes } = ctxWithNotifySpy();
+  try {
+    globalThis.fetch = async () => makeRes({ ct: "text/html", body: "<html><body><p>short</p></body></html>" });
+    const r = await mod.injectFiles(prompt, [], ctx, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `SPA → verbatim; injected=${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+    assert(notes.some((n) => n.m.includes("page appears JS-rendered; left as reference")), `SPA notify must fire; notes=${JSON.stringify(notes)}`);
+    assert(notes.some((n) => n.t === "info"), `SPA notify type must be 'info'; notes=${JSON.stringify(notes)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-8 — enableUrls===false → ZERO network egress (§4 air-gapped opt-out). The whole URL loop body is
+// SKIPPED when enableUrls is false, so fetch is never reached. We install a SPY (not rely on the absence
+// of a stub) and assert calls.length===0 — the absence of a stub proves nothing.
+await runCase("FAIL-8", "guard: enableUrls===false → ZERO fetch calls (air-gapped opt-out) + verbatim", async () => {
+  const prompt = "Read #example.com";
+  const calls = [];
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({}); }; // spy — would be a bug if called
+    const r = await mod.injectFiles(prompt, [], FIX, false, false); // 5th param enableUrls===false
+    assert(calls.length === 0, `enableUrls:false must make ZERO fetch calls; calls=${JSON.stringify(calls)}`);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `nothing injected; injected=${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// FAIL-9 — unhandled content-type (PDF) → verbatim (§3.5). application/pdf matches none of the recognized
+// prefixes/includes (text/ | json | xml | markdown | image/) → the else-branch returns false. The same
+// branch covers application/octet-stream and any other unhandled ct. content-length is ABSENT so guard 2a
+// cannot short-circuit before the dispatch; the small body would fit under cap so guard 2b cannot either —
+// proving the ELSE branch itself is the reason for the verbatim result.
+await runCase("FAIL-9", "guard: unhandled content-type (application/pdf) → verbatim", async () => {
+  const prompt = "Read #example.com";
+  try {
+    globalThis.fetch = async () => makeRes({ ct: "application/pdf", body: "%PDF-1.4 fake" }); // else-branch
+    const r = await mod.injectFiles(prompt, [], FIX, false, true);
+    assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
+    assert(r.blocks.length === 0, "no block appended on failure");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
