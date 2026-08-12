@@ -1,0 +1,28 @@
+## 2. Goals & Non-Goals
+
+### Goals
+1. **New syntax `#@<path>`** that unconditionally **delivers the entire file** into the model's context at prompt-submission time: injected whole when it fits remaining context, paged via the model's `read` tool when it does not (§5.5).
+2. **Works in every input context** — interactive TUI, the initial CLI/`-p` message, and RPC — because it operates on the `input` event.
+3. **No configuration required.** `#@` works with zero setup; the inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5), and there are no knobs for format, image handling, paging, or budget. The single user-facing setting is the opt-in `markdownBareAtImports` (§4.6), off by default.
+4. **Correct file-type handling** with no knobs: text → content; image → attached; other binary → a clear note (not garbage); missing/dir → left as a literal token.
+5. **Non-destructive & loop-safe.** Leaves the user's original prompt intact; never breaks a prompt on an error; never re-expands its own or other extensions' injected messages.
+6. **Markdown transitive imports.** A delivered markdown file (`.md`/`.markdown`) is scanned for further `#@<path>` directives; each resolves **relative to that markdown file's directory**, is delivered as its own block, and is itself scanned if markdown. **An import may omit its `.md`/`.markdown` extension** — an extensionless token (e.g. `#@PRD`) resolves to `PRD.md` or `PRD.markdown` when no bare file of that name exists, treated as an exact match (markdown imports only; top-level tokens stay exact-match, §4.4). Recursion is bounded by **dedup — each absolute path is injected at most once across the whole prompt** (including paths already present as `<file>` blocks). Absolute/tilde paths inside markdown are ignored; `#@` inside fenced or inline code is ignored. An opt-in setting (`markdownBareAtImports`, §4.6) additionally treats a bare `@<path>` (no `#`) as a markdown import, with all the same rules. All other rules (file-type handling, paging, budget) apply to imported files unchanged.
+7. **Total-size context accounting.** A single shared context-budget accumulator spans the entire prompt — every top-level token **and every transitive import** — with each delivered file (text whole/head, image, binary note) subtracting its cost *before* the next file is decided, so the inline-vs-paged decision is made against the running total of all files injected so far, not per-file in isolation (§5.6.2).
+8. **Compact, read-tool-style chat display.** Injected files render in the chat as collapsible green `read <path>` lines — one per file — indistinguishable from the built-in `read` tool's completed-call rendering, expanding on `ctrl+o` to the full contents (the same affordance `[skill]` blocks use). This is achieved with **no core changes to Pi**: files are delivered as a single custom message returned from a `before_agent_start` handler (model still receives every `<file>` block), and a registered `MessageRenderer` draws the green box (§6). The user's message bubble shows the prompt **verbatim** — exactly what they typed (`#@` preserved so cancel/fork/re-open re-trigger injection; §6.4).
+
+### Non-Goals
+- **No silent truncation.** `#@` never drops or caps file contents without telling the model. A file is either injected whole (when it fits remaining context) or delivered in full through paged reads (§5.5).
+- **No manual fallback.** Oversize files are paged automatically. The user does not have to notice an overflow and switch to the `read` tool themselves.
+- **No user-facing size config.** The context budget is derived from the active model and current usage. There is no threshold or setting to tune.
+- **No globbing / multi-file** (`#@src/*.ts`). Single concrete path per token.
+- **No directory reads.** `#@some/dir` is left as a literal token.
+- **No transitive imports from non-markdown files.** Only `.md`/`.markdown` content is scanned for `#@` directives; a `#@` inside an injected `.ts`/`.json`/image/etc. is inert.
+- **No absolute/tilde markdown imports.** Markdown imports are relative-only by design (portability + a shared doc can't yank arbitrary home/system paths). Top-level user-prompt `#@` still allows absolute and `~/` paths (§4.4).
+- **No extension shorthand at the top level.** The `.md`/`.markdown` omission is a markdown-import convenience (authored in files, no live completion). Top-level `#@` tokens stay exact-match — the user has path autocomplete (§14) and types the full name.
+- **No replacement of `@`, `read`, or any built-in.** `#@` is purely additive.
+- **No change to what the model receives — only to message boundaries and display.** The model gets the same `<file>` blocks with the same contents as before; delivery moves them from the user-message text into a following custom (→ user-role) message so the TUI can render them compactly (§6, §13.7). No content is added, removed, or rewritten for the model.
+- **No custom *user-message* rendering, and no Pi core patch.** Compact display is achieved purely through the public custom-message + `MessageRenderer` APIs. The extension never monkeypatches Pi's `UserMessageComponent` or `parseSkillBlock`; it does not rely on the TUI recognizing `<file>` blocks (it does not).
+- **No config required to work.** `#@` injection needs no setup; the only setting is the opt-in `markdownBareAtImports` (§4.6). There are no toggles for format, image handling, paging, or context budget — those stay derived/fixed.
+
+---
+
