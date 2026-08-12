@@ -28,6 +28,13 @@
     "agents",
     "cli"
   ],
+  "dependencies": {
+    "defuddle": "^0.19.2",
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.0",
+    "mathml-to-latex": "^1.8.0",
+    "temml": "^0.13.3"
+  },
   "files": [
     "file-injector.ts",
     "README.md",
