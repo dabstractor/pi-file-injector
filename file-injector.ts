@@ -1540,12 +1540,30 @@ export default function (pi: ExtensionAPI) {
     // injected > 0 (the !injected early-return above left no stash). Cleared one-shot in before_agent_start.
     pending = { blocks, details };
 
-    // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). Unified wording: always
-    // "N whole"; append ", M paged" only when paging. paged===0 → "#@ injected N whole"; paged>0 →
-    // "#@ injected N whole, M paged".
-    const whole = injected - paged;
-    const msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
-    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 unified whole/paged wording; guarded for print/json headless modes (api_verification §5)
+    // §5.5 Notify — trigger-aware wording, guarded on ctx.hasUI (PRD §5.5 Notify; headless print/json modes have no ctx.ui).
+    // Three branches from the details[].kind breakdown (NO new return field / State change):
+    //   • urlCount === 0 (files only)        → "#@ injected N whole[, M paged]" — byte-for-byte the ORIGINAL string
+    //     (file-injector.test.mjs Case 9 + the notify cluster assert this verbatim; URLs never increment paged).
+    //   • fileCount === 0 (URLs only)        → "injected N URL[s]" — no '#@' reference, no whole/paged axis
+    //     (URLs can never be paged: injectUrl returns false on over-budget with NO paging).
+    //   • both > 0 (mixed)                   → files keep the '#@ injected … whole[, … paged]' axis, then ", N URL[s]".
+    // 1:1 invariant: details.length === injected (every count++ pairs with exactly one details.push).
+    const urlCount = details.filter((d) => d.kind === "url").length; // text/html/json/xml URLs; image-URLs are kind:"image" (count as files — out of scope)
+    const fileCount = injected - urlCount; // non-url kinds (text/image/binary/paged) are all files
+    let msg: string;
+    if (urlCount === 0) {
+      // FILES ONLY — byte-for-byte the ORIGINAL string (Case 9 / notify cluster assert this verbatim).
+      const whole = injected - paged;
+      msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
+    } else if (fileCount === 0) {
+      // URLS ONLY — no '#@', no whole/paged axis (BUG-002: was incorrectly "#@ injected 1 whole").
+      msg = `injected ${urlCount} URL${urlCount > 1 ? "s" : ""}`;
+    } else {
+      // MIXED — files keep the '#@ injected … whole[, … paged]' axis, then append the URL count.
+      const fileWhole = fileCount - paged; // paged ⊆ files (URLs never page) → fileWhole ≥ 0
+      msg = `#@ injected ${fileWhole} whole${paged > 0 ? `, ${paged} paged` : ""}, ${urlCount} URL${urlCount > 1 ? "s" : ""}`;
+    }
+    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 trigger-aware wording; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text: event.text, images }; // §6.4 — text VERBATIM (event.text, unchanged; the prompt is never modified so cancel/fork/re-open re-triggers injection; §13.8)
   });
 

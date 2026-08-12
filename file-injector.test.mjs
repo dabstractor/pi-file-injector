@@ -2985,6 +2985,67 @@ await runCase("MDV-2", "md verbatim (bare-@ on): top-level #@mdBare.md → its B
   assert(hasBlock(r, '<file name="' + API_BARE + '">'), `apiBare.md must STILL be injected (the bare-@ import resolved under markdownBareAtImports), got blocks=${JSON.stringify(r.blocks)}`);
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// BUG-002 — trigger-aware status notify for URL-only injections. (Failing-first: written BEFORE the fix,
+// so it FAILS here with "URL-only notify must NOT contain '#@'" — reproducing the bug — then PASSES once the
+// input handler's notify block computes urlCount/fileCount from details[].kind and switches wording.)
+// This is the SINGLE committed anchor; the comprehensive URL-only + mixed regression suite is P1.M2.T2.S1.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// BUG2-1 — URL-only prompt → notify must NOT say '#@'. Drives the real input handler with a URL-only prompt
+// (stub globalThis.fetch → rich HTML that clears the 200-char SPA floor), then asserts the toast reads
+// "injected 1 URL" with no '#@' reference. cfg stays {} (captureHandler does not fire session_start) →
+// enableUrls defaults enabled (undefined !== false), so the URL branch runs with zero config.
+await runCase("BUG2-1", "BUG-002: URL-only prompt → notify must NOT say '#@'", async () => {
+  const origFetch = globalThis.fetch;
+  const { ctx, rec } = makeMockCtx(TMPDIR, { hasUI: true });
+  const slot = captureHandler();
+  // RICH_HTML_INLINE — a real <article> (title + 3 substantial paragraphs, ~3 KB). Calibrated: defuddle
+  // extracts ~1024 chars of markdown, comfortably clearing URL_MIN_CONTENT (200). A trivial "<p>hi</p>"
+  // may extract <200 chars → SPA fallback → injected===0 → notify never fires → can't assert wording.
+  const html = `<!doctype html><html><head><title>Example Domain</title></head><body>
+<article>
+<h1>Welcome to the Example Domain</h1>
+<p>This domain is for use in illustrative examples in documents. You may use this domain in literature without
+prior coordination or asking for permission. It is a long paragraph that contains substantial prose content
+designed to exceed the two hundred character minimum threshold that the SPA empty extraction guard enforces.</p>
+<p>More information about this example domain can be found in the RFC documents and the IANA registry. The domain
+is reserved for documentation and testing purposes so that developers have a stable placeholder to reference in
+tutorials, configuration samples, and integration test suites across many different kinds of software products.</p>
+<p>A third paragraph ensures the extracted markdown comfortably clears the minimum threshold even after defuddle
+strips navigation chrome, sidebars, footers, cookie banners, and other boilerplate that modern web pages include
+around their main article body content on the page.</p>
+</article></body></html>`;
+  const buf = Buffer.from(html, "utf8");
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: (k) => (k.toLowerCase() === "content-type" ? "text/html" : null) },
+      body: {
+        getReader: () => {
+          let done = false;
+          return {
+            read: async () => {
+              if (done) return { done: true, value: undefined };
+              done = true;
+              return { done: false, value: buf }; // one chunk; Buffer IS a Uint8Array
+            },
+          };
+        },
+      },
+      text: async () => buf.toString("utf8"), // readers' no-reader fallback (not used when getReader exists)
+    });
+    const out = await slot.cb({ text: "see #example.com", source: "interactive", images: [] }, ctx);
+    assert(out.action === "transform", `handler must transform (a URL WAS injected); got ${out.action}`);
+    assert(rec.notify, "notify must fire (a URL WAS injected)");
+    assert(!rec.notify.m.includes("#@"), `URL-only notify must NOT contain '#@'; got ${JSON.stringify(rec.notify.m)}`);
+    assert(rec.notify.t === "info", `notify type must be 'info'; got ${rec.notify.t}`);
+  } finally {
+    globalThis.fetch = origFetch; // ALWAYS restore — a leaked stub poisons later cases and can hit the real network
+  }
+});
+
 // 10. Summary + cleanup + exit.
 // ──────────────────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(64));
