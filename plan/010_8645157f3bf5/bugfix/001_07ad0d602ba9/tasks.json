@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "URL Shape Gate and Notify Bugfix Release",
-      "status": "Ready",
+      "status": "Complete",
       "description": "Fix the two bugs identified in the end-to-end validation PRD: BUG-001 (Major) — the URL_SHAPE_RE gate matches common code-file extensions as alpha-TLD hostnames, causing unwanted network fetches and content injection for everyday coding prose like '#main.go'. BUG-002 (Minor) — the status toast says '#@ injected' even for URL-only injections. Both fixes are localized to file-injector.ts and its test suite, with no API surface changes.",
       "milestones": [
         {
@@ -127,21 +127,21 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Changeset-level documentation sync",
-          "status": "Ready",
+          "status": "Complete",
           "description": "Update README.md to honestly document the code-extension deny-list behavior and correct the false-confidence framing about '#3.14/#v1.2/#fff rejected' that gave users the impression #filename.ext was safe.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M3.T1",
               "title": "Sync changeset-level documentation",
-              "status": "Ready",
+              "status": "Complete",
               "description": "Update README.md's URL detection section to reflect the tightened URL shape gate and the code-extension deny-list. Correct the false-confidence framing and document the workaround for blocked domains.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T1.S1",
                   "title": "Update README.md URL detection documentation",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
