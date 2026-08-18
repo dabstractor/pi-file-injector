@@ -151,7 +151,7 @@
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "LINE-7…LINE-12 regression gates + full-suite green",
-              "status": "Planned",
+              "status": "Ready",
               "description": "R4: add the six named gates from spec/17-line-ranges.md §9 to file-injector.test.mjs using the existing runCase harness, then sweep npm test (4 files) and npm run typecheck to green. The implementing subtasks already carry TDD tests; these gates pin the exact spec matrix and guard against regressions.",
               "subtasks": [
                 {
@@ -177,7 +177,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "Gates LINE-8 / LINE-11 / LINE-12 (paged slice, past-EOF, clamped display)",
-                  "status": "Complete",
+                  "status": "Ready",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",
@@ -197,7 +197,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S3",
                   "title": "Full-suite green sweep: npm test (4 files) + npm run typecheck",
-                  "status": "Planned",
+                  "status": "Ready",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S3",

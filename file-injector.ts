@@ -25,7 +25,7 @@ const BARE_AT_RE = /(^|(?<![\p{L}\p{N}_#]))@(\S+)/gu;
  *  Wires into the URL scan loop via `text.matchAll(URL_INJECT_RE)` → `m[2]` (P1.M1.T2.S3). NOT exported. */
 const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
 /** PRD §2.3 — an anchored shape gate: a candidate token is treated as a URL iff it has an explicit scheme
- *  (`https?|ftp`) OR a dotted host whose final label is an alpha TLD (2+ letters); optional `:port` and
+ *  (`https?`) OR a dotted host whose final label is an alpha TLD (2+ letters); optional `:port` and
  *  optional `/path`. Case-insensitive (`i` flag; no `u` flag — no `\p{}` classes or lookbehind here).
  *  Leaves ordinary `#word` prose untouched: `#Heading`, `#1234` (issue ref), `#fff` (hex), `#3.14`,
  *  `#v1.2` (final label numeric → fails the alpha-TLD gate), and `C#`/`objective-C#` (mid-word, never a
@@ -36,18 +36,18 @@ const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
  *  URL — the URL scan loop skips it before fetch (see `CODE_EXTENSIONS`). This eliminates the
  *  false-positive class created by the final-label `[a-z]{2,}` gate (which accepts every 2+ letter alpha
  *  string as a "TLD"). A slash-bearing scheme-less token (e.g. `#example.com/img.png`) is a real domain +
- *  path and is NOT gated. Explicit-scheme tokens (`#https://…`, `#http://…`, `#ftp://…`) bypass the
+ *  path and is NOT gated. Explicit-scheme tokens (`#https://…`, `#http://…`) bypass the
  *  deny-list entirely — use that form to force-fetch a domain whose TLD collides with a code extension
  *  (e.g. `#https://node.js`, `#https://foo.sh`). Wires into the URL loop as
  *  `URL_SHAPE_RE.test(cleanToken(m[2]))` (P1.M1.T2.S3). NOT exported. */
-const URL_SHAPE_RE = /^((https?|ftp):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
+const URL_SHAPE_RE = /^((https?):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
 /** [BUG-001] Code-extension deny-list. A scheme-less, PATH-LESS (bare `word.ext`) token whose final
  *  label (the substring after the LAST '.', lowercased) is in this Set is treated as a LOCAL FILE
  *  reference, NOT a URL — the URL scan loop skips it (no fetch, no normalization, no injection). This
  *  targets the exact BUG-001 false-positive shape (`#main.go`, `#notes.md`, `#config.json`, `#node.js`)
  *  where the alpha-TLD gate's final label IS the extension; a slash-bearing scheme-less token (e.g.
  *  `#example.com/img.png`) is a real domain + path and is NOT gated (its alpha-TLD final label is the
- *  TLD, not the path extension). Explicit-scheme tokens (#https://…, #http://…, #ftp://…) bypass this
+ *  TLD, not the path extension). Explicit-scheme tokens (#https://…, #http://…) bypass this
  *  list entirely. Covers the common coding / config / doc / image / archive extensions. NOT a real-TLD
  *  list: com/org/net/io/dev/app/ai/co/me/xyz etc. are deliberately ABSENT so legitimate domains still
  *  fetch (DET-1, DET-2). A few entries overlap real ccTLDs (.sh, .py): in a coding agent these mean a
@@ -1491,7 +1491,7 @@ const resumeLine = headLines + 1; // 1-indexed: first line AFTER the complete li
  */
 function emitWholeText(abs: string, content: string, state: State, rangeSuffix?: string): void {
   const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
-  const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1; // empty → 0
+  const lineCount = countLines(content); // wc-l semantics (consistent with range validation; empty → 0)
   state.blocks.push(formatTextFileBlock(abs, content));
   state.details.push(rangeSuffix === undefined
     ? { path: abs, kind: "text", chars: content.length, lines: lineCount } // §12.22 — offsets computed by computeDetailOffsets in before_agent_start
@@ -1650,10 +1650,10 @@ export async function injectFiles(
         // class where the alpha-TLD gate's final label IS the extension (`#main.go`, `#notes.md`,
         // `#config.json`, `#node.js`). A slash-bearing scheme-less token (`#example.com/img.png`) is a
         // real domain + path — its alpha-TLD final label is the TLD (`com`), not the path extension, so
-        // it is NOT gated (it fetches). Explicit-scheme tokens (#https://…/#http://…/#ftp://…) bypass
+        // it is NOT gated (it fetches). Explicit-scheme tokens (#https://…/#http://…) bypass
         // this check entirely (URL_SHAPE_RE Alternative A). See CODE_EXTENSIONS + the JSDoc on
         // URL_SHAPE_RE. Mirrors the scheme test used by the normalization below it.
-        if (!/^https?:\/\//i.test(tok) && !/^ftp:\/\//i.test(tok) && !tok.includes("/")) {
+        if (!/^https?:\/\//i.test(tok) && !tok.includes("/")) {
           const finalLabel = tok.slice(tok.lastIndexOf(".") + 1).toLowerCase();
           if (CODE_EXTENSIONS.has(finalLabel)) continue;
         }

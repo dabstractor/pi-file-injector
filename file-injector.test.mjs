@@ -2487,8 +2487,8 @@ await runCase("DELIV-1", "injectFiles return shape: r.text stripped (no ---/<fil
   assert(d.path === A_TS, `details[0].path is the resolved a.ts abs, got ${d.path}`);
   assert(d.kind === "text", `details[0].kind === 'text', got ${d.kind}`);
   assert(d.chars === A_TS_CONTENT.length, `details[0].chars is the content length (${A_TS_CONTENT.length}), got ${d.chars}`);
-  const expectedLines = (A_TS_CONTENT.match(/\n/g) || []).length + 1;
-  assert(d.lines === expectedLines, `details[0].lines is newline-count+1 (${expectedLines}), got ${d.lines}`);
+  const expectedLines = mod.countLines(A_TS_CONTENT);
+  assert(d.lines === expectedLines, `details[0].lines is wc-l (${expectedLines}, countLines semantics — consistent with range validation), got ${d.lines}`);
 });
 
 // DELIV-2 — CUSTOM MESSAGE (full contract). before_agent_start publishes
