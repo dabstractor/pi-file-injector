@@ -71,16 +71,21 @@ export default function (pi: ExtensionAPI) {
 // §6.3 renderer: green (toolSuccessBg) box, one `read <path>` line per file, expandable.
 function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
   const files: FileDetail[] = message?.details?.files ?? [];
-  const bodies: string[] = [];
+  const bodiesByPath = new Map<string, string[]>();  // path → FIFO (paged = 2 blocks / 1 detail; index pairing mis-fires)
   if (typeof message?.content === "string")
-    for (const m of message.content.matchAll(/<file name="[^"]+">([\s\S]*?)<\/file>/g)) bodies.push(m[1].replace(/^\n|\n$/g, ""));
+    for (const m of message.content.matchAll(/<file name="([^"]+)">([\s\S]*?)<\/file>/g)) {
+      const q = bodiesByPath.get(m[1]) ?? []; q.push(m[2].replace(/^\n|\n$/g, "")); bodiesByPath.set(m[1], q);
+    }
   const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));
   if (!files.length) { box.addChild(new Text(theme.fg("toolTitle", theme.bold("read")) + " " + theme.fg("dim", "(injected files)") + " (ctrl+o to expand)", 0, 0)); return box; }
   files.forEach((d, i) => {
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? " (ctrl+o to expand)" : ""), 0, 0));
-    if (opts.expanded && bodies[i] !== undefined && d.kind !== "image") {
-      const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
-      box.addChild(new Text(theme.fg("toolOutput", lang ? highlightCode(bodies[i], lang).join("\n") : bodies[i]), 0, 0));
+    if (opts.expanded && d.kind !== "image") {
+      const body = bodiesByPath.get(d.path)?.shift();   // path-paired pop (BUG-001); undefined → no body child
+      if (body !== undefined) {
+        const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
+        box.addChild(new Text(theme.fg("toolOutput", lang ? highlightCode(body, lang).join("\n") : body), 0, 0));
+      }
     }
   });
   return box;

@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Remediate end-to-end validation defects (BUG-001..BUG-005)",
-      "status": "Planned",
+      "status": "Complete",
       "description": "Fix the five issues found by end-to-end validation of the pi-file-injector extension against its PRD: one Major display bug (expanded chat view body misalignment after a paged file, BUG-001) and four Minor robustness/spec-parity issues (markdown-level malformed ranges silent + raw-token leak BUG-002; empty-body URL image attaches empty ImageContent BUG-003; autocomplete remap mangles non-@ values BUG-004; ftp:// scheme dropped from the URL shape gate BUG-005). All fixes are confined to file-injector.ts (1932 lines, single-file extension) plus its 4 standalone .mjs test harnesses, README.md, and spec/. Hard invariants (see plan/011_e473dac8178b/bugfix/001_a6ffb98ab096/architecture/system_context.md): NO new exports (module-surface allowlist test at file-injector.test.mjs:141-155), model-facing message.content unchanged for correct cases, unique new test-case labels (existing BUG-001/BUG-002 labels refer to older bugs), every subtask ships failing-test-first then fix, npm test + npm run typecheck green as Definition of Done.",
       "milestones": [
         {
@@ -200,14 +200,14 @@
           "type": "Milestone",
           "id": "P1.M4",
           "title": "Changeset-level documentation sync",
-          "status": "Planned",
+          "status": "Complete",
           "description": "Final sweep so the coherent delta ships with coherent docs: verify README.md reflects all five fixes (display correctness now matching existing promises, malformed-range warning inside markdown, empty URL image note, autocomplete pass-through, ftp/http(s) scheme limits) and that spec/ files touched by the fixes are consistent with shipped behavior. Runs LAST — depends on every implementing subtask.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M4.T6",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Complete",
               "description": "Changeset-level doc files: README.md (the ONLY user doc, 221 lines) and a consistency pass over the spec/ parts this changeset touches (spec/14-autocomplete.md, spec/15-url-injection.md, spec/17-line-ranges.md, spec/06-delivery-display.md). Per-file riders already rode with each implementing subtask (Mode A); this task verifies coherence and adds the cross-cutting notes that only make sense once the whole change is in place.",
               "subtasks": [
                 {
@@ -242,7 +242,7 @@
                   "type": "Subtask",
                   "id": "P1.M4.T6.S2",
                   "title": "spec/ consistency pass over changeset-touched parts",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

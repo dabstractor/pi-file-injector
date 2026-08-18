@@ -40,7 +40,7 @@ const LINE_RANGE_RE = /:(\d+)(?:-(\d+))?$/;
 
 1. `resolveImportPath(token, …)` — exact, suffix included.
 2. If unresolved: parse the suffix (§2.2). If valid, `resolveImportPath(strippedPath, …)`; on success attach `startLine`/`endLine`.
-3. Still unresolved → verbatim (LR-3 may add a notify).
+3. Still unresolved → verbatim **and** the LR-3 warning notify (prompt level and delivered-markdown scan alike).
 
 The §4.5 relative-only guard re-runs on the **stripped** path (a markdown import `#@/etc/hosts:10` is ignored just like `#@/etc/hosts`).
 
@@ -82,7 +82,7 @@ The §4.5 relative-only guard re-runs on the **stripped** path (a markdown impor
 
 The extension already owns a status-notify channel (§5.5 Notify; §15's spinner/notify). A user who typed an explicit range has explicit intent; silence is the wrong answer when nothing is delivered.
 
-- **LR-3 — malformed ranges are not silent.** A cleaned token whose trailing suffix matches `:\d+(-\d+)?` but fails validation (`:0`, `:5-3`), and which resolves to no file, is left verbatim (current behavior) **and** reports a hasUI-guarded warning notify, e.g. `#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)`. Today these tokens vanish with zero feedback.
+- **LR-3 — malformed ranges are not silent.** A cleaned token whose trailing suffix matches `:\d+(-\d+)?` but fails validation (`:0`, `:5-3`), and which resolves to no file, is left verbatim **and** reports a hasUI-guarded warning notify, e.g. `#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)` — uniformly at the prompt **and** inside a delivered markdown file: the import scan's malformed-range guard mirrors the prompt-level one (the marker stays verbatim in the shipped body, the warning fires with `hasUI`, and the raw token is never re-injected as a path).
 - **LR-4 — a start past EOF is a failed token, not an empty block.** `#@a.ts:99` on a 5-line file MUST NOT deliver an empty `<file>` block (current behavior: empty block, `injected=1`, a `read a.ts:99` line). Leave the token verbatim, revoke the claim (claim ⟺ delivered, §12.5), and notify `#@a.ts:99 — not injected (file has 5 lines)`. Mirrors the `read` tool, which errors on past-EOF rather than returning nothing. A clamped **end**, by contrast, still delivers (the intersecting lines) — clamping a typo'd end is recovery, not failure.
 - **LR-5 — display shows what was delivered.** When `end` clamps, `FileDetail.range` and the collapsed read line show the **clamped** range: `read a.ts:2-5` for `#@a.ts:2-100000` on a 5-line file (display and delivery agree). Showing the requested-but-undelivered range misleads both user and model.
 
@@ -98,6 +98,7 @@ A ranged text slice renders through the normal read-line with the range suffix i
 | `#@a.ts:2-3` | Lines 2–3 inclusive; `read a.ts:2-3`. |
 | `#@a.ts:2.` | Trim first → line 2 (§2.1). |
 | `#@a.ts:0` / `#@a.ts:5-3` | Not a range; literal fallback fails → verbatim **+ warning notify** (LR-3). |
+| `#@a.md:0` inside a delivered markdown file | Same as above — marker stays verbatim in the shipped body **+ warning notify** (LR-3 parity between prompt and import scan); the raw token is never resolved or injected. |
 | `#@a.ts:99` (5-line file) | Verbatim, no block, claim revoked, **notify** (LR-4). |
 | `#@a.ts:2-100000` (5-line file) | Lines 2–5 delivered; displayed `read a.ts:2-5` (LR-5). |
 | `#@empty.txt:1` | Past-EOF on a 0-line file → verbatim + notify (LR-4). |

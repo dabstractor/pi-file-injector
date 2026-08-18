@@ -1088,16 +1088,24 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 // ---------- §6.3 chat renderer (registered for "fileInjector.injected") ---------------------
 // Replicates the read tool's completed-call look: a green (toolSuccessBg) box, one `read <path>` line
 // per file when collapsed, full content when expanded. Blocks (message.content) and details.files are
-// co-emitted in the same order (§6.4), so they align by index.
+// emitted in the same order (§6.4). Blocks and details are order-aligned but NOT
+// 1:1 — a paged path emits TWO blocks (head + directive) for ONE detail.
 const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
 function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
   const files: FileDetail[] = message?.details?.files ?? [];
-  // pair each detail with its block body (re-parsed from content) by index
-  const bodies: string[] = [];
+  // pair each detail with its block body (re-parsed from content) BY PATH, not by index:
+  // a paged path emits TWO blocks (head + directive) but ONE detail, so index pairing drifts
+  // +1 per preceding paged file and would show the directive as a following url/binary body.
+  // (Real entries recover bodies via stored offsets first; this regex is the defensive fallback.)
+  const bodiesByPath = new Map<string, string[]>();   // path → FIFO of block bodies, emission order
   if (typeof message?.content === "string") {
     let m: RegExpExecArray | null;
     FILE_BLOCK_RE.lastIndex = 0;
-    while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) bodies.push(m[2].replace(/^\n|\n$/g, ""));
+    while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) {
+      const q = bodiesByPath.get(m[1]) ?? [];
+      q.push(m[2].replace(/^\n|\n$/g, ""));
+      bodiesByPath.set(m[1], q);
+    }
   }
   const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));   // green, like a completed read call
   if (files.length === 0) {                                               // defensive fallback (old/foreign entry)
@@ -1111,7 +1119,7 @@ function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme:
     const d = files[i];
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
     if (opts.expanded) {
-      const body = bodies[i];
+      const body = bodiesByPath.get(d.path)?.shift(); // pop in emission order; a paged detail pops its head
       if (body !== undefined && d.kind !== "image") {                     // images already shown via user-message attachment
         const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
         const rendered = lang ? highlightCode(body, lang).join("\n") : body;
@@ -1338,7 +1346,7 @@ pi.registerCommand("sharp-at-test", {
 20. **Two hooks, one stash.** File I/O and classification happen in the `input` handler (the only place to rewrite the prompt); publishing the result happens in `before_agent_start` (the only hook whose returned `message` lands after the user message, persists, and reaches the LLM). The closure variable `pending` is the handoff — set in `input`, read-and-cleared in `before_agent_start`. Because `prompt()` runs `input` → … → `before_agent_start` → `runAgentPrompt` sequentially in one awaited call, there is no race and no need for locking. Clear `pending` unconditionally in `before_agent_start` (one-shot per prompt) so a later non-`#@` prompt never re-delivers a stale stash.
 21. **One custom message per prompt; the renderer decomposes it.** `BeforeAgentStartEventResult.message` is singular (one per handler), so all files pack into one custom message; the `MessageRenderer` reads `details.files` and draws one `read <path>` line per file (§6.3). Expand/collapse is unit-level for the whole box (matches the `[skill]` precedent); independent per-file expansion is not supported under this API.
 22. **`details` is renderer-only — never sent to the model.** `convertToLlm()` maps a custom message to a user-role message using only `content`; `details` is ignored. So `FileDetail` metadata (paths, kinds, line counts, ranges, dimension hints) costs zero model tokens. Do **not** duplicate file bytes into `details` — the renderer re-parses them from `content` (§6.3 `FILE_BLOCK_RE`), keeping `details` cheap and the model input uncontaminated.
-23. **Renderer must be defensive and never throw.** A thrown renderer is caught by `CustomMessageComponent`, which falls back to Pi's default `[fileInjector.injected]` purple box — acceptable but not the goal. Guard `message.details?.files` (may be absent on old/foreign entries), guard `bodies[i]`, and short-circuit the image expanded-view (images are already attached to the user message; don't re-render them).
+23. **Renderer must be defensive and never throw.** A thrown renderer is caught by `CustomMessageComponent`, which falls back to Pi's default `[fileInjector.injected]` purple box — acceptable but not the goal. Guard `message.details?.files` (may be absent on old/foreign entries), guard the path-paired body pop (`bodiesByPath.get(d.path)?.shift()` — a paged file is 2 blocks / 1 detail, so index pairing mis-fires), and short-circuit the image expanded-view (images are already attached to the user message; don't re-render them).
 24. **Color/green choice is deliberate.** Use `toolSuccessBg` (green) — the *exact* background the `read` tool uses for a completed call — and `toolTitle`+bold for the `read` title, `accent` for the path. Do **not** use `customMessageBg` (purple); purple is for `[skill]`/custom messages, and the user explicitly wants injected files to read like tool calls, not like skills. The only shared affordance with skills is the collapse/expand (ctrl+o) behavior.
 25. **Path display tildifies; the real `renderToolPath` is internal.** Pi's `renderToolPath`/`formatPathRelativeToCwdOrAbsolute` are not exported, so the renderer tildifies (leading `os.homedir()` → `~`) — the closest portable match to the read tool's display and exactly what the user's example showed (`read ~/.local/share/…/disk-passthrough-methods.md`). The expand hint is hardcoded `ctrl+o` (the default binding) for the same reason (`keyText()` is internal).
 26. **Line ranges (§17): slice before every downstream decision; claim by classification.** Parse the `:N`/`:N-M` suffix only after §4.3 trimming and only on tokens whose full form doesn't resolve (exact-path-wins). Slice the decoded content FIRST — the budget decision (LR-1: a range is not an overflow override; a paged slice's directive resumes in file coordinates), the markdown import scan (LR-6), block emission, and `FileDetail.range` (LR-5: show the clamped, delivered range) all run on the slice. Dedup keys are canonical (`:N-N` ≡ `:N`), and images/binaries claim the **bare** abs — a range is meaningless identity for them and must not duplicate bytes (LR-2). A malformed range or a past-EOF start is a failed token: verbatim + warning notify, never an empty block, claim revoked (LR-3/LR-4; claim ⟺ delivered). When landing LR-1, unify the cost/lines/push/subtract quadruple in `emitText` instead of adding a fourth copy.
@@ -1439,7 +1447,7 @@ gate alone is insufficient. Reverted.
 **Shipped: Option 1 — line-rewrite reuse.** In `getSuggestions`, detect `#@<partial>` at the cursor,
 rewrite that one `#` into a space (so the built-in sees a clean `@<partial>` at a valid boundary),
 delegate to `current.getSuggestions(...)`, then remap the result back to `#@`: `prefix "@<partial>"`
-→ `"#@<partial>"` and each item value `@<path>` → `#@<path>`. `applyCompletion` is implemented
+→ `"#@<partial>"` and each item value `@<path>` → `#@<path>`. Item values that do not start with `@` (or `#@`) — for example a stray slash-command suggestion mixed into an `@` query — are passed through untouched, as are non-string values. `applyCompletion` is implemented
 inline for `#@` prefixes (deterministic replace, cursor placed after the inserted value) and
 delegates otherwise; `shouldTriggerFileCompletion` delegates to the built-in unchanged. This reuses
 Pi's entire file engine — gitignore-aware `fd` listing, sorting, fuzzy matching — with **zero**
@@ -1789,7 +1797,7 @@ text files). Images delivered via URL go through the existing image branch.
 | `#example.com` mid-word `foo#example.com` | not matched (`#` not at boundary). |
 | `#v1.2` / `#3.14` | not URL-shaped → untouched prose. |
 | `#node.js` | deny-listed as a local-file reference (code extension `js`) → no fetch, untouched prose. Use `#https://node.js` to fetch. |
-| `ftp://` scheme | supported by `URL_SHAPE_RE`; fetch via `fetch` (Node supports it). |
+| `ftp://` scheme | accepted by `URL_SHAPE_RE` (§2.2 literal), but Node's `fetch` (undici) has no ftp support — the fetch throws (`TypeError: fetch failed`), so the token falls back to verbatim via the §3.5 catch (no block, no injection; the §3.6 footer spinner may flash — a fetch is genuinely attempted). |
 
 ---
 
@@ -1811,7 +1819,7 @@ if (cfg.enableUrls) {
   for (const m of event.text.matchAll(URL_INJECT_RE)) {
     const tok = cleanToken(m[2]);
     if (tok && URL_SHAPE_RE.test(tok)) {
-      const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
+      const abs = /^(https?|ftp):\/\//i.test(tok) ? tok : "https://" + tok;
       if (!state.injectedSet.has(abs)) {
         state.injectedSet.add(abs);
         onUrlFetch?.(abs);          // §3.6 — footer loading indicator (UI-only; undefined → no-op)
@@ -1986,16 +1994,21 @@ export default function (pi: ExtensionAPI) {
 // §6.3 renderer: green (toolSuccessBg) box, one `read <path>` line per file, expandable.
 function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
   const files: FileDetail[] = message?.details?.files ?? [];
-  const bodies: string[] = [];
+  const bodiesByPath = new Map<string, string[]>();  // path → FIFO (paged = 2 blocks / 1 detail; index pairing mis-fires)
   if (typeof message?.content === "string")
-    for (const m of message.content.matchAll(/<file name="[^"]+">([\s\S]*?)<\/file>/g)) bodies.push(m[1].replace(/^\n|\n$/g, ""));
+    for (const m of message.content.matchAll(/<file name="([^"]+)">([\s\S]*?)<\/file>/g)) {
+      const q = bodiesByPath.get(m[1]) ?? []; q.push(m[2].replace(/^\n|\n$/g, "")); bodiesByPath.set(m[1], q);
+    }
   const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));
   if (!files.length) { box.addChild(new Text(theme.fg("toolTitle", theme.bold("read")) + " " + theme.fg("dim", "(injected files)") + " (ctrl+o to expand)", 0, 0)); return box; }
   files.forEach((d, i) => {
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? " (ctrl+o to expand)" : ""), 0, 0));
-    if (opts.expanded && bodies[i] !== undefined && d.kind !== "image") {
-      const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
-      box.addChild(new Text(theme.fg("toolOutput", lang ? highlightCode(bodies[i], lang).join("\n") : bodies[i]), 0, 0));
+    if (opts.expanded && d.kind !== "image") {
+      const body = bodiesByPath.get(d.path)?.shift();   // path-paired pop (BUG-001); undefined → no body child
+      if (body !== undefined) {
+        const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
+        box.addChild(new Text(theme.fg("toolOutput", lang ? highlightCode(body, lang).join("\n") : body), 0, 0));
+      }
     }
   });
   return box;
@@ -2065,7 +2078,7 @@ const LINE_RANGE_RE = /:(\d+)(?:-(\d+))?$/;
 
 1. `resolveImportPath(token, …)` — exact, suffix included.
 2. If unresolved: parse the suffix (§2.2). If valid, `resolveImportPath(strippedPath, …)`; on success attach `startLine`/`endLine`.
-3. Still unresolved → verbatim (LR-3 may add a notify).
+3. Still unresolved → verbatim **and** the LR-3 warning notify (prompt level and delivered-markdown scan alike).
 
 The §4.5 relative-only guard re-runs on the **stripped** path (a markdown import `#@/etc/hosts:10` is ignored just like `#@/etc/hosts`).
 
@@ -2107,7 +2120,7 @@ The §4.5 relative-only guard re-runs on the **stripped** path (a markdown impor
 
 The extension already owns a status-notify channel (§5.5 Notify; §15's spinner/notify). A user who typed an explicit range has explicit intent; silence is the wrong answer when nothing is delivered.
 
-- **LR-3 — malformed ranges are not silent.** A cleaned token whose trailing suffix matches `:\d+(-\d+)?` but fails validation (`:0`, `:5-3`), and which resolves to no file, is left verbatim (current behavior) **and** reports a hasUI-guarded warning notify, e.g. `#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)`. Today these tokens vanish with zero feedback.
+- **LR-3 — malformed ranges are not silent.** A cleaned token whose trailing suffix matches `:\d+(-\d+)?` but fails validation (`:0`, `:5-3`), and which resolves to no file, is left verbatim **and** reports a hasUI-guarded warning notify, e.g. `#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)` — uniformly at the prompt **and** inside a delivered markdown file: the import scan's malformed-range guard mirrors the prompt-level one (the marker stays verbatim in the shipped body, the warning fires with `hasUI`, and the raw token is never re-injected as a path).
 - **LR-4 — a start past EOF is a failed token, not an empty block.** `#@a.ts:99` on a 5-line file MUST NOT deliver an empty `<file>` block (current behavior: empty block, `injected=1`, a `read a.ts:99` line). Leave the token verbatim, revoke the claim (claim ⟺ delivered, §12.5), and notify `#@a.ts:99 — not injected (file has 5 lines)`. Mirrors the `read` tool, which errors on past-EOF rather than returning nothing. A clamped **end**, by contrast, still delivers (the intersecting lines) — clamping a typo'd end is recovery, not failure.
 - **LR-5 — display shows what was delivered.** When `end` clamps, `FileDetail.range` and the collapsed read line show the **clamped** range: `read a.ts:2-5` for `#@a.ts:2-100000` on a 5-line file (display and delivery agree). Showing the requested-but-undelivered range misleads both user and model.
 
@@ -2123,6 +2136,7 @@ A ranged text slice renders through the normal read-line with the range suffix i
 | `#@a.ts:2-3` | Lines 2–3 inclusive; `read a.ts:2-3`. |
 | `#@a.ts:2.` | Trim first → line 2 (§2.1). |
 | `#@a.ts:0` / `#@a.ts:5-3` | Not a range; literal fallback fails → verbatim **+ warning notify** (LR-3). |
+| `#@a.md:0` inside a delivered markdown file | Same as above — marker stays verbatim in the shipped body **+ warning notify** (LR-3 parity between prompt and import scan); the raw token is never resolved or injected. |
 | `#@a.ts:99` (5-line file) | Verbatim, no block, claim revoked, **notify** (LR-4). |
 | `#@a.ts:2-100000` (5-line file) | Lines 2–5 delivered; displayed `read a.ts:2-5` (LR-5). |
 | `#@empty.txt:1` | Past-EOF on a 0-line file → verbatim + notify (LR-4). |

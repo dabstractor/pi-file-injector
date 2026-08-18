@@ -399,16 +399,24 @@ function formatPagedDirectiveBlock(abs: string, len: number, startLine: number, 
 // ---------- §6.3 chat renderer (registered for "fileInjector.injected") ---------------------
 // Replicates the read tool's completed-call look: a green (toolSuccessBg) box, one `read <path>` line
 // per file when collapsed, full content when expanded. Blocks (message.content) and details.files are
-// co-emitted in the same order (§6.4), so they align by index.
+// emitted in the same order (§6.4). Blocks and details are order-aligned but NOT
+// 1:1 — a paged path emits TWO blocks (head + directive) for ONE detail.
 const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
 function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme: any): Component {
   const files: FileDetail[] = message?.details?.files ?? [];
-  // pair each detail with its block body (re-parsed from content) by index
-  const bodies: string[] = [];
+  // pair each detail with its block body (re-parsed from content) BY PATH, not by index:
+  // a paged path emits TWO blocks (head + directive) but ONE detail, so index pairing drifts
+  // +1 per preceding paged file and would show the directive as a following url/binary body.
+  // (Real entries recover bodies via stored offsets first; this regex is the defensive fallback.)
+  const bodiesByPath = new Map<string, string[]>();   // path → FIFO of block bodies, emission order
   if (typeof message?.content === "string") {
     let m: RegExpExecArray | null;
     FILE_BLOCK_RE.lastIndex = 0;
-    while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) bodies.push(m[2].replace(/^\n|\n$/g, ""));
+    while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) {
+      const q = bodiesByPath.get(m[1]) ?? [];
+      q.push(m[2].replace(/^\n|\n$/g, ""));
+      bodiesByPath.set(m[1], q);
+    }
   }
   const box = new Box(1, 1, (t: string) => theme.bg("toolSuccessBg", t));   // green, like a completed read call
   if (files.length === 0) {                                               // defensive fallback (old/foreign entry)
@@ -422,7 +430,7 @@ function renderInjectedMessage(message: any, opts: { expanded: boolean }, theme:
     const d = files[i];
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
     if (opts.expanded) {
-      const body = bodies[i];
+      const body = bodiesByPath.get(d.path)?.shift(); // pop in emission order; a paged detail pops its head
       if (body !== undefined && d.kind !== "image") {                     // images already shown via user-message attachment
         const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
         const rendered = lang ? highlightCode(body, lang).join("\n") : body;
