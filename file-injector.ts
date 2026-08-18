@@ -190,6 +190,19 @@ export function sliceLines(content: string, startLine: number, endLine: number):
   return parts.slice(startLine - 1, endLine).join("\n");
 }
 
+/** LR-4 (PRD §17.4/§17.6) — the file's line count under the SAME trailing-newline ("wc -l") semantics as
+ *  sliceLines: a single trailing final newline does NOT create an extra line. A 0-byte file has 0 lines
+ *  (the explicit special case — `"".split("\n")` would naively yield one empty part, but the spec pins
+ *  `#@empty.txt:1` as past-EOF). CONSUMER: injectFile's markdown + text branches fail a ranged token whose
+ *  startLine exceeds this count (past-EOF start ⟹ failed token: no empty block, claim revoked, warning
+ *  notify — mirroring the read tool, which errors past EOF). NOTE for non-empty content this equals
+ *  sliceLines' internal parts.length; only "" diverges (1 vs 0), and the guard runs before sliceLines.
+ *  PURE: no I/O, no state. Exported for unit testing (LINE-4) — same convention as splitLineRange/sliceLines. */
+export function countLines(content: string): number {
+  if (content.length === 0) return 0; // 0-byte file → 0 lines (wc -l; PRD §17.4 — "#@empty.txt:1" is past-EOF)
+  return content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
+}
+
 /** Dedup key: bare path for a whole file, `path:N` / `path:N-M` for a range. Same path + different range → two claims. */
 function claimKey(abs: string, startLine?: number, endLine?: number): string {
   if (startLine === undefined) return abs;
@@ -1227,6 +1240,25 @@ async function processTokenStream(
   }
 }
 
+/** LR-4 (PRD §17.6) — shared past-EOF turn-away for injectFile's two line-bearing branches (text + markdown).
+ *  Empty delivered slice ⟹ failed token: revoke the path+range claim (claim ⟺ delivered, §12.5 — the same
+ *  invariant the catch block enforces for I/O failures), warn (interactive only), and return false so the
+ *  caller skips state.count++. The token stays verbatim (§6.4). Mirrors the read tool, which errors past
+ *  EOF rather than returning nothing. The notify shows the resolved ABS + the CANONICAL range (the typed
+ *  token is not plumbed to the inject layer; abs+range is unambiguous, matching the <file name="abs">
+ *  convention and the LR-7 claim keys) and the file's true wc-l line count. */
+function turnAwayPastEof(
+  abs: string, key: string, state: State, ctx: Ctx,
+  startLine: number, endLine: number | undefined, lineCount: number,
+): false {
+  state.injectedSet.delete(key); // release the claim — a later VALID token of the same file still injects
+  if (ctx.hasUI) {
+    const rangeSuffix = startLine === (endLine ?? startLine) ? `:${startLine}` : `:${startLine}-${endLine}`; // canonical (LR-7: :N, never :N-N)
+    ctx.ui?.notify(`#@${abs}${rangeSuffix} — not injected (file has ${lineCount} lines)`, "warning");
+  }
+  return false;
+}
+
 /**
  * PRD §9 / §5.1-§5.3 — stat → claim → classify → emit → count. Claims `abs` in state.injectedSet AFTER
  * stat+isFile succeed but BEFORE read, so a self-import or mid-recursion re-entry dedups to verbatim
@@ -1249,6 +1281,14 @@ async function processTokenStream(
  * pre-claim stays alongside the bare key harmlessly (picked policy, spec §3: ranged key deleted only on
  * turn-away, kept on delivery); a later ranged form of the same image/binary hits this same bare-abs check. Text/markdown branches keep pure
  * ranged claims (LR-7: distinct ranges are distinct deliveries).
+ *
+ * LR-4 (§17.6 — past-EOF starts): a ranged token whose startLine exceeds the file's wc-l line count is a
+ * FAILED token on both line-bearing paths (text + markdown): empty delivered slice ⟹ NO block, NO detail,
+ * NO count++, the path+range claim REVOKED (claim ⟺ delivered, §12.5), the token verbatim, and a
+ * hasUI-guarded warning notify `#@<abs>:<N> — not injected (file has <L> lines)` — mirroring the read
+ * tool, which errors past EOF rather than returning nothing. A clamped END still delivers (LR-5 recovery).
+ * The predicate is startLine > countLines(content) — NOT slice emptiness (a legitimate empty line
+ * delivers "" and must not fail). Images/binaries never reach the guard (LR-2 ignores their ranges).
  */
 export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?: number, endLine?: number): Promise<boolean> {
   let st;
@@ -1306,7 +1346,16 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
       // so import scanning always runs (§5.6 step 1). injectMarkdown (§5.6 six steps): claim self → scan
       // relative-only imports outside code → emit this block (paged decision) → recurse depth-first (pre-order).
       // line range slices the delivered body; import scan still runs on the (sliced) content.
-      await injectMarkdown(abs, buf.toString("utf8"), state, ctx, startLine, endLine);
+      // LR-4 (§17.6) — a start past EOF is a failed token for the line-bearing types (markdown included):
+      // no block, no detail, no count++, claim revoked, warning notify. A ranged markdown token past EOF
+      // must fail exactly like the text path — an empty <file> block would mislead (mirrors the read tool,
+      // which errors past EOF). A clamped END still delivers (clamping is LR-5 recovery, not failure).
+      const mdContent = buf.toString("utf8");
+      if (startLine !== undefined) {
+        const total = countLines(mdContent);
+        if (startLine > total) return turnAwayPastEof(abs, key, state, ctx, startLine, endLine, total);
+      }
+      await injectMarkdown(abs, mdContent, state, ctx, startLine, endLine);
     } else if (isBinary(buf)) {
       // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014). line range ignored.
       // LR-2 (§3 claim-by-type) — the effective claim is the BARE abs (see JSDoc claim semantics):
@@ -1321,7 +1370,14 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
       subtract(state, Math.ceil(binBlock.length / 4)); // §5.6.2 — note consumes budget
     } else {
       // PLAIN TEXT (PRD §5.1 + §5.5) — inline-vs-paged decision (lifted verbatim into emitText)
-      emitText(abs, buf.toString("utf8"), state, startLine, endLine);
+      // LR-4 (§17.6) — past-EOF start ⟹ failed token (see turnAwayPastEof / the markdown branch above for
+      // the full contract). startLine === lineCount is the LAST line and still DELIVERS; only > fails.
+      const txtContent = buf.toString("utf8");
+      if (startLine !== undefined) {
+        const total = countLines(txtContent);
+        if (startLine > total) return turnAwayPastEof(abs, key, state, ctx, startLine, endLine, total);
+      }
+      emitText(abs, txtContent, state, startLine, endLine);
     }
     state.count++; // exactly one delivery per claimed file
     return true;

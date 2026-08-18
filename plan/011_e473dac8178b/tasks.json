@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Core gap fixes in file-injector.ts",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Implement LR-1…LR-5 as behavior changes in emitText (slice budget/paging + clamped display + quadruple unification) and injectFile/scanTokens/splitLineRange (bare-abs claims, malformed-range notify, past-EOF failure). Each subtask carries its own failing-test-first coverage (implicit TDD); the named LINE-7…12 gates are formalized in P1.M2.T1.",
           "tasks": [
             {
@@ -81,7 +81,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "LR-2 claim-by-classification + LR-3/LR-4 failure feedback",
-              "status": "Researching",
+              "status": "Complete",
               "description": "R2: images/binaries claim the bare abs so identical bytes are never attached twice. R3: malformed ranges (:0, :5-3) that resolve to no file fire a hasUI-guarded warning notify instead of vanishing. LR-4: a start past EOF yields a failed token — verbatim, claim revoked, notify — never an empty <file> block.",
               "subtasks": [
                 {
@@ -121,7 +121,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S3",
                   "title": "LR-4: past-EOF start is a failed token (no empty block, claim revoked, notify)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -158,7 +158,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Gates LINE-7 / LINE-9 / LINE-10 (resolution, image dedup, malformed notify)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1",

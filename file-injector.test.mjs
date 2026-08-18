@@ -116,6 +116,7 @@ assert(typeof mod.injectFiles === "function", "mod.injectFiles must be a functio
 assert(typeof mod.cleanToken === "function", "mod.cleanToken must be a function");
 assert(typeof mod.splitLineRange === "function", "mod.splitLineRange must be a function (#@file:N / :N-M)");
 assert(typeof mod.sliceLines === "function", "mod.sliceLines must be a function (#@file:N / :N-M)");
+assert(typeof mod.countLines === "function", "mod.countLines must be a function (LR-4 wc-l line count; 0-byte → 0)");
 assert(typeof mod.formatTextFileBlock === "function", "mod.formatTextFileBlock must be a function");
 assert(typeof mod.formatImageBlock === "function", "mod.formatImageBlock must be a function");
 assert(typeof mod.formatBinaryBlock === "function", "mod.formatBinaryBlock must be a function");
@@ -141,7 +142,7 @@ assert(typeof mod.computeDetailOffsets === "function", "mod.computeDetailOffsets
 // injectMarkdown (the PRIVATE recursion driver) being accidentally exported. (PRD §11 "the gate must assert
 // the real shipped module surface"; item LOGIC (c).)
 const ASSERTED_EXPORTS = new Set([
-  "default", "injectFiles", "cleanToken", "splitLineRange", "sliceLines", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
+  "default", "injectFiles", "cleanToken", "splitLineRange", "sliceLines", "countLines", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
   "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
   "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
   "resolveImportPath", "isRegularFile", "readConfig", "renderInjectedMessage", "computeDetailOffsets",
@@ -3026,6 +3027,12 @@ await runCase("LINE-4", "splitLineRange / sliceLines unit helpers", async () => 
   assert(mod.sliceLines("a\nb\nc\n", 2, 3) === "b\nc", "lines 2-3");
   assert(mod.sliceLines("a\nb\nc\n", 1, 3) === "a\nb\nc", "whole");
   assert(mod.sliceLines("a\nb\nc\n", 99, 100) === "", "past EOF → empty");
+
+  // LR-4 — countLines unit pins (wc-l semantics + the 0-byte special case the naive parts-mirror gets wrong).
+  assert(mod.countLines("") === 0, "0-byte file → 0 lines (spec: #@empty.txt:1 is past-EOF)");
+  assert(mod.countLines("a") === 1, "no trailing newline → 1 line");
+  assert(mod.countLines("a\n") === 1, "single trailing newline ≠ extra line (wc -l)");
+  assert(mod.countLines("l1\nl2\nl3\nl4\nl5\n") === 5, "5 lines with trailing newline → 5");
 });
 
 await runCase("LINE-5", "scanTokens carries startLine+endLine on #@a.ts:2-4", async () => {
@@ -3164,6 +3171,68 @@ await runCase("LINE-10", "LR-3: #@a.ts:0 → injected:0, prompt verbatim, warnin
     assert(hasBlock(r4, "literal colon-zero file"), "the literal file's content was delivered");
   } finally {
     fsSync.rmSync(lit, { force: true });
+  }
+});
+
+// LINE-11 — LR-4 (§17.6): a start past EOF is a FAILED token — no empty <file> block, no detail, no count
+// bump, the claim REVOKED (a valid token of the same file, later in the SAME prompt, still injects), the
+// token verbatim, and one hasUI-guarded warning notify (mirrors the read tool, which errors past EOF).
+// Covers BOTH line-bearing paths (direct text + markdown), the clamped-END non-failure, the 0-byte edge,
+// and the start==lineCount boundary. Spy ctx mirrors LINE-10; fixtures are inline w/ finally cleanup.
+await runCase("LINE-11", "LR-4: #@five.txt:99 (5-line file) → no block, claim released, warning notify", async () => {
+  const five = path.join(TMPDIR, "lr4_five.txt");            // inline, unique (no shared collision)
+  fsSync.writeFileSync(five, "l1\nl2\nl3\nl4\nl5\n");          // exactly 5 lines (trailing \n ≠ extra line)
+  const md = path.join(TMPDIR, "lr4.md");
+  fsSync.writeFileSync(md, "m1\nm2\n");                        // 2-line markdown
+  const spyCtx = (notes) => ({ cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes.push({ m, t }) } });
+  try {
+    // (a) Positive — text path: past-EOF start fails cleanly (the verified LR-4 gap, now closed).
+    const notes = [];
+    const r = await mod.injectFiles("See #@lr4_five.txt:99", [], spyCtx(notes));
+    assert(r.injected === 0, `injected:0 (nothing delivered), got ${r.injected}`);
+    assert(r.text === "See #@lr4_five.txt:99", `prompt verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.blocks.length === 0 && r.details.length === 0, `NO block and NO detail (no empty body), got ${r.blocks.length}/${r.details.length}`);
+    assert(notes.length === 1 && notes[0].t === "warning", `exactly one 'warning' notify, got ${JSON.stringify(notes)}`);
+    assert(notes[0].m === `#@${five}:99 — not injected (file has 5 lines)`,
+      `message = abs + canonical range + wc-l count (em dash), got ${JSON.stringify(notes[0].m)}`);
+
+    // (b) Claim released — the VALID :1, later in the SAME prompt, still injects (scanTokens recorded
+    //     both keys; the revoke lands inside injectFile before record 2 processes).
+    const notes2 = [];
+    const r2 = await mod.injectFiles("See #@lr4_five.txt:99 then #@lr4_five.txt:1", [], spyCtx(notes2));
+    assert(r2.injected === 1, `:1 still injects after the failed :99 (claim released), got ${r2.injected}`);
+    assert(hasBlock(r2, "l1\n"), "line 1 delivered");
+    assert(notes2.length === 1 && notes2[0].m.includes(":99"), `still exactly the one :99 warning, got ${JSON.stringify(notes2)}`);
+
+    // (c) Markdown path — a ranged markdown token past EOF fails the SAME way (injectFile guards before
+    //     injectMarkdown runs; no empty block, no import scan on an empty body).
+    const notes3 = [];
+    const r3 = await mod.injectFiles("See #@lr4.md:3", [], spyCtx(notes3));
+    assert(r3.injected === 0 && r3.blocks.length === 0, `markdown past-EOF: injected:0, no block, got ${r3.injected}/${r3.blocks.length}`);
+    assert(notes3.length === 1 && notes3[0].m === `#@${md}:3 — not injected (file has 2 lines)`,
+      `markdown notify (2 lines), got ${JSON.stringify(notes3[0]?.m)}`);
+
+    // (d) Negative — a clamped END still DELIVERS (clamping is LR-5 recovery, NOT failure).
+    const notes4 = [];
+    const r4 = await mod.injectFiles("See #@lr4_five.txt:2-100000", [], spyCtx(notes4));
+    assert(r4.injected === 1 && hasBlock(r4, "l2\nl3\nl4\nl5"), `:2-100000 clamps and DELIVERS lines 2-5`);
+    assert(notes4.length === 0, `clamped end: NO notify, got ${notes4.length}`);
+
+    // (e) Edge (§17.4/§17.8) — a 0-byte file has 0 lines, so :1 is past-EOF (countLines("") === 0).
+    const notes5 = [];
+    const r5 = await mod.injectFiles("See #@empty.txt:1", [], spyCtx(notes5));
+    assert(r5.injected === 0 && r5.blocks.length === 0, `0-byte file :1 → no empty block, got ${r5.injected}/${r5.blocks.length}`);
+    assert(notes5.length === 1 && notes5[0].m === `#@${EMPTY}:1 — not injected (file has 0 lines)`,
+      `0-line notify, got ${JSON.stringify(notes5[0]?.m)}`);
+
+    // (f) Boundary — startLine === lineCount is the LAST line: DELIVERS, does NOT fail (only > fails).
+    const notes6 = [];
+    const r6 = await mod.injectFiles("See #@lr4_five.txt:5", [], spyCtx(notes6));
+    assert(r6.injected === 1 && hasBlock(r6, "l5\n"), `:5 (== lineCount) delivers line 5`);
+    assert(notes6.length === 0, `boundary: NO notify, got ${notes6.length}`);
+  } finally {
+    fsSync.rmSync(five, { force: true });
+    fsSync.rmSync(md, { force: true });
   }
 });
 
