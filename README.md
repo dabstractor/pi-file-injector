@@ -126,11 +126,11 @@ Images are matched by their real bytes, not just the extension. A text file rena
 
 **Where it matches:** at the start of the prompt, or right after a non-word character (a space, `(`, `[`, `>`, etc.). It does not match mid-word, so `foo#@bar` injects nothing. This holds in any language: `café#@x`, `Öster#@x`, and `日本語#@x` inject nothing.
 
-**Line range.** `#@a.ts:10` delivers only line 10. `#@a.ts:10-15` delivers lines 10–15 inclusive. The collapsed read line shows `read a.ts:10` or `read a.ts:10-15`.
-A closed range that exceeds the remaining context budget is delivered as a head slice plus a paging directive, exactly like a whole file (no paging past the selection unless the budget demands it). Images/binaries ignore `:N` / `:N-M`.
+**Line range.** `#@a.ts:10` delivers only line 10. `#@a.ts:10-15` delivers lines 10–15 inclusive. The collapsed read line shows the range that was actually delivered: `read a.ts:10` or `read a.ts:10-15` — and `read a.ts:2-5` for `#@a.ts:2-100000` on a 5-line file, since an end past the file clamps to the last line.
+A closed range that exceeds the remaining context budget is delivered as a head slice plus a paging directive, exactly like a whole file (no paging past the selection unless the budget demands it) — the directive resumes reading at the file's absolute line, so the model continues exactly where the head slice stopped. Images/binaries ignore `:N` / `:N-M` and dedup on the path alone: `#@pic.png #@pic.png:3` attaches the image once — identical bytes are never delivered twice.
 Different ranges of the same file each inject: `#@a.ts:10 #@a.ts:20` is two blocks; `#@a.ts:10 #@a.ts` is the slice plus the whole file.
 The same path+range still collapses to one (`#@a.ts:10 #@a.ts:10`).
-A malformed range — `:0`, or `:5-3` (end before start) — injects nothing: the token is left exactly as you typed it and a one-line warning explains why, both in your prompt and inside a delivered markdown file.
+A malformed range — `:0`, or `:5-3` (end before start) — injects nothing: the token is left exactly as you typed it and a one-line warning explains why, both in your prompt and inside a delivered markdown file. A start past the end of the file fails the same way — the token stays verbatim, the warning names the file's line count, and you never get an empty `<file>` block.
 
 **Trailing punctuation is trimmed.** `#@a.ts.` resolves to `a.ts`. `#@a.ts:10.` resolves to line 10 of `a.ts`. `(#@a.txt)` resolves to `a.txt`. Trimmed characters:
 
