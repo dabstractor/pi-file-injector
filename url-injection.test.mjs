@@ -294,6 +294,26 @@ await runCase("DIS-1", "dispatch: text/plain → raw text verbatim in block (no 
   }
 });
 
+// DIS-1b — [BUG-002] text/plain body that BEGINS WITH '<' still routes RAW. The '<' sniff is a fallback
+// for a missing/unknown Content-Type ONLY — never an override of an explicit text type (spec §3.1 "falling
+// back to sniffing"). Real-world trigger: raw.githubusercontent.com serves README.md as text/plain, and
+// READMEs commonly open with `<p align="center">`; the old sniff routed such a file into defuddle
+// (markdown-as-HTML ⇒ ~0 chars extracted ⇒ FALSE "page appears JS-rendered" notify per §3.4 — for a
+// static file with no JS anywhere near it). Regression-pins the exact shape.
+await runCase("DIS-1b", "dispatch: text/plain body starting with '<' → STILL raw text (no defuddle, no SPA verdict)", async () => {
+  const calls = [];
+  const mdBody = '<p align="center">\n  <img src="assets/logo.svg" width="180" alt="Logo">\n</p>\n\n# Stagecoach\n\n> Writes your commit messages using the agent you already pay for.\n';
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ ct: "text/plain; charset=utf-8", body: mdBody }); };
+    const r = await mod.injectFiles("#example.com", [], FIX, false, true);
+    assert(r.injected === 1, `expected injected===1, got ${r.injected} (leading '<' must NOT divert text/plain to defuddle)`);
+    assert(hasBlock(r, mdBody), "raw README bytes must be injected verbatim (no extraction, no 200-char SPA floor)");
+    assert(r.details.length === 1 && r.details[0].kind === "url", `detail kind must be 'url', got ${r.details[0]?.kind}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 // DIS-2 — application/json → raw JSON verbatim (not mangled through defuddle).
 await runCase("DIS-2", "dispatch: application/json → raw JSON verbatim in block", async () => {
   const calls = [];
@@ -308,16 +328,13 @@ await runCase("DIS-2", "dispatch: application/json → raw JSON verbatim in bloc
   }
 });
 
-// DIS-3 — text/xml → raw text verbatim. NOTE: the production dispatch sniffs a leading '<'
-// FIRST (ct.startsWith("text/html") || /^\s*</.test(html) — file-injector.ts L871): ANY body whose first
-// non-whitespace char is '<' routes to the HTML/defuddle pipeline (with the 200-char floor), regardless
-// of content-type. A realistic XML body ('<?xml…' / '<root>') therefore ALWAYS goes through defuddle. To
-// genuinely exercise the RAW-TEXT branch (ct.includes("xml")) the body must NOT start with '<' (even
-// after leading whitespace). We use a body that leads with a text token so the raw-text branch fires and
-// the bytes land verbatim — proving the xml content-type is a recognized raw-text route (not else→verbatim).
-await runCase("DIS-3", "dispatch: text/xml (non-angle-sniffed body) → raw text verbatim in block", async () => {
+// DIS-3 — text/xml → raw text verbatim, INCLUDING a body that starts with '<?xml'. Since [BUG-002] the
+// '<' sniff applies ONLY when the Content-Type is missing/unknown; an explicit text/xml is delivered raw
+// even though its first non-whitespace char is '<' (spec §3.1 lists xml in the raw-text row — running XML
+// through defuddle would mangle it). Pre-BUG-002 this body was diverted into the HTML pipeline.
+await runCase("DIS-3", "dispatch: text/xml ('<?xml…' body) → raw text verbatim in block", async () => {
   const calls = [];
-  const xmlBody = "xml <root><item>1</item></root>"; // leads with 'x' → no '<' sniff → raw-text branch
+  const xmlBody = '<?xml version="1.0"?><root><item>1</item></root>'; // leads with '<' → pre-BUG-002 this was defuddled
   try {
     globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ ct: "text/xml", body: xmlBody }); };
     const r = await mod.injectFiles("#example.com", [], FIX, false, true);
@@ -896,6 +913,69 @@ await runCase("FAIL-9", "guard: unhandled content-type (application/pdf) → ver
     assert(r.text === prompt, `text must be verbatim, got ${JSON.stringify(r.text)}`);
     assert(r.injected === 0, `injected must be 0 on failure, got ${r.injected}`);
     assert(r.blocks.length === 0, "no block appended on failure");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ── onUrlFetch progress callback (§X — URL download feedback) ──────────────────────────────────────
+// injectFiles' 6th param is a UI progress hook the input handler wires to a footer spinner. It MUST fire
+// once per REAL fetch — AFTER gating + dedup, immediately BEFORE network egress — and NOT for gated
+// (code-ext) or deduped tokens. These cases pin that contract at the data level (no UI / no timers).
+
+// CB-1 — single URL: onUrlFetch fires once with the absolute URL, BEFORE the fetch resolves.
+await runCase("CB-1", "onUrlFetch: single URL → fires once with absolute URL, before fetch resolves", async () => {
+  const order = [];
+  try {
+    globalThis.fetch = async (url) => { order.push("fetch:" + String(url)); return makeRes({ ct: "text/html", body: RICH_HTML }); };
+    const r = await mod.injectFiles("#example.com", [], FIX, false, true, (url) => { order.push("cb:" + url); });
+    assert(r.injected === 1, `expected injected===1, got ${r.injected}`);
+    assert(order.length === 2 && order[0] === "cb:https://example.com" && order[1] === "fetch:https://example.com",
+      `callback must fire BEFORE fetch, both with the absolute URL; order=${JSON.stringify(order)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// CB-2 — dedup: the same URL twice → onUrlFetch fires ONCE (the second is deduped before the callback).
+await runCase("CB-2", "onUrlFetch: duplicate URL → fires once (deduped before the callback)", async () => {
+  const cb = [];
+  const fetches = [];
+  try {
+    globalThis.fetch = async (url) => { fetches.push(String(url)); return makeRes({ ct: "text/html", body: RICH_HTML }); };
+    const r = await mod.injectFiles("#example.com and #https://example.com", [], FIX, false, true, (url) => { cb.push(url); });
+    assert(r.injected === 1, `expected injected===1 (dedup), got ${r.injected}`);
+    assert(cb.length === 1 && cb[0] === "https://example.com", `callback must fire once; cb=${JSON.stringify(cb)}`);
+    assert(fetches.length === 1, `fetch must run once; fetches=${JSON.stringify(fetches)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// CB-3 — gated token: a code-extension token (#main.go) → onUrlFetch NEVER fires (gated before egress).
+await runCase("CB-3", "onUrlFetch: code-ext token (#main.go) → NEVER fires (gate denies before callback)", async () => {
+  const cb = [];
+  const fetches = [];
+  try {
+    globalThis.fetch = async (url) => { fetches.push(String(url)); return makeRes({ ct: "text/html", body: RICH_HTML }); };
+    const r = await mod.injectFiles("refactor #main.go now", [], FIX, false, true, (url) => { cb.push(url); });
+    assert(r.injected === 0, `expected injected===0 (gated), got ${r.injected}`);
+    assert(cb.length === 0, `callback must NOT fire for a gated token; cb=${JSON.stringify(cb)}`);
+    assert(fetches.length === 0, `fetch must NOT run for a gated token; fetches=${JSON.stringify(fetches)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// CB-4 — multiple distinct URLs: onUrlFetch fires once per URL, in prompt order, each with its absolute URL.
+await runCase("CB-4", "onUrlFetch: N distinct URLs → fires once each, in order, with absolute URLs", async () => {
+  const cb = [];
+  try {
+    globalThis.fetch = async () => makeRes({ ct: "text/html", body: RICH_HTML });
+    const r = await mod.injectFiles("#a.com vs #https://b.org/x", [], FIX, false, true, (url) => { cb.push(url); });
+    assert(r.injected === 2, `expected injected===2, got ${r.injected}`);
+    assert(cb.length === 2 && cb[0] === "https://a.com" && cb[1] === "https://b.org/x",
+      `callback must fire once per URL in order; cb=${JSON.stringify(cb)}`);
   } finally {
     globalThis.fetch = origFetch;
   }

@@ -111,7 +111,7 @@ After fetching, route by response `Content-Type` (falling back to sniffing):
 
 | Content-Type | Path |
 |---|---|
-| `text/html` (or sniffed HTML) | **defuddle extract → markdown** (§3.2) |
+| `text/html`, `application/xhtml+xml` (or body sniffed as HTML when Content-Type is **missing/unknown** — the sniff is a fallback, never an override of an explicit text type) | **defuddle extract → markdown** (§3.2) |
 | `text/markdown`, `text/plain`, `application/json`, `text/xml`, `application/xml`, `application/rss+xml`, `application/atom+xml` | **raw text** — inject body verbatim (no extraction; JSON through defuddle would mangle it) |
 | `image/*` | §5.2 image path (resize + attach) |
 | anything else (PDF, octet-stream, …) | verbatim (don't inject); §3.5 |
@@ -170,6 +170,64 @@ Non-2xx, network error, DNS, TLS, timeout, cap-exceeded, over-budget, empty-extr
 unhandled content-type, or any thrown error in the pipeline → token left verbatim, no
 block appended. Never throw out of the handler; never lose the prompt. (Mirrors §5.4
 and implementation note §12.5.)
+
+### 3.6 Download feedback (footer loading indicator)
+
+**Problem.** The fetch runs *synchronously inside the `input` event handler* — before
+the agent streams — so by default there is **zero user feedback** until every `#<url>` in
+the prompt has been downloaded and extracted (up to `URL_TIMEOUT_MS` × N, §3.3). The
+existing §5.5 notify only fires *after* `injectFiles` resolves; it cannot cover the wait.
+
+**Why the obvious knob is wrong.** Pi's `ctx.ui.setWorkingMessage` /
+`setWorkingIndicator` customize the streaming loader, but that loader renders **iff
+`session.isStreaming`** — which is `false` during the `input` phase (the model has not
+been called yet). They are therefore useless for the download wait.
+
+**Mechanism — a footer status row.** The documented in-handler surface is
+`ctx.ui.setStatus(key, text)` (`setExtensionStatus` → `ui.requestRender()` repaints the
+footer immediately). Because `injectFiles` `await`s each fetch, an `setInterval`-driven
+braille glyph animates the row in parallel:
+
+```
+⠹ Fetching example.com…
+```
+
+The label is the URL **host** only (footer brevity) and updates **per URL** as each fetch
+begins, so a multi-URL prompt shows progress across its targets.
+
+**Pole position on the status line.** Pi renders *all* extension statuses (`setStatus`)
+on a single shared footer line, sorted **alphabetically by key** (`localeCompare`), then
+**truncated to terminal width** — the key itself is invisible; only `text` renders. A plain
+`"file-injector"` key sorts among other extensions' statuses, so when others sort earlier
+the spinner lands at the right end and is the first to be truncated (the "cut off / near
+the end" symptom). The status therefore uses a leading-`!` key (`!file-injector`): under
+`localeCompare` punctuation sorts before every letter key, so the spinner takes **pole
+position** (leftmost) and survives the line's width truncation — the other statuses get
+pushed right / cut instead. This is defensible rather than anti-social queue-jumping: the
+status occupies the row **only while a download is in flight** (`stop()` removes it), so it
+claims the front exclusively when it is the operation the user is waiting on. (There is no
+priority / primary-status API on the footer — the sort key is the only lever.)
+
+**The progress seam.** `injectFiles` gains a 6th optional param,
+`onUrlFetch?: (url: string) => void`. It is invoked **once per real fetch**, *after* the
+shape gate + code-extension deny-list + dedup, and *immediately before* network egress —
+so the indicator only ever spins for a fetch that is actually about to happen (never for a
+gated `#main.go` or a deduped repeat). The input handler wires this callback to the
+spinner controller; direct/test callers omit it (a no-op). This keeps `injectFiles` a
+pure data function while the handler owns all UI.
+
+**Lifecycle.** The spinner is constructed at the top of the `input` handler and torn down
+in a `finally` around the `injectFiles` `await`, so the interval is cleared and the footer
+row reset (`setStatus("file-injector", undefined)`) on **every** exit path — success,
+`!injected` early-return, or a future throw (`injectFiles` itself never throws: each
+`injectUrl` is internally isolated, §3.5).
+
+**Scope / guards.** TUI-only and feature-detected: the controller is constructed only when
+`ctx.hasUI && typeof ctx.ui.setStatus === "function"`. In headless `print` / `json` / RPC
+modes (`hasUI === false`) and in any minimal ctx lacking `setStatus`, no controller is
+built, the `onUrlFetch` passthrough is `undefined`, `injectFiles` never calls back, and **no
+timer is ever scheduled** (mirrors the `addAutocompleteProvider` feature-gate style in
+§14). The spinner is independent of, and never suppresses, the post-injection §5.5 notify.
 
 ---
 
@@ -257,10 +315,10 @@ text files). Images delivered via URL go through the existing image branch.
 | `#example.com/data.json` | raw text path (no extraction); injected verbatim. |
 | `#example.com/img.png` | image path (§5.2). |
 | `#example.com/report.pdf` | verbatim (unhandled content-type). |
-| `enableUrls: false` + `#example.com` | verbatim; **no request made**. |
-| Timeout (slow site) | verbatim after 20s. |
+| `enableUrls: false` + `#example.com` | verbatim; **no request made**; spinner never starts (no fetch → no `onUrlFetch` callback, §3.6). |
+| Timeout (slow site) | verbatim after 20s. **During the wait, a footer spinner `⠹ Fetching <host>…` shows (§3.6).** |
 | `#@file.txt` and `#example.com` in same prompt | both processed; shared budget; two green lines. |
-| `#example.com` re-opened (cancel/re-open, fork) | **re-fetched** (no cache). |
+| `#example.com` in headless `print` / `json` / RPC (`hasUI === false`) | injected as normal; **no footer spinner** (§3.6 — `setStatus` absent; `onUrlFetch` passthrough is `undefined`, no timer scheduled). |
 | `#example.com` mid-word `foo#example.com` | not matched (`#` not at boundary). |
 | `#v1.2` / `#3.14` | not URL-shaped → untouched prose. |
 | `#node.js` | deny-listed as a local-file reference (code extension `js`) → no fetch, untouched prose. Use `#https://node.js` to fetch. |
@@ -278,17 +336,22 @@ const URL_MAX_BYTES  = 1_000_000;   // 1 MB
 const URL_MIN_CONTENT = 200;
 const BROWSER_UA = "Mozilla/5.0 ...";  // browser-ish UA to avoid naive blocks
 
-// In the input handler, after seeding state and BEFORE/AFTER the file token loop:
+// In the input handler, after seeding state and BEFORE/AFTER the file token loop.
+// `onUrlFetch` (§3.6) is the UI progress hook: fired once per REAL fetch, after gate+dedup,
+// immediately before egress, so the footer spinner only spins for an actual download.
+// The handler builds it from ctx.ui.setStatus (TUI-only); tests/direct callers omit it (no-op).
 if (cfg.enableUrls) {
-  const urls: string[] = [];
   for (const m of event.text.matchAll(URL_INJECT_RE)) {
     const tok = cleanToken(m[2]);
     if (tok && URL_SHAPE_RE.test(tok)) {
       const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
-      if (!state.injectedSet.has(abs)) { state.injectedSet.add(abs); urls.push(abs); }
+      if (!state.injectedSet.has(abs)) {
+        state.injectedSet.add(abs);
+        onUrlFetch?.(abs);          // §3.6 — footer loading indicator (UI-only; undefined → no-op)
+        await injectUrl(abs, state, ctx);
+      }
     }
   }
-  for (const u of urls) await injectUrl(u, state, ctx);
 }
 
 async function injectUrl(url: string, state: State, ctx: any): Promise<boolean> {
@@ -303,11 +366,13 @@ async function injectUrl(url: string, state: State, ctx: any): Promise<boolean> 
     if (html === null) return false;                                // overflowed mid-read
     const ct = (res.headers.get("content-type") || "").toLowerCase();
 
+    const isHtml = ct.startsWith("text/html") || ct.startsWith("application/xhtml");
+    const isRawText = ct.startsWith("text/") || ct.includes("json") || ct.includes("xml") || ct.includes("markdown");
     let body: string | null = null;
     if (ct.startsWith("image/")) {
       // → §5.2 image path (resize + attach to user message; ref block in custom msg)
       return injectImageFromBytes(url, Buffer.from(html, "utf8"), ct, state);  // helper
-    } else if (ct.startsWith("text/html") || /^\s*</.test(html)) {
+    } else if (isHtml || (!isRawText && /^\s*</.test(html))) {   // sniff ONLY when ct is missing/unknown
       const { document } = parseHTML(html, { url });
       const r = await Defuddle(document, url, { markdown: true });
       const md = (r.content ?? "").trim();

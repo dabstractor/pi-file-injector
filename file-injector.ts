@@ -837,7 +837,8 @@ async function readBytesCapped(res: Response, cap: number): Promise<Buffer | nul
 
 /**
  * §3 — fetch a URL and inject its content into `state`, routing by Content-Type:
- *   • text/html (or sniffed leading '<') → §3.2 defuddle extract → markdown  (Refinements A/B/C)
+ *   • text/html | application/xhtml (or sniffed leading '<' when the Content-Type is
+ *     missing/unknown — the sniff is a FALLBACK, never an override)   → §3.2 defuddle extract → markdown
  *   • text/plain | markdown | json | xml | rss | atom            → raw text, verbatim (no extraction)
  *   • image/*                                                    → §5.2 resize + attach (Refinement D byte reader)
  *   • anything else (PDF, octet-stream, …)                       → verbatim (§3.5)
@@ -900,8 +901,17 @@ async function injectUrl(url: string, state: State, ctx: Ctx): Promise<boolean> 
     const html = await readBodyCapped(res, URL_MAX_BYTES);
     if (html === null) return false; // §3.3 guard 2b — overflowed mid-stream
 
+    // §3.1 dispatch — an EXPLICIT raw-text Content-Type is NEVER second-guessed by the '<' sniff: the
+    // sniff is a fallback for a missing/unknown Content-Type only ("route by Content-Type, falling back
+    // to sniffing"). A text/plain body that begins with '<' is not a web page: raw.githubusercontent
+    // serves README.md as text/plain, and READMEs commonly open with `<p align="center">`. Routing such
+    // a file into the defuddle pipeline parses markdown-as-HTML, extracts ~0 chars, and then FALSELY
+    // reports "page appears JS-rendered" (§3.4) for a static file with no JS anywhere near it. [BUG-002]
+    const isHtml = ct.startsWith("text/html") || ct.startsWith("application/xhtml");
+    const isRawText =
+      ct.startsWith("text/") || ct.includes("json") || ct.includes("xml") || ct.includes("markdown");
     let body: string;
-    if (ct.startsWith("text/html") || /^\s*</.test(html)) {
+    if (isHtml || (!isRawText && /^\s*</.test(html))) {
       // §3.2 HTML pipeline — Refinements A/B/C
       const { document } = parseHTML(html); // (B) ONE arg — NOT parseHTML(html, {url})
       const doc = document as any; // polyfills need `any` (styleSheets not on the TS DOM type)
@@ -918,12 +928,7 @@ async function injectUrl(url: string, state: State, ctx: Ctx): Promise<boolean> 
         return false; // verbatim + notify
       }
       body = (r.title ? `# ${r.title}\n\n` : "") + md; // r.title: required string, may be ""
-    } else if (
-      ct.startsWith("text/") ||
-      ct.includes("json") ||
-      ct.includes("xml") ||
-      ct.includes("markdown")
-    ) {
+    } else if (isRawText) {
       body = html; // §3.1 raw text — verbatim (no extraction)
     } else {
       return false; // §3.5 unhandled content-type → verbatim
@@ -1360,6 +1365,7 @@ export async function injectFiles(
   ctx: Ctx,
   bareAt = false, // §4.6 — markdown bare-@ enabled? (derived from cfg in the input handler; default false for direct unit tests)
   enableUrls = true, // [P1.M1.T2.S3] §4 — URL #<url> injection enabled? Default true so direct unit tests get the branch; the input handler passes the real `cfg.enableUrls !== false` (default-enabled; see architecture Refinement #2).
+  onUrlFetch?: (url: string) => void, // §X (URL download feedback) — UI progress hook: invoked once per real fetch, AFTER gating+dedup, immediately before network egress. Pure data callback (no return value consumed); undefined in tests/direct calls → no-op. The input handler wires it to a footer spinner.
 ): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number; blocks: string[]; details: FileDetail[] }> {
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
@@ -1452,6 +1458,7 @@ export async function injectFiles(
         const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
         if (!state.injectedSet.has(abs)) {
           state.injectedSet.add(abs);
+          onUrlFetch?.(abs); // §X (URL download feedback) — fire AFTER gating+dedup, immediately before network egress, so the footer spinner only shows for a REAL fetch (not a gated/deduped/code-ext token)
           await injectUrl(abs, state, ctx);
         }
       }
@@ -1505,6 +1512,53 @@ export async function injectFiles(
  *  readConfig; read by the input handler to derive bareAt. */
 let cfg: FileInjectorConfig = {};
 
+/** §X (URL download feedback) — the ctx.ui subset makeUrlFetchStatus needs. Structural (no full
+ *  ExtensionUIContext import): the input handler passes its real ctx.ui, which satisfies this. */
+type StatusUi = { setStatus(key: string, text: string | undefined): void };
+
+/** §X (URL download feedback) — the footer status-row key. Pi renders ALL extension statuses
+ *  (ctx.ui.setStatus) on ONE shared footer line, sorted alphabetically by key (footer.js:
+ *  `a.localeCompare(b)`), then TRUNCATED to terminal width. A plain `"file-injector"` key sorts
+ *  among other extensions' statuses — so when others sort earlier, the download spinner lands at the
+ *  right end and is the first to be truncated (the "cut off / near the end" symptom). The leading
+ *  `!` sorts before EVERY letter key under localeCompare (verified), giving the spinner POLE
+ *  POSITION (leftmost) — so it survives truncation and the other statuses get pushed right/cut
+ *  instead. Defensible (not anti-social queue-jumping): this status is in the row ONLY while a
+ *  download is actively in flight (stop() removes it), so it claims the front exclusively when it is
+ *  the operation the user is waiting on. The key is invisible — only the `text` renders. */
+const URL_FETCH_STATUS_KEY = "!file-injector";
+
+/** §X (URL download feedback) — footer "loading indicator" controller for URL fetches. Problem: the
+ *  fetch runs synchronously INSIDE the input handler (before the agent streams), so there is zero user
+ *  feedback until the whole download finishes — and pi's `setWorkingMessage`/`setWorkingIndicator` are
+ *  streaming-phase only (they render iff `session.isStreaming`, which is false during `input`), so they
+ *  cannot signal the download. `setStatus` is the documented in-handler surface: setExtensionStatus →
+ *  ui.requestRender() repaints the footer immediately, and because injectFiles `await`s each fetch, an
+ *  interval here animates the braille glyph in parallel. onFetch(url) updates the label per-URL (host
+ *  only, for footer brevity) and is invoked from injectFiles' URL loop right before network egress;
+ *  stop() tears the interval down and clears the row (idempotent; safe to call with no fetch started).
+ *  No-op outside interactive TUI mode: the input handler only constructs this when ctx.hasUI is true. */
+function makeUrlFetchStatus(ui: StatusUi): { onFetch: (url: string) => void; stop: () => void } {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let label = "";
+  let i = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const paint = () => ui.setStatus(URL_FETCH_STATUS_KEY, `${frames[i]} ${label}`);
+  return {
+    onFetch(url: string) {
+      let host = url;
+      try { host = new URL(url).host || url; } catch { /* malformed — keep the raw token */ }
+      label = `Fetching ${host}…`;
+      if (timer === null) timer = setInterval(() => { i = (i + 1) % frames.length; paint(); }, 80);
+      paint();
+    },
+    stop() {
+      if (timer !== null) { clearInterval(timer); timer = null; }
+      ui.setStatus(URL_FETCH_STATUS_KEY, undefined); // clear the row (one-shot per prompt)
+    },
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   // §6.2/§12.20 — one-shot handoff stash from the input handler to before_agent_start. input produces the
   // work (file I/O + blocks/details); before_agent_start publishes it as the custom message after the user
@@ -1533,7 +1587,22 @@ export default function (pi: ExtensionAPI) {
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
     if (!event.text?.includes("#")) return { action: "continue" }; // [P1.M1.T2.S3] cheap pre-check: both triggers (#@file, #<url>) contain '#' (§12.4)
 
-    const { text, images, injected, paged, blocks, details } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true, cfg.enableUrls !== false); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start; [P1.M1.T2.S3] §4 — enableUrls default-enabled (Refinement #2: !== false, NOT === true); false gates ALL network egress
+    // §X (URL download feedback) — footer loading indicator while URLs fetch. The fetch is synchronous
+    // inside this handler, so without this there is zero feedback until every download finishes.
+    // TUI-only + feature-detected: real Pi interactive mode provides ctx.ui.setStatus (the footer row);
+    // headless print/json/RPC (ctx.hasUI false) and any minimal ctx lacking setStatus skip it (then the
+    // onUrlFetch passthrough is undefined, so injectFiles never calls back — no timers spin up in tests).
+    // try/finally guarantees the spinner is torn down + the footer row cleared on EVERY exit path
+    // (injectFiles never throws — each injectUrl is internally isolated — but the finally is
+    // belt-and-suspenders against a future throw). Mirrors the addAutocompleteProvider feature-gate style.
+    const status = ctx.hasUI && ctx.ui && typeof ctx.ui.setStatus === "function" ? makeUrlFetchStatus(ctx.ui) : null;
+    let result;
+    try {
+      result = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true, cfg.enableUrls !== false, status ? status.onFetch : undefined); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start; [P1.M1.T2.S3] §4 — enableUrls default-enabled (Refinement #2: !== false, NOT === true); false gates ALL network egress; §X — onUrlFetch drives the footer spinner above
+    } finally {
+      status?.stop();
+    }
+    const { text, images, injected, paged, blocks, details } = result;
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered (no stash set → before_agent_start returns undefined)
 
     // §6.2 hand the built blocks+details to before_agent_start (the custom message). Only stashed when
