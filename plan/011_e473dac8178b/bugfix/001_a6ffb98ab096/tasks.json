@@ -214,7 +214,7 @@
                   "type": "Subtask",
                   "id": "P1.M4.T6.S1",
                   "title": "README.md changeset sweep (Limits, URLs, Syntax, Usage)",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
