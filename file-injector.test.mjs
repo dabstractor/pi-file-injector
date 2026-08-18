@@ -345,6 +345,15 @@ const { HUGE_LOG_CONTENT } = buildFixtures();
 // Write huge.log AFTER computing content (so we hold the exact string for the assertion).
 fsSync.writeFileSync(path.join(TMPDIR, "huge.log"), HUGE_LOG_CONTENT);
 
+// LR-1 (LINE-8-MD) — big MARKDOWN fixture for the ranged-paged case: ~3,000 lines × ~40 chars ≈ 120,000 chars
+// (fileCost 30,000 > PAGED_FIX threshold ~14,170; length > HEAD_CHARS 8192 → pages). NO imports (no #@ and no
+// @path markers — keep the test about paging, not scanning). ASCII → headSlice(8192) is exact, so the test's
+// expected headLines = newlines in BIGMD_CONTENT.slice(0, 8192) is exact.
+const BIGMD_LINES = Array.from({ length: 3000 }, (_, i) => `# big markdown line ${i + 1} ${"x".repeat(20)}\n`);
+const BIGMD_CONTENT = BIGMD_LINES.join("");
+const BIGMD = path.join(TMPDIR, "bigmd.md");
+fsSync.writeFileSync(BIGMD, BIGMD_CONTENT);
+
 // The home-dir notes file for the tilde case (#10). Written into os.homedir(); cleaned up in finally.
 fsSync.writeFileSync(HOME_NOTES_PATH, HOME_NOTES_CONTENT);
 
@@ -3032,6 +3041,42 @@ await runCase("LINE-6", "#@a.ts:2 #@a.ts:3 injects TWO blocks; same range still 
   assert(whole.injected === 2, `range + whole file must both inject, got ${whole.injected}`);
   const dup = await mod.injectFiles("See #@a.ts:2 and #@a.ts:2", [], FIX);
   assert(dup.injected === 1, `same range must still dedup, got ${dup.injected}`);
+});
+
+// LINE-8 — LR-1 (PRD §17.5): a ranged token's SLICE runs the same §5.5 inline-vs-paged decision as a whole
+// file. Under PAGED_FIX (remaining 23,616; threshold ≈ 14,170), #@huge.log:1-999999's slice (~2 MB, fileCost
+// ~500K > threshold AND > HEAD_CHARS) must PAGE — not silently dump ~2 MB inline (the LR-1 gap: a typo'd end
+// disabled the overflow safety valve). The directive resumes in FILE coordinates: resumeLine = startLine +
+// headLines (startLine=1 here, so it coincides with the whole-file headLines+1). Formalized in P1.M2.T1.S2.
+await runCase("LINE-8", "LR-1: tight budget + #@huge.log:1-999999 → kind:'paged', head + directive, file-coordinate resume", async () => {
+  const r = await mod.injectFiles("Summarize #@huge.log:1-999999", [], PAGED_FIX);
+  const headLines = (HUGE_LOG_CONTENT.slice(0, 8192).match(/\n/g) || []).length;   // ASCII → head is exactly 8192
+  const resumeLine = 1 + headLines;                                                // startLine = 1
+  assert(r.paged === 1, `expected paged===1, got ${r.paged}`);
+  assert(r.injected === 1, `one delivery (paged), got ${r.injected}`);
+  const d = r.details[0];
+  assert(d.kind === "paged", `kind must be 'paged', got '${d.kind}'`);
+  // sliceLines drops the file's single trailing newline (split → drop final "" → join "\n"), so the
+  // delivered slice is exactly one byte shorter than the fixture — compute the expected value from it.
+  const expectedSliceLen = HUGE_LOG_CONTENT.length - 1;
+  assert(d.chars === expectedSliceLen, `chars = slice length (covers the file), got ${d.chars}`);
+  assert(d.range === `:${resumeLine}-`, `range must be :${resumeLine}-, got ${d.range}`);
+  assert(d.pagedHeadLines === headLines, `pagedHeadLines must be ${headLines}, got ${d.pagedHeadLines}`);
+  assert(r.blocks[0].startsWith('<file name="' + HUGE + '">') && r.blocks[0].length < HUGE_LOG_CONTENT.length,
+    "blocks[0] must be the HEAD block, not the full content");
+  assert(r.blocks[1].includes("offset:" + resumeLine), `directive must resume at file line ${resumeLine}`);
+});
+
+// LINE-8-MD — LR-1 via MARKDOWN: injectMarkdown passes the FULL content + range to emitText, which re-slices
+// and runs the same §5.5 decision → ranged markdown tokens page identically. Pins that a future refactor
+// moving the slice out of emitText cannot silently regress markdown.
+await runCase("LINE-8-MD", "LR-1 via markdown: tight budget + #@bigmd.md:1-999999 → paged (injectMarkdown re-slices in emitText)", async () => {
+  const r = await mod.injectFiles("Summarize #@bigmd.md:1-999999", [], PAGED_FIX);
+  const headLines = (BIGMD_CONTENT.slice(0, 8192).match(/\n/g) || []).length;
+  const resumeLine = 1 + headLines;
+  assert(r.paged === 1 && r.details[0].kind === "paged", "the markdown slice must page");
+  assert(r.details[0].range === `:${resumeLine}-` && r.details[0].pagedHeadLines === headLines,
+    "file-coordinate resume on the markdown slice");
 });
 
 // MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@

@@ -1298,7 +1298,13 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
  */
 export function emitText(abs: string, content: string, state: State, startLine?: number, endLine?: number): void {
   // Optional `#@file:N` / `#@file:N-M` — deliver ONLY that inclusive line range (not N→EOF).
-  // Closed ranges are intentional extracts: always inject the slice whole (no paging past the range).
+  // LR-1 (PRD §17.5): the SLICE runs the SAME §5.5 inline-vs-paged decision as a whole file — a range is a
+  // deliberate extract, but that justifies not paging PAST the range end, not suspending overflow protection
+  // WITHIN it (a typo'd `:1-999999` used to deliver ~2 MB inline, silently disabling the safety valve).
+  // Fits (or budget unknown) → whole slice; trips PAGED_THRESHOLD·remaining → sub-head guard on the SLICE
+  // length; else page the slice (head + directive), resuming in FILE coordinates (startLine + headLines — so
+  // the model's read continues at the correct absolute line of the original file; the whole-file headLines+1
+  // is the startLine=1 special case). A paged slice bumps state.paged (the `N whole, M paged` notify).
   let rangeSuffix: string | undefined;
   if (startLine !== undefined) {
     const end = endLine ?? startLine;
@@ -1306,9 +1312,30 @@ export function emitText(abs: string, content: string, state: State, startLine?:
     rangeSuffix = startLine === end ? `:${startLine}` : `:${startLine}-${end}`; // UI: read path:N / path:N-M
     const fileCost = Math.ceil(content.length / 4);
     const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1;
-    state.blocks.push(formatTextFileBlock(abs, content));
-    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix });
-    subtract(state, fileCost);
+    if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
+      // INLINE (whole slice) — fits or budget unknown (O-1): byte-identical to the former unconditional push.
+      state.blocks.push(formatTextFileBlock(abs, content));
+      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix }); // the REQUESTED range (LR-5 clamping is S2)
+      subtract(state, fileCost);
+    } else if (content.length <= HEAD_CHARS) {
+      // §5.5 sub-head guard — applied to the SLICE length (a slice that already fits HEAD_CHARS pages nothing;
+      // a directive would point past the range's end, causing a spurious read).
+      state.blocks.push(formatTextFileBlock(abs, content));
+      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix });
+      subtract(state, fileCost);
+    } else {
+      // LR-1 — PAGE the slice: head block + directive; the resume offset is in FILE coordinates
+      // (startLine + complete-lines-in-head) so the model's read continues at the correct absolute line.
+      const head = headSlice(content);
+      const headLines = headCompleteLineCount(head);
+      const resumeLine = startLine + headLines; // 1-indexed file line AFTER the head's complete lines
+      const directiveBlock = formatPagedDirectiveBlock(abs, content.length, resumeLine, headLines);
+      state.blocks.push(formatTextFileBlock(abs, head));
+      state.blocks.push(directiveBlock);
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${resumeLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock) }); // paged-resume display, NOT rangeSuffix (the requested range)
+      state.paged++;
+      subtract(state, Math.ceil(HEAD_CHARS / 4)); // matches the whole-file paged branch (HEAD_CHARS basis, not head.length)
+    }
     return;
   }
 
