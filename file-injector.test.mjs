@@ -3059,6 +3059,25 @@ await runCase("LINE-6", "#@a.ts:2 #@a.ts:3 injects TWO blocks; same range still 
   assert(dup.injected === 1, `same range must still dedup, got ${dup.injected}`);
 });
 
+// LINE-7 — §2.4 exact-path-wins (pins PRE-EXISTING behavior): the §3 retry ladder's STEP 1 resolves the FULL token (suffix included) first, so a file LITERALLY named 'a.ts:10' is delivered WHOLE — the suffix is never reinterpreted as a range. The shared a.ts fixture (4 lines) makes this discriminating: if the range interpretation wrongly ran, a.ts:10 = line 10 of a 4-line file → past-EOF → LR-4 → verbatim → injected:0. And a whole-a.ts misfire is excluded by the 'return a + b;' negative (a.ts line 2). Linux allows ':' in filenames (CI is Linux). Inline fixture + finally rmSync — mirrors LINE-10's literal0.ts:0 pattern.
+await runCase("LINE-7", "§2.4 exact-path-wins: literal 'a.ts:10' file → #@a.ts:10 delivers the WHOLE literal file, no range", async () => {
+  const lit = path.join(TMPDIR, "a.ts:10");
+  fsSync.writeFileSync(lit, "LR7 literal colon file — line one\nLR7 line two\n");
+  try {
+    const r = await mod.injectFiles("See #@a.ts:10 here", [], FIX);
+    assert(r.injected === 1, `the LITERAL a.ts:10 file resolves whole (exact wins), got injected=${r.injected}`);
+    assert(hasBlock(r, "LR7 literal colon file — line one"), `the literal file's content is the body, got ${JSON.stringify(r.blocks)}`);
+    assert(hasBlock(r, '<file name="' + lit + '">'), `the delivered block's name IS the literal ${lit} abs path`);
+    assert(!hasBlock(r, "return a + b;"), `a.ts content must NOT be delivered (no range slice of a.ts, no whole-a.ts misfire)`);
+    assert(r.blocks.length === 1, `exactly one block (the literal file), got ${r.blocks.length}`);
+    assert(r.details?.[0]?.kind === "text", `kind 'text' (whole-file delivery), got '${r.details?.[0]?.kind}'`);
+    assert(r.details?.[0]?.range === undefined, `NO range on a literal-file delivery (§2.4: resolves as-is, whole), got ${JSON.stringify(r.details?.[0]?.range)}`);
+    assert(r.text === "See #@a.ts:10 here", `prompt verbatim (#@a.ts:10 untouched, §6.4), got ${JSON.stringify(r.text)}`);
+  } finally {
+    fsSync.rmSync(lit, { force: true });
+  }
+});
+
 // LINE-8 — LR-1 (PRD §17.5): a ranged token's SLICE runs the same §5.5 inline-vs-paged decision as a whole
 // file. Under PAGED_FIX (remaining 23,616; threshold ≈ 14,170), #@huge.log:1-999999's slice (~2 MB, fileCost
 // ~500K > threshold AND > HEAD_CHARS) must PAGE — not silently dump ~2 MB inline (the LR-1 gap: a typo'd end
