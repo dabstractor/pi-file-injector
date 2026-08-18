@@ -194,8 +194,8 @@ await test("B1: #@b.md resolves to baseDir/b.md (record.abs is baseDir-relative)
   mk(root, "b.md", "ROOT-B");                // must NOT win
   const recs = await mod.scanTokens("See #@b.md.", path.join(root, "dir"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: false }, blankState());
-  assert(recs.length === 1 && recs[0] === path.join(root, "dir", "b.md"),
-    `expected 1 resolved abs at dir/b.md, got ${JSON.stringify(recs)}`);   // recs IS the abs paths
+  assert(recs.length === 1 && recs[0].path === path.join(root, "dir", "b.md"),
+    `expected 1 resolved abs at dir/b.md, got ${JSON.stringify(recs)}`);   // recs is {path,startLine?}[]
 });
 
 await test("B2: relative-only guard — #@/abs/... ignored when allowAbsTilde:false", async () => {
@@ -218,7 +218,7 @@ await test("B4: bare @b.md (bareAt:true) resolves baseDir-relative too", async (
   mk(root, "b.md", "ROOT-B");
   const recs = await mod.scanTokens("See @b.md.", path.join(root, "dir"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: true }, blankState());
-  assert(recs.length === 1 && recs[0] === path.join(root, "dir", "b.md"),
+  assert(recs.length === 1 && recs[0].path === path.join(root, "dir", "b.md"),
     `bare @ must resolve baseDir-relative; got ${JSON.stringify(recs)}`);
 });
 
@@ -237,11 +237,11 @@ await test("B6: both #@ and bare-@ resolve baseDir-relative in a single scan (ba
   mk(root, "dir/a.md", "A"); mk(root, "dir/b.md", "B");
   const recs = await mod.scanTokens("#@a.md then @b.md", path.join(root, "dir"),
     { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: true }, blankState());
-  const a = recs.find((r) => r.endsWith("a.md"));
-  const b = recs.find((r) => r.endsWith("b.md"));
+  const a = recs.find((r) => r.path.endsWith("a.md"));
+  const b = recs.find((r) => r.path.endsWith("b.md"));
   assert(recs.length === 2, `both #@ and bare-@ must resolve in one scan (the bareAt:true union); got ${recs.length}: ${JSON.stringify(recs)}`);
-  assert(a && a === path.join(root, "dir", "a.md"), `#@a.md resolved baseDir-relative; got ${JSON.stringify(a)}`);
-  assert(b && b === path.join(root, "dir", "b.md"), `bare @b.md resolved baseDir-relative; got ${JSON.stringify(b)}`);
+  assert(a && a.path === path.join(root, "dir", "a.md"), `#@a.md resolved baseDir-relative; got ${JSON.stringify(a)}`);
+  assert(b && b.path === path.join(root, "dir", "b.md"), `bare @b.md resolved baseDir-relative; got ${JSON.stringify(b)}`);
 });
 
 await test("B7: code-exempt — #@b.md inside a fenced code block yields no record", async () => {

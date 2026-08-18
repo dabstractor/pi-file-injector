@@ -34,11 +34,18 @@ Write `#@` and a path anywhere in your prompt:
 
 ```text
 Review #@a.ts
+Review #@a.ts:10
 Describe #@pic.png
 Summarize #@~/notes.md
 Diff #@a.ts vs #@b.ts
 See #@a.ts.
 ```
+
+Optional line range (1-indexed, inclusive):
+- `#@a.ts:10` — only line 10
+- `#@a.ts:10-15` — lines 10 through 15
+
+Exact filenames win: a file literally named `a.ts:10` still resolves as-is.
 
 On submit, each file shows up as a compact green `read <path>` line directly below your message — one line per file, indistinguishable from the `read` tool. Press `ctrl+o` to expand any of them to the full contents. `#@` triggers stay in your message exactly as you typed them (`Review #@a.ts` stays `Review #@a.ts`), so cancelling and re-opening, forking, or re-submitting re-triggers injection. The file bytes are delivered to the model underneath — never pasted into your message bubble.
 
@@ -117,7 +124,12 @@ Images are matched by their real bytes, not just the extension. A text file rena
 
 **Where it matches:** at the start of the prompt, or right after a non-word character (a space, `(`, `[`, `>`, etc.). It does not match mid-word, so `foo#@bar` injects nothing. This holds in any language: `café#@x`, `Öster#@x`, and `日本語#@x` inject nothing.
 
-**Trailing punctuation is trimmed.** `#@a.ts.` resolves to `a.ts`. `(#@a.txt)` resolves to `a.txt`. Trimmed characters:
+**Line range.** `#@a.ts:10` delivers only line 10. `#@a.ts:10-15` delivers lines 10–15 inclusive. The collapsed read line shows `read a.ts:10` or `read a.ts:10-15`.
+Closed ranges inject whole (no paging past the selection). Images/binaries ignore `:N` / `:N-M`.
+Different ranges of the same file each inject: `#@a.ts:10 #@a.ts:20` is two blocks; `#@a.ts:10 #@a.ts` is the slice plus the whole file.
+The same path+range still collapses to one (`#@a.ts:10 #@a.ts:10`).
+
+**Trailing punctuation is trimmed.** `#@a.ts.` resolves to `a.ts`. `#@a.ts:10.` resolves to line 10 of `a.ts`. `(#@a.txt)` resolves to `a.txt`. Trimmed characters:
 
 ```text
 . , ; : ! ? " ' ) ] } >
@@ -132,7 +144,7 @@ Images are matched by their real bytes, not just the extension. A text file rena
 - **Relative paths only.** Imports resolve against the markdown file's own directory, not your current directory. Absolute (`#@/etc/hosts`) and tilde (`#@~/notes.md`) imports inside a markdown file are ignored and left verbatim. If the same name exists in both the importing file's directory and your current directory, the importing file's directory wins — so `#@file2.md` inside `dir/otherdir/some/file.md` resolves to `dir/otherdir/some/file2.md`, never `./file2.md`. This holds at every nesting depth; your current directory is never consulted for an in-file import.
 - **Extension shorthand.** A markdown import may omit the `.md`/`.markdown` extension: `#@PRD` resolves to `PRD.md` (then `PRD.markdown`) when no bare `PRD` exists. Exact match wins (a bare `readme` beats `readme.md`), and a token already ending in any extension is left as-is (so `#@PRD.md` never becomes `PRD.md.md`). This is a markdown-import convenience only — at the prompt you type the full name.
 - **Code is the escape hatch.** A `#@` inside a fenced or inline code span is not an import — it stays verbatim. So a doc can show `` `#@example.ts` `` as an example without importing anything. Fenced-code detection is line-ending agnostic — Windows (CRLF) and Unix (LF) markdown files detect code fences identically.
-- **Each file is injected at most once.** Across the whole prompt — top-level tokens, every import, and cycles — a given file appears in one block only. Shared dependencies dedup; cycles terminate.
+- **Each path+range is injected at most once.** `#@a.ts` twice is one block; `#@a.ts:10` and `#@a.ts:20` are two. Shared dependencies and cycles still terminate.
 - **Shared budget.** Imports draw on the same context budget as the top-level prompt. When the running total exceeds the window, later files page (head block plus a `read`-tool directive) instead of overflow.
 
 ### Optional: bare-`@` markdown imports

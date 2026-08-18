@@ -166,6 +166,35 @@ export function cleanToken(raw: string): string {
   return s;
 }
 
+/** Optional trailing line range on a token (1-indexed, inclusive).
+ *  `#@a.ts:10` → lines 10–10 (single line). `#@a.ts:10-15` → lines 10–15.
+ *  Exact path wins at resolve time (a file literally named `a.ts:10` still resolves as-is). */
+export function splitLineRange(token: string): { path: string; startLine?: number; endLine?: number } {
+  const m = /:(\d+)(?:-(\d+))?$/.exec(token);
+  if (!m) return { path: token };
+  const start = Number(m[1]);
+  const end = m[2] !== undefined ? Number(m[2]) : start; // bare :N → single line
+  if (!Number.isFinite(start) || start < 1 || !Number.isFinite(end) || end < start) return { path: token };
+  const p = token.slice(0, m.index!);
+  return p ? { path: p, startLine: start, endLine: end } : { path: token };
+}
+
+/** Slice `content` to 1-indexed inclusive [startLine, endLine]. Past-EOF → clamped; empty if start past EOF. */
+export function sliceLines(content: string, startLine: number, endLine: number): string {
+  const parts = content.split("\n");
+  // Trailing newline yields a final "" — not a real line (matches wc -l / editor line counts).
+  if (parts.length > 0 && parts[parts.length - 1] === "" && content.endsWith("\n")) parts.pop();
+  if (startLine < 1 || startLine > parts.length) return "";
+  return parts.slice(startLine - 1, endLine).join("\n");
+}
+
+/** Dedup key: bare path for a whole file, `path:N` / `path:N-M` for a range. Same path + different range → two claims. */
+function claimKey(abs: string, startLine?: number, endLine?: number): string {
+  if (startLine === undefined) return abs;
+  const end = endLine ?? startLine;
+  return abs + (startLine === end ? `:${startLine}` : `:${startLine}-${end}`);
+}
+
 /** PRD §4.4 — expand leading ~ / ~/ via os.homedir() (resolveReadPath is internal, unexported),
  *  then resolve against cwd. No cwd restriction: absolute, ~, and ../ all allowed. */
 export function expandTildeAndResolve(p: string, cwd: string): string {
@@ -504,7 +533,7 @@ export interface FileDetail {
   kind: "text" | "image" | "binary" | "paged" | "url"; // +"url": producer injectUrl (T2.S1); renderer = readLine url branch (T2.S2, raw URL no tildify). Safe — no exhaustive switch on .kind.
   chars?: number; // text: content length; paged: FULL content length
   lines?: number; // text: total line count
-  range?: string; // paged: ":<startLine>-…" resume range (read-tool style)
+  range?: string; // paged resume ":N-" OR user line range ":N" / ":N-M" (read-tool style)
   pagedHeadLines?: number; // paged: complete lines delivered in the head
   dimensionHint?: string; // image: formatDimensionNote(resized) — UNUSED in S1 (image is S2)
   body?: string; // the EXACT file body embedded in the block (text/paged head), so the renderer can
@@ -529,7 +558,7 @@ interface State {
   blocks: string[];
   details: FileDetail[]; // PRD §6.4 — per-file metadata, parallel to blocks (index-aligned; one detail per block emission in emitText)
   images: ImageContent[];
-  injectedSet: Set<string>; // seeded with priorPaths; holds resolved abs paths → dedup
+  injectedSet: Set<string>; // seeded with priorPaths; claim keys (abs or abs:N / abs:N-M) → dedup
   remaining: number | null; // single budget accumulator (§5.5 / §5.6.2)
   count: number;
   paged: number;
@@ -1051,11 +1080,12 @@ function readLine(d: FileDetail, theme: any): string {
   if (d.kind === "paged") {
     return `${title} ${pathPart}${theme.fg("warning", d.range ?? "")}`;
   }
-  if (d.kind === "url") {
+if (d.kind === "url") {
     // PRD §6 — raw URL (d.path holds the URL), NOT tildified; no range/dimensionHint suffix.
     return `${title} ${theme.fg("accent", d.path)}`;
   }
-  return `${title} ${pathPart}`; // whole text (no suffix)
+  // whole text — still show :N / :N-M when the user asked for a line range
+  return `${title} ${pathPart}${d.range ? theme.fg("warning", d.range) : ""}`;
 }
 
 /** "(ctrl+o to expand)" — the default expand binding (PRD §12.25: keyText() is internal; ctrl+o is hardcoded). */
@@ -1107,17 +1137,17 @@ type Ctx = {
  *   opt-in; the two regexes never double-match the same `#@` (BARE_AT_RE forbids a preceding `#`).
  *   When absent/false, ONLY `#@` matches run → byte-for-byte identical to the single-regex form.
  *
- * Returns string[] — the resolved absolute paths in encounter order (markers detected, never stripped:
- * PRD §6.4 / §12.16).
+ * Returns { path, startLine?, endLine? }[] — resolved abs paths in encounter order (markers detected, never
+ * stripped: PRD §6.4 / §12.16). Optional line range from trailing `:N` / `:N-M` (`#@a.ts:10`, `#@a.ts:10-15`).
  */
 export async function scanTokens(
   text: string,
   baseDir: string,
   opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt?: boolean },
   state: State,
-): Promise<string[]> {
+): Promise<{ path: string; startLine?: number; endLine?: number }[]> {
   const localSeen = new Set<string>();
-  const out: string[] = [];
+  const out: { path: string; startLine?: number; endLine?: number }[] = [];
   // §5.6.1 — when scanning markdown content, precompute code regions once and skip `#@` matches whose
   // start index lies inside a fenced block or inline code span (the markdown escape hatch, §4.5 rule 3).
   // null when skipCode:false (top-level user-prompt scan) → inCode is never called → no behavior change.
@@ -1136,11 +1166,23 @@ export async function scanTokens(
     const token = cleanToken(c.token); // trim trailing punctuation (§4.3)
     if (!token) continue; // empty after trim => skip, leave verbatim
     if (!opts.allowAbsTilde && isAbsoluteOrTilde(token)) continue; // §4.5 — markdown: relative only
-    const abs = await resolveImportPath(token, baseDir, opts.tryMdExt); // §4.5 — exact, then .md/.markdown (stats)
+    // Exact token first (a file literally named `a.ts:10` wins). Else strip trailing `:N`/`:N-M` and retry.
+    let abs = await resolveImportPath(token, baseDir, opts.tryMdExt);
+    let startLine: number | undefined;
+    let endLine: number | undefined;
+    if (!abs) {
+      const parsed = splitLineRange(token);
+      if (parsed.startLine !== undefined && parsed.path !== token) {
+        if (!opts.allowAbsTilde && isAbsoluteOrTilde(parsed.path)) continue;
+        abs = await resolveImportPath(parsed.path, baseDir, opts.tryMdExt);
+        if (abs) { startLine = parsed.startLine; endLine = parsed.endLine; }
+      }
+    }
     if (!abs) continue; // nothing resolved → leave verbatim (missing/dir/non-regular)
-    if (state.injectedSet.has(abs) || localSeen.has(abs)) continue; // dedup on RESOLVED abs → leave verbatim
-    localSeen.add(abs);
-    out.push(abs);
+    const key = claimKey(abs, startLine, endLine);
+    if (state.injectedSet.has(key) || localSeen.has(key)) continue; // same path+range already claimed → leave verbatim
+    localSeen.add(key);
+    out.push(startLine !== undefined ? { path: abs, startLine, endLine } : { path: abs });
   }
   return out;
 }
@@ -1166,10 +1208,10 @@ async function processTokenStream(
   state: State,
   ctx: Ctx,
 ): Promise<void> {
-  const absPaths = await scanTokens(text, baseDir, opts, state); // scan once, before any injection (opts carries tryMdExt)
-  for (const abs of absPaths) {
-    if (state.injectedSet.has(abs)) continue; // cross-subtree dedup since scan
-    await injectFile(abs, state, ctx); // claims abs, emits block(s); never throws
+  const recs = await scanTokens(text, baseDir, opts, state); // scan once, before any injection (opts carries tryMdExt)
+  for (const rec of recs) {
+    if (state.injectedSet.has(claimKey(rec.path, rec.startLine, rec.endLine))) continue; // same path+range already claimed since scan
+    await injectFile(rec.path, state, ctx, rec.startLine, rec.endLine); // claims key, emits block(s); never throws
   }
 }
 
@@ -1186,7 +1228,7 @@ async function processTokenStream(
  * (isBinary) → binary note; (4) else → emitText. Budget: ONLY emitText subtracts (T2.S2 adds image/binary).
  * Returns true iff a block/image was emitted (state.count bumped exactly once per claimed file).
  */
-export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<boolean> {
+export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?: number, endLine?: number): Promise<boolean> {
   let st;
   try {
     st = await fs.stat(abs);
@@ -1194,7 +1236,8 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
     return false; // missing → leave verbatim (PRD §5.4)
   }
   if (!st.isFile()) return false; // directory / socket / etc. → leave verbatim (PRD §5.4)
-  state.injectedSet.add(abs); // CLAIM — dedup incl. self-import (recursion-readiness); REVOKED on failure (claim ⟺ delivered, see catch)
+  const key = claimKey(abs, startLine, endLine);
+  state.injectedSet.add(key); // CLAIM path+range — self-import / same range dedup; REVOKED on failure (claim ⟺ delivered, see catch)
 
   const ext = extOf(abs); // lowercase ext, "" for no-dot/hidden (S2)
   const mime = MIME_BY_EXT[ext]; // undefined → not a recognized image → text/binary path
@@ -1203,6 +1246,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
     if (mime && buf.length === 0) {
       // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
       // Align with the text path's empty-file handling: emit a note block, attach nothing.
+      // line range is ignored for images (no line semantics).
       const f5Block = formatEmptyImageBlock(abs);
       state.blocks.push(f5Block);
       state.details.push({ path: abs, kind: "image", dimensionHint: undefined }); // §6.4 — empty-image detail (parallel to the block push)
@@ -1211,6 +1255,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
       // F3 — validate the ACTUAL bytes match the declared image type before attaching.
       // A mislabeled file (e.g. text named `.png`) fails the magic-number sniff and falls
       // through to the text/binary path instead of attaching decoded garbage as an image.
+      // line range is ignored for images (no line semantics).
       const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
       state.images.push({
         type: "image",
@@ -1223,24 +1268,23 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
     } else if (MD_EXTS.has(ext)) {
       // MARKDOWN (PRD §5.6) — text block + transitive imports. Markdown bypasses the §5.1 NUL/binary routing
       // so import scanning always runs (§5.6 step 1). injectMarkdown (§5.6 six steps): claim self → scan
-      // relative-only imports outside code → strip resolved #@ markers → emit this block (paged decision on
-      // the STRIPPED content) → recurse depth-first (pre-order). Recursion is dedup-bounded (each abs claimed
-      // before its scan; cycles dedup to verbatim), NOT depth-limited. injectFile owns the count++ + the claim.
-      await injectMarkdown(abs, buf.toString("utf8"), state, ctx);
+      // relative-only imports outside code → emit this block (paged decision) → recurse depth-first (pre-order).
+      // line range slices the delivered body; import scan still runs on the (sliced) content.
+      await injectMarkdown(abs, buf.toString("utf8"), state, ctx, startLine, endLine);
     } else if (isBinary(buf)) {
-      // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014)
+      // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014). line range ignored.
       const binBlock = formatBinaryBlock(abs);
       state.blocks.push(binBlock);
       state.details.push({ path: abs, kind: "binary" }); // §6.4 — binary detail
       subtract(state, Math.ceil(binBlock.length / 4)); // §5.6.2 — note consumes budget
     } else {
       // PLAIN TEXT (PRD §5.1 + §5.5) — inline-vs-paged decision (lifted verbatim into emitText)
-      emitText(abs, buf.toString("utf8"), state);
+      emitText(abs, buf.toString("utf8"), state, startLine, endLine);
     }
     state.count++; // exactly one delivery per claimed file
     return true;
   } catch {
-    state.injectedSet.delete(abs); // failure → UN-CLAIM so the path is NOT poisoned (claim ⟺ delivered; PRD §12.5)
+    state.injectedSet.delete(key); // failure → UN-CLAIM so the key is NOT poisoned (claim ⟺ delivered; PRD §12.5)
     return false; // read/resize error → leave THIS token verbatim (PRD §5.4, §12.5)
   }
 }
@@ -1252,9 +1296,24 @@ export async function injectFile(abs: string, state: State, ctx: Ctx): Promise<b
  * (T1.S1): whole if budget unknown or fileCost ≤ PAGED_THRESHOLD·remaining; sub-head guard (content ≤
  * HEAD_CHARS → whole, no directive, no extra subtract); else head + directive + paged++ + subtract(head cost).
  */
-export function emitText(abs: string, content: string, state: State): void {
+export function emitText(abs: string, content: string, state: State, startLine?: number, endLine?: number): void {
+  // Optional `#@file:N` / `#@file:N-M` — deliver ONLY that inclusive line range (not N→EOF).
+  // Closed ranges are intentional extracts: always inject the slice whole (no paging past the range).
+  let rangeSuffix: string | undefined;
+  if (startLine !== undefined) {
+    const end = endLine ?? startLine;
+    content = sliceLines(content, startLine, end);
+    rangeSuffix = startLine === end ? `:${startLine}` : `:${startLine}-${end}`; // UI: read path:N / path:N-M
+    const fileCost = Math.ceil(content.length / 4);
+    const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1;
+    state.blocks.push(formatTextFileBlock(abs, content));
+    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix });
+    subtract(state, fileCost);
+    return;
+  }
+
   const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
-  const lineCount = (content.match(/\n/g)?.length ?? 0) + 1; // PRD §9 — total line count (for FileDetail.lines; text whole/sub-head)
+  const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1; // PRD §9 — delivered line count
   if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
     // INLINE (whole) — current behavior preserved (PRD §5.1)
     state.blocks.push(formatTextFileBlock(abs, content));
@@ -1287,11 +1346,11 @@ export function emitText(abs: string, content: string, state: State): void {
     } else {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
       const headLines = headCompleteLineCount(head);
-      const startLine = headLines + 1; // 1-indexed: first line AFTER the complete lines delivered in the head
-      const directiveBlock = formatPagedDirectiveBlock(abs, content.length, startLine, headLines); // §6.3 — hoist; the directive block still reaches the model via content (display-only fix); its inner text is stored on the detail for the expanded view
+const resumeLine = headLines + 1; // 1-indexed: first line AFTER the complete lines delivered in the head (== headStartLine(head))
+      const directiveBlock = formatPagedDirectiveBlock(abs, content.length, resumeLine, headLines); // §6.3 — hoist; the directive block still reaches the model via content (display-only fix); its inner text is stored on the detail for the expanded view
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(directiveBlock);
-      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${startLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock) }); // §12.22 — head offsets computed in before_agent_start (no body duplication); directive is display-only text, not file bytes
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${resumeLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock) }); // §12.22 — head offsets computed in before_agent_start (no body duplication); directive is display-only text, not file bytes
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }
@@ -1333,29 +1392,30 @@ export function emitText(abs: string, content: string, state: State): void {
  * @param state   the shared State (blocks/images/injectedSet/remaining/count/paged) threaded across the prompt
  * @param ctx     threaded to the recursive injectFile calls (cwd unused — imports resolve from dirname(abs))
  */
-async function injectMarkdown(abs: string, content: string, state: State, ctx: Ctx): Promise<void> {
-  // Step 2 — CLAIM SELF (idempotent: injectFile already added abs; included per PRD §5.6 step-2 contract).
-  state.injectedSet.add(abs);
+async function injectMarkdown(abs: string, content: string, state: State, ctx: Ctx, startLine?: number, endLine?: number): Promise<void> {
+  // Step 2 — CLAIM SELF (idempotent: injectFile already added this path+range).
+  state.injectedSet.add(claimKey(abs, startLine, endLine));
 
   const dir = path.dirname(abs); // §4.5 rule 2 — imports resolve relative to the markdown's directory, not cwd
+
+  // Optional `#@file:N` / `:N-M` — slice body before scan so import discovery matches what the model sees.
+  const body = startLine !== undefined ? sliceLines(content, startLine, endLine ?? startLine) : content;
 
   // Step 3 — scan for imports: relative-only (allowAbsTilde:false), outside code (skipCode:true),
   // markdown shorthand ON (tryMdExt:true → extensionless tokens try .md then .markdown, PRD §4.5 rule 3).
   // §4.6 — thread state.bareAt (set from cfg in injectFiles — the P1.M2.T1.S1 seam) so a markdown author who
-  // opts into markdownBareAtImports can write a bare @api.md. scanTokens returns the resolved import paths as
-  // a string[] (absPaths, in encounter order); markers are detected ONLY to resolve imports, never stripped.
-  const absPaths = await scanTokens(content, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
+  // opts into markdownBareAtImports can write a bare @api.md. scanTokens returns {path,startLine?,endLine?}[]
+  // in encounter order; markers are detected ONLY to resolve imports, never stripped.
+  const recs = await scanTokens(body, dir, { allowAbsTilde: false, skipCode: true, tryMdExt: true, bareAt: state.bareAt }, state);
 
-  // Step 4 — emit THIS file's block. The paged decision runs on the VERBATIM content (import markers are NOT
-  // stripped — §6.4/§12.16: the file is delivered exactly as read from disk). emitText owns formatTextFileBlock
-  // + subtract + the paged head/directive + state.paged++.
-  emitText(abs, content, state);
+  // Step 4 — emit THIS file's block. Pass ORIGINAL content + range; emitText slices once and stamps range.
+  emitText(abs, content, state, startLine, endLine);
 
   // Step 5 — recurse into the resolved imports, depth-first, ENCOUNTER ORDER (pre-order). The injectedSet
   // re-check is belt-and-suspenders (cross-subtree dedup since the scan).
-  for (const abs2 of absPaths) {
-    if (state.injectedSet.has(abs2)) continue; // already claimed (e.g. by a sibling subtree meanwhile)
-    await injectFile(abs2, state, ctx); // claims abs, classifies, bumps count, recurses again if markdown
+  for (const rec of recs) {
+    if (state.injectedSet.has(claimKey(rec.path, rec.startLine, rec.endLine))) continue; // already claimed (e.g. by a sibling subtree meanwhile)
+    await injectFile(rec.path, state, ctx, rec.startLine, rec.endLine); // claims key, classifies, bumps count, recurses again if markdown
   }
 }
 
