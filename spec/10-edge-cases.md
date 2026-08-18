@@ -75,6 +75,15 @@
 | `input` short-circuits (extension source / steering) but `before_agent_start` still fires | Stash empty → `before_agent_start` returns `undefined`; no phantom injection. |
 | Renderer throws | Caught by `CustomMessageComponent`; falls back to Pi's default `[fileInjector.injected]` purple box. Never crashes the TUI. (Renderer is defensive; this is a last resort.) |
 | Old/foreign `fileInjector.injected` entry with no `details.files` | Renderer fallback: single `read (injected files)` line + raw `content` when expanded (§6.3). |
+| `#@a.ts:3` / `#@a.ts:2-3` | Only lines 3 / 2–3 delivered; `read a.ts:3` / `read a.ts:2-3`; prompt verbatim (§17). |
+| `#@a.ts:0` / `#@a.ts:5-3` (invalid) | Not a range — literal fallback fails → verbatim **+ warning notify** (LR-3). |
+| `#@a.ts:99` on a 5-line file | Past-EOF start → verbatim, no block, claim revoked, notify — never an empty block (LR-4). |
+| `#@a.ts:2-100000` on a 5-line file | Lines 2–5 delivered; displayed `read a.ts:2-5` (clamped, LR-5). |
+| `#@a.ts:10` + `#@a.ts:10-10` / + `#@a.ts:20` / + `#@a.ts` | Same canonical key → one block / two distinct ranges → two / range + whole → two (§17.3). |
+| `#@pic.png:3` (+ `#@pic.png`), `#@data.bin:5` | Range ignored; image attached / note delivered **once**; bare-path claim (LR-2). |
+| `#@huge.log:1-999999` under a tight budget | The **slice** pages — head + directive, resume in file coordinates (LR-1). |
+| `#@notes.md:2` (import on line 2) vs `:1` | Import resolved / not — the scan runs on the slice (LR-6). |
+| Literal file named `a.ts:10` exists | Exact path wins — whole literal file, no range (§17.2). |
 
 ---
 

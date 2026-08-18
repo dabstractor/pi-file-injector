@@ -25,3 +25,4 @@ or reference any single part to import just that section.
 @14-autocomplete.md  Interactive path autocomplete
 @15-url-injection.md  Feature: URL web-content injection
 @16-appendix-skeleton.md  Appendix A: minimal skeleton
+@17-line-ranges.md  Feature: `#@path:N` / `:N-M` line ranges
