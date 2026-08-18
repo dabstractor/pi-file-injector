@@ -4,7 +4,7 @@
       "type": "Phase",
       "id": "P1",
       "title": "Line-Range Gap Closure (LR-1…LR-5)",
-      "status": "Planned",
+      "status": "Complete",
       "description": "Close the five verified line-range gaps in file-injector.ts at HEAD ef57bd0: LR-1 (slice runs the §5.5 budget/paging decision), LR-2 (images/binaries claim the bare abs — no duplicate bytes), LR-3 (malformed ranges warn instead of vanishing), LR-4 (past-EOF start is a failed token, not an empty block), LR-5 (display shows the delivered/clamped range). Add regression gates LINE-7…LINE-12 to file-injector.test.mjs, keep all 4 suites + typecheck green, and sync README.md (which currently claims ranges never page). LR-6/LR-7 are OK at HEAD and all URL-side work is shipped — out of scope. Research findings: plan/011_e473dac8178b/architecture/{system_context,code_map,external_deps}.md (all line numbers verified at HEAD).",
       "milestones": [
         {
@@ -144,21 +144,21 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Regression gates & changeset-level documentation",
-          "status": "Planned",
+          "status": "Complete",
           "description": "Formalize the spec §9 named gates LINE-7…LINE-12 in file-injector.test.mjs, prove the full suite + typecheck green, then sync README.md's line-range section to the honest contract (Mode B — runs last, depends on all implementing subtasks).",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M2.T1",
               "title": "LINE-7…LINE-12 regression gates + full-suite green",
-              "status": "Ready",
+              "status": "Complete",
               "description": "R4: add the six named gates from spec/17-line-ranges.md §9 to file-injector.test.mjs using the existing runCase harness, then sweep npm test (4 files) and npm run typecheck to green. The implementing subtasks already carry TDD tests; these gates pin the exact spec matrix and guard against regressions.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Gates LINE-7 / LINE-9 / LINE-10 (resolution, image dedup, malformed notify)",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1",
@@ -197,7 +197,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S3",
                   "title": "Full-suite green sweep: npm test (4 files) + npm run typecheck",
-                  "status": "Ready",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S3",
@@ -216,14 +216,14 @@
               "type": "Task",
               "id": "P1.M2.T2",
               "title": "Sync changeset-level documentation",
-              "status": "Planned",
+              "status": "Complete",
               "description": "R5 (Mode B): update README.md's line-range documentation to the honest contract delivered by R1–R4. It contradicts LR-1 today (L128: 'Closed ranges inject whole (no paging past the selection).'). Depends on every implementing subtask; runs last.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T2.S1",
                   "title": "README line-range section: honest paging, failure feedback, clamped display, image/binary dedup",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
