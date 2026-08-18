@@ -2801,6 +2801,44 @@ await runCase("REND-MULTI-OFFSET", "§12.22 multi-block offset tier: computeDeta
     `expanded body child [3] (b.ts) carries the exact content (NO drift), got ${JSON.stringify(bodyB.slice(0, 80))}`);
 });
 
+// REND-PAGED-URL — BUG-001(url slice): a paged delivery emits TWO blocks (head + directive) but ONE detail, so
+// a following url detail fell to the renderer's tier-3 bodies[i] fallback (indexes BLOCKS while i counts
+// DETAILS) and rendered the <paged: …> directive instead of the URL markdown. Fix: computeDetailOffsets
+// processes kind "url" (its block is body-bearing with the formatTextFileBlock envelope). This test pins the
+// offset slice (unit) AND the renderer child (E2E) for the paged+url mix.
+await runCase("REND-PAGED-URL", "BUG-001(url): kind 'url' gets offsets — after a paged file the url body pairs with ITS block (not the directive)", async () => {
+  const PAGED_PATH = "/abs/big.log";
+  const URL = "https://example.com/doc";
+  const head = "H".repeat(50);
+  const urlBody = "# Extracted page markdown\n\nSome prose from the URL.\n";
+  const pagedHeadBlock = '<file name="' + PAGED_PATH + '">\n' + head + '\n</file>';
+  const pagedDirectiveBlock = '<file name="' + PAGED_PATH + '"><paged: 118890 chars; head delivered 212 complete lines; read the rest with the read tool at offset:213, limit:2000, incrementing offset by 2000 until done></file>';
+  const urlBlock = '<file name="' + URL + '">\n' + urlBody + '\n</file>';
+  const blocks = [pagedHeadBlock, pagedDirectiveBlock, urlBlock];
+  const content = blocks.join("\n\n");
+  const details = [
+    { path: PAGED_PATH, kind: "paged", chars: 118890, range: ":213-", pagedHeadLines: 212 },
+    { path: URL, kind: "url", chars: urlBody.length },
+  ];
+  mod.computeDetailOffsets(blocks, details);
+  // (a) THE regression assertion — the url detail's offsets recover ITS body, never the directive.
+  const sliceUrl = content.slice(details[1].contentStart, details[1].contentStart + details[1].contentLen);
+  assert(sliceUrl === urlBody, `url offset slice must be the exact URL markdown, got ${JSON.stringify(sliceUrl.slice(0, 60))}`);
+  assert(!sliceUrl.includes("<paged:"), "url body must NOT be the paged directive");
+  // (b) paged pairing unchanged (head block; the directive is skipped by the 0x0A test).
+  const slicePaged = content.slice(details[0].contentStart, details[0].contentStart + details[0].contentLen);
+  assert(slicePaged === head, `paged head slice unchanged, got ${JSON.stringify(slicePaged.slice(0, 40))}`);
+  // (c) E2E through the renderer — locate the url READ line, then the NEXT child is the markdown.
+  const expanded = mod.renderInjectedMessage({ details: { files: details }, content }, { expanded: true }, REND_THEME);
+  const kids = expanded.children.map(textOf);
+  const urlLineIdx = kids.findIndex((t) => t.includes("read") && t.includes("example.com"));
+  assert(urlLineIdx !== -1, "the url read line must be present in the expanded view");
+  const urlBodyChild = String(kids[urlLineIdx + 1]);
+  assert(urlBodyChild.includes("Extracted page markdown"),
+    `the child after the url read line must carry the markdown, got ${JSON.stringify(urlBodyChild.slice(0, 80))}`);
+  assert(!urlBodyChild.includes("<paged:"), "the url body child must not be the directive");
+});
+
 // REND-MULTI-E2E — §h3.0 Issue 1 E2E regression (bugfix PRD §h2.4 "no automated end-to-end test that injects ≥2
 // files"). The unit REND-MULTI-OFFSET crafts blocks + calls computeDetailOffsets manually; THIS test drives the
 // REAL input → before_agent_start handler chain (which calls computeDetailOffsets internally at L1284) with a
