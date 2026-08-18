@@ -457,7 +457,10 @@ function blockPath(block: string): string | undefined {
  *  paired; a path can repeat across distinct files only if two files share an abs path, which is impossible).
  *  The body lives between the opener `<file name="ABS">\\n` and the closing `\\n</file>`; its length equals
  *  `block.length - headerLen - closerLen`. Image/binary details have no displayable body and are skipped
- *  here (F5 is kind "image"); binary lands via the note branch (P1.M1.T1.S2). Url details DO get offsets —
+ *  here (F5 is kind "image"). Binary details pair via a KIND-GATED no-newline branch (P1.M1.T1.S2):
+ *  formatBinaryBlock emits no '\n' after the opener, so headerLen = openEnd and closerLen = 7 — the
+ *  slice is the note inner text. The gate keeps the 0x0A test as the paged-directive-skip for
+ *  text/paged (a paged detail NEVER pairs its directive). Url details DO get offsets —
  *  formatUrlBlock emits the identical body-bearing envelope as formatTextFileBlock, so they pair unchanged.
  *  Idempotent + defensive: a detail whose block can't be located is left untouched (renderer falls back to
  *  the regex tier). Mutates `details` in place and returns it for chaining. */
@@ -474,7 +477,7 @@ export function computeDetailOffsets(blocks: string[], details: FileDetail[]): F
   const cursorByPath = new Map<string, number>();
   for (let di = 0; di < details.length; di++) {
     const d = details[di];
-    if (d.kind === "image" || d.kind === "binary") continue; // no displayable body (F5 is kind "image").
+    if (d.kind === "image") continue; // image never renders a body (renderer's kind!=="image" guard); F5 is kind "image".
     // url blocks ARE body-bearing (formatUrlBlock ≡ the formatTextFileBlock envelope `<file name="X">\nBODY\n</file>`),
     // so they pair through the same 0x0A test + headerLen/closerLen math below — no special-casing needed.
     const p = d.path;
@@ -499,6 +502,20 @@ export function computeDetailOffsets(blocks: string[], details: FileDetail[]): F
             d.contentLen = bodyLen;
           }
           cursorByPath.set(p, bi + 1); // consumed; a following paged directive block has the same path but is skipped below
+          break;
+        } else if (d.kind === "binary") {
+          // BINARY NOTE BRANCH (BUG-001, P1.M1.T1.S2) — formatBinaryBlock emits `<file name="ABS"><binary …></file>`
+          // with NO '\n' after the opener, so the 0x0A body-bearing test fails; the displayable body is the whole
+          // note inner text. The KIND-GATE is load-bearing: without it a paged detail could pair its OWN directive
+          // block (also no 0x0A) — text/paged/url pairing stays byte-for-byte unchanged.
+          const headerLen = openEnd;             // no '\n' to include (vs openEnd + 1 in the 0x0A branch)
+          const closerLen = "</file>".length;    // 7 — no leading '\n' (formatBinaryBlock appends a bare '</file>')
+          const bodyLen = blk.length - headerLen - closerLen;
+          if (bodyLen >= 0) { // defensive: malformed block → leave detail untouched
+            d.contentStart = starts[bi] + headerLen;
+            d.contentLen = bodyLen;
+          }
+          cursorByPath.set(p, bi + 1); // consumed
           break;
         }
       }
@@ -565,8 +582,8 @@ export interface FileDetail {
                       //   view after the head body (§6.3: paged files show head + directive verbatim).
                       //   Populated by emitText's paged branch (P1.M2.T2.S1); the directive block still
                       //   reaches the model via message.content (display-only fix). OMITTED for non-paged.
-  contentStart?: number; // §12.22 — char offset of this file's body within message.content (text/paged/url;
-                         //   image/binary omit — binary via the note branch, P1.M1.T1.S2). The renderer slices
+  contentStart?: number; // §12.22 — char offset of this file's body within message.content (text/paged/url/binary
+                         //   — binary via the kind-gated no-newline note branch, P1.M1.T1.S2; image omits). The renderer slices
                          //   message.content for BUG-1-safe body recovery WITHOUT duplicating bytes into details
                          //   (P1.M2.T1.S1). Populated
                          //   by computeDetailOffsets in before_agent_start (absolute offset within the

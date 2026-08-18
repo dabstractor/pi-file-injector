@@ -2839,6 +2839,40 @@ await runCase("REND-PAGED-URL", "BUG-001(url): kind 'url' gets offsets — after
   assert(!urlBodyChild.includes("<paged:"), "the url body child must not be the directive");
 });
 
+await runCase("REND-PAGED-BIN", "BUG-001(binary): kind 'binary' gets offsets — after a paged file the binary note pairs with ITS block (not the directive)", async () => {
+  const PAGED_PATH = "/abs/big.log";
+  const BIN = "/abs/note.bin";
+  const head = "H".repeat(50);
+  const pagedHeadBlock = '<file name="' + PAGED_PATH + '">\n' + head + '\n</file>';
+  const pagedDirectiveBlock = '<file name="' + PAGED_PATH + '"><paged: 118890 chars; head delivered 212 complete lines; read the rest with the read tool at offset:213, limit:2000, incrementing offset by 2000 until done></file>';
+  const binaryNote = '<binary file \u2014 contents not injected; use the read tool if needed>';
+  const binaryBlock = '<file name="' + BIN + '">' + binaryNote + '</file>';   // NO '\n' after the opener
+  const blocks = [pagedHeadBlock, pagedDirectiveBlock, binaryBlock];
+  const content = blocks.join("\n\n");
+  const details = [
+    { path: PAGED_PATH, kind: "paged", chars: 118890, range: ":213-", pagedHeadLines: 212 },
+    { path: BIN, kind: "binary" },
+  ];
+  mod.computeDetailOffsets(blocks, details);
+  // (a) THE regression assertion — the binary detail's offsets recover the note inner, never the directive.
+  const sliceBin = content.slice(details[1].contentStart, details[1].contentStart + details[1].contentLen);
+  assert(sliceBin === binaryNote, `binary offset slice must be the exact note text, got ${JSON.stringify(sliceBin.slice(0, 60))}`);
+  assert(!sliceBin.includes("<paged:"), "binary body must NOT be the paged directive");
+  // (b) THE KIND-GATE INVARIANT — paged pairing unchanged: the head, never its own directive block.
+  const slicePaged = content.slice(details[0].contentStart, details[0].contentStart + details[0].contentLen);
+  assert(slicePaged === head, `paged head slice unchanged (directive still NEVER pairs), got ${JSON.stringify(slicePaged.slice(0, 40))}`);
+  assert(!slicePaged.includes("<paged:"), "paged slice must never be the directive");
+  // (c) E2E renderer — the child after the binary read line carries the note (lang undefined → un-highlighted).
+  const expanded = mod.renderInjectedMessage({ details: { files: details }, content }, { expanded: true }, REND_THEME);
+  const kids = expanded.children.map(textOf);
+  const binLineIdx = kids.findIndex((t) => t.includes("read") && t.includes("note.bin"));
+  assert(binLineIdx !== -1, "the binary read line must be present in the expanded view");
+  const binBodyChild = String(kids[binLineIdx + 1]);
+  assert(binBodyChild.includes("binary file \u2014 contents not injected"),
+    `the child after the binary read line must carry the note text, got ${JSON.stringify(binBodyChild.slice(0, 80))}`);
+  assert(!binBodyChild.includes("<paged:"), "the binary body child must not be the directive");
+});
+
 // REND-MULTI-E2E — §h3.0 Issue 1 E2E regression (bugfix PRD §h2.4 "no automated end-to-end test that injects ≥2
 // files"). The unit REND-MULTI-OFFSET crafts blocks + calls computeDetailOffsets manually; THIS test drives the
 // REAL input → before_agent_start handler chain (which calls computeDetailOffsets internally at L1284) with a
