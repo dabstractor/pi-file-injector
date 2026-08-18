@@ -1166,21 +1166,30 @@ await runCase("PD6", "§5.5 Finding 2: sub-head-sized file under tight budget �
 // low-medium: the sub-head guard always delivers whole by design (Finding 2), so whether subtract
 // ran or not, injected/paged/the emitted blocks are identical for any one injectFiles call). The
 // effect only compounds internally across many files. We therefore pin the fix structurally: read
-// the emitText source and assert the sub-head-guard branch contains a subtract(state, fileCost)
-// call (matching the whole branch). This is a regression guard against the one-line fix being
+// the source and assert (a) the sub-head guard routes through emitWholeText and (b) emitWholeText —
+// now the single whole-delivery implementation for all four paths — contains the subtract(state,
+// fileCost) call (F1 holds structurally). This is a regression guard against the one-line fix being
 // reverted, and documents WHY no behavioral case can distinguish it.
 await runCase("PD-SUBHEAD-BUDGET", "§5.6.2 sub-head guard subtracts fileCost (source-level regression guard) [F1]", async () => {
   const src = fsSync.readFileSync(path.join(process.cwd(), "file-injector.ts"), "utf8");
-  // locate emitText and inspect only its body
+  // P1.M1.T1.S3: the F1 subtract moved into emitWholeText (the ONE whole-delivery helper). Pin BOTH halves:
+  // (a) emitText's sub-head guard routes through emitWholeText; (b) the helper subtracts the full fileCost —
+  // which now covers ALL FOUR whole-delivery paths (range inline, range guard, whole inline, whole guard).
   const fnStart = src.indexOf("function emitText(");
   assert(fnStart !== -1, "emitText must exist in file-injector.ts");
   const fnBody = src.slice(fnStart, src.indexOf("\n}", fnStart) + 2);
-  // the sub-head-guard branch is `if (content.length <= HEAD_CHARS) {` — find it
   const guardIdx = fnBody.indexOf("content.length <= HEAD_CHARS");
   assert(guardIdx !== -1, "sub-head guard branch must exist in emitText");
   const guardBlock = fnBody.slice(guardIdx, fnBody.indexOf("} else {", guardIdx));
-  assert(guardBlock.includes("subtract(state, fileCost)"),
-    `sub-head guard must call subtract(state, fileCost) — F1 fix present in: ${JSON.stringify(guardBlock)}`);
+  assert(guardBlock.includes("emitWholeText("),
+    `sub-head guard must deliver via emitWholeText — got: ${JSON.stringify(guardBlock)}`);
+  const helperStart = src.indexOf("function emitWholeText(");
+  assert(helperStart !== -1, "emitWholeText must exist in file-injector.ts");
+  const helperBody = src.slice(helperStart, src.indexOf("\n}", helperStart) + 2);
+  assert(helperBody.includes("subtract(state, fileCost)"),
+    `emitWholeText must call subtract(state, fileCost) — F1 invariant in: ${JSON.stringify(helperBody)}`);
+  const emitCalls = fnBody.match(/emitWholeText\(/g)?.length ?? 0;
+  assert(emitCalls === 4, `emitText must route ALL 4 whole-delivery paths through emitWholeText; found ${emitCalls}`);
 });
 
 await runCase("PD7", "§5.5 Finding 1: long-lined file (head < 1 line) → directive offset derived from head, 0% loss", async () => {

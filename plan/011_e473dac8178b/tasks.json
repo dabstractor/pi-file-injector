@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "LR-1 + LR-5: slice budget/paging & honest display in emitText",
-              "status": "Researching",
+              "status": "Complete",
               "description": "Rewrite emitText's range branch (L1303–1312) so the sliced content flows through the same §5.5 inline-vs-paged decision as a whole file, with the paged directive resuming in FILE coordinates, and clamp FileDetail.range/read line to the delivered range. Includes the normative code-quality note: unify the cost/lines/push/subtract quadruple instead of adding a fourth copy.",
               "subtasks": [
                 {
@@ -61,7 +61,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "Unify the emit quadruple + rewrite emitText JSDoc (code-quality note + Mode A docs)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
@@ -88,7 +88,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S1",
                   "title": "LR-2: images/binaries claim the bare abs (no duplicate bytes)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: code_map.md §injectFile — the claim claimKey(abs, startLine, endLine) happens at L1239–1240 BEFORE classification; the three non-text branches are F5 empty-image (L1247–1253), F3 real-image (L1255–1271, magic-number sniff + resize + state.images.push), binary note (L1275–1281). Today '#@pic.png #@pic.png:3' claims abs and abs:3 → the same image attached twice. Spec §3 LR-2 implementation shape: keep the pre-read ranged claim (recursion-readiness, unchanged), then once classified image/binary the EFFECTIVE claim is the bare abs; text/markdown keep claiming abs:N / abs:N-M (distinct ranges are distinct deliveries).\n2. INPUT: injectFile(abs, state, ctx, startLine?, endLine?) with state.injectedSet; claimKey (L192–196) already canonicalizes :N ≡ :N-N.\n3. LOGIC: In EACH of the three branches (F5, F3, binary), before emitting: if state.injectedSet.has(abs) → duplicate → emit NOTHING, do not bump state.count, leave the token verbatim and return false (nothing emitted); otherwise add the bare abs key (the ranged key may remain alongside harmlessly or be normalized/deleted — spec allows both; pick one and note it in the JSDoc). scanTokens' localSeen dedups only same-key scans, so the ranged record still reaches injectFile and must be turned away there. Both token orders must dedup ('#@pic.png #@pic.png:3' AND '#@pic.png:3 #@pic.png'). Mock nothing (real fixture images already exist in the test suite — reuse the pic.png fixture used by budget tests ~L1563+).\n4. OUTPUT: exactly one state.images entry for the png pair; exactly one binary note for a binary twin pair; state.count bumped once per actually-delivered file. Failing tests first for both orders and both kinds — formalized as LINE-9 in P1.M2.T1.S1. LINE-1…6 (text/markdown claims) unchanged.\n5. DOCS: Mode A — JSDoc on injectFile claim semantics: 'claim ⟺ delivered; images/binaries claim the bare abs — a range is meaningless identity for them'. Rides with the work.",

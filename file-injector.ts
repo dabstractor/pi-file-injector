@@ -1290,11 +1290,15 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
 }
 
 /**
- * PRD §9 / §5.5 — inline-vs-paged decision for a text file. Pushes block(s) onto state.blocks and subtracts
- * the block's cost from state.remaining via subtract(). Bumps state.paged on the page path (NOT count —
- * injectFile bumps count once per file). Lifted VERBATIM from the former inline text branch of injectFiles
- * (T1.S1): whole if budget unknown or fileCost ≤ PAGED_THRESHOLD·remaining; sub-head guard (content ≤
- * HEAD_CHARS → whole, no directive, no extra subtract); else head + directive + paged++ + subtract(head cost).
+ * PRD §9 / §5.5 / §17.5 (LR-1) — the inline-vs-paged decision for a text file OR a `#@file:N`/`:N-M` slice.
+ * The §5.5 decision applies to the sliced content exactly as to a whole file: whole (via emitWholeText) if the
+ * budget is unknown (O-1 fallback) or fileCost ≤ PAGED_THRESHOLD·remaining; the sub-head guard applies to the
+ * SLICE (content ≤ HEAD_CHARS → whole, never a directive pointing past the end); else PAGE — head block +
+ * directive, where paged slices resume in FILE coordinates (resumeLine = startLine + complete-lines-in-slice-head,
+ * so the model's read continues at the correct absolute line; the whole-file headLines+1 is the startLine=1
+ * special case). FileDetail.range shows the delivered (clamped) range (LR-5), or `:<resumeLine>-` when paged.
+ * Bumps state.paged on the page path (NOT count — injectFile bumps count once per file). Whole deliveries all
+ * route through emitWholeText (the ONE cost/lines/push/subtract implementation — PRD §17.10 code-quality note).
  */
 export function emitText(abs: string, content: string, state: State, startLine?: number, endLine?: number): void {
   // Optional `#@file:N` / `#@file:N-M` — deliver ONLY that inclusive line range (not N→EOF).
@@ -1316,18 +1320,13 @@ export function emitText(abs: string, content: string, state: State, startLine?:
     const deliveredEnd = startLine + (content.match(/\n/g)?.length ?? 0);
     rangeSuffix = startLine === deliveredEnd ? `:${startLine}` : `:${startLine}-${deliveredEnd}`; // UI: read path:N / path:N-M (clamped to the delivered range)
     const fileCost = Math.ceil(content.length / 4);
-    const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1;
     if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
-      // INLINE (whole slice) — fits or budget unknown (O-1): byte-identical to the former unconditional push.
-      state.blocks.push(formatTextFileBlock(abs, content));
-      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix }); // the DELIVERED (clamped) range (LR-5) — clamps only when the requested end passed EOF
-      subtract(state, fileCost);
+      // INLINE (whole slice) — fits or budget unknown (O-1). rangeSuffix = the DELIVERED (clamped) range (LR-5).
+      emitWholeText(abs, content, state, rangeSuffix);
     } else if (content.length <= HEAD_CHARS) {
       // §5.5 sub-head guard — applied to the SLICE length (a slice that already fits HEAD_CHARS pages nothing;
-      // a directive would point past the range's end, causing a spurious read).
-      state.blocks.push(formatTextFileBlock(abs, content));
-      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix });
-      subtract(state, fileCost);
+      // a directive would point past the range's end, causing a spurious read). Whole delivery → emitWholeText.
+      emitWholeText(abs, content, state, rangeSuffix);
     } else {
       // LR-1 — PAGE the slice: head block + directive; the resume offset is in FILE coordinates
       // (startLine + complete-lines-in-head) so the model's read continues at the correct absolute line.
@@ -1345,12 +1344,9 @@ export function emitText(abs: string, content: string, state: State, startLine?:
   }
 
   const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
-  const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1; // PRD §9 — delivered line count
   if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
-    // INLINE (whole) — current behavior preserved (PRD §5.1)
-    state.blocks.push(formatTextFileBlock(abs, content));
-    state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount }); // §12.22 — contentStart/contentLen populated by computeDetailOffsets in before_agent_start (no body duplication)
-    subtract(state, fileCost);
+    // INLINE (whole) — current behavior preserved (PRD §5.1). §12.22 offsets computed in before_agent_start.
+    emitWholeText(abs, content, state);
   } else {
     // PAGED — head block (first HEAD_CHARS) + directive (PRD §5.5 Page path).
     //
@@ -1369,12 +1365,10 @@ export function emitText(abs: string, content: string, state: State, startLine?:
     const head = headSlice(content);
     if (content.length <= HEAD_CHARS) {
       // whole content fits the head slice → deliver inline, never page (FINDING 2).
-      // The file is delivered WHOLE, so its whole cost is accounted (PRD §5.6.2 "each delivered file
-      // subtracts its cost at emit time"). Earlier this branch pushed the block without subtract(),
-      // which let a tight-but-positive budget never deplete across a run of small files (F1).
-      state.blocks.push(formatTextFileBlock(abs, content));
-      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount }); // §12.22 — offsets computed in before_agent_start (no body duplication)
-      subtract(state, fileCost);
+      // F1 (PRD §5.6.2 "each delivered file subtracts its cost at emit time"): emitWholeText subtracts the
+      // FULL fileCost — the invariant that earlier lived only at this guarded site now holds for every
+      // whole-delivery path by construction (the helper is the single implementation).
+      emitWholeText(abs, content, state);
     } else {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
       const headLines = headCompleteLineCount(head);
@@ -1387,6 +1381,23 @@ const resumeLine = headLines + 1; // 1-indexed: first line AFTER the complete li
       subtract(state, Math.ceil(HEAD_CHARS / 4));
     }
   }
+}
+
+/**
+ * PRD §5.5/§5.6.2 — the ONE whole-text delivery: cost estimate, delivered line count, the whole-file block,
+ * the kind:"text" FileDetail, and the budget subtract. Every whole-delivery path in emitText (ranged inline,
+ * ranged sub-head guard, whole-file inline, whole-file sub-head guard) routes through here, so the F1 invariant
+ * (a whole delivery always subtracts its FULL fileCost) holds by construction. `rangeSuffix` (the DELIVERED,
+ * clamped range per LR-5) is attached only when present — a whole-file detail carries NO range key.
+ */
+function emitWholeText(abs: string, content: string, state: State, rangeSuffix?: string): void {
+  const fileCost = Math.ceil(content.length / 4); // O-3 heuristic (no string estimator exported)
+  const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1; // empty → 0
+  state.blocks.push(formatTextFileBlock(abs, content));
+  state.details.push(rangeSuffix === undefined
+    ? { path: abs, kind: "text", chars: content.length, lines: lineCount } // §12.22 — offsets computed by computeDetailOffsets in before_agent_start
+    : { path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix }); // LR-5 — the DELIVERED (clamped) range
+  subtract(state, fileCost);
 }
 
 /**
