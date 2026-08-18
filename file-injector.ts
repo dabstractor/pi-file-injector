@@ -168,13 +168,15 @@ export function cleanToken(raw: string): string {
 
 /** Optional trailing line range on a token (1-indexed, inclusive).
  *  `#@a.ts:10` → lines 10–10 (single line). `#@a.ts:10-15` → lines 10–15.
- *  Exact path wins at resolve time (a file literally named `a.ts:10` still resolves as-is). */
-export function splitLineRange(token: string): { path: string; startLine?: number; endLine?: number } {
+ *  Exact path wins at resolve time (a file literally named `a.ts:10` still resolves as-is).
+ *  LR-3: an INVALID range (e.g. `:0`, `:5-3`) returns `invalid: true` with the raw token as path —
+ *  the caller (scanTokens → processTokenStream) warns the user and leaves the marker verbatim. */
+export function splitLineRange(token: string): { path: string; startLine?: number; endLine?: number; invalid?: true } {
   const m = /:(\d+)(?:-(\d+))?$/.exec(token);
   if (!m) return { path: token };
   const start = Number(m[1]);
   const end = m[2] !== undefined ? Number(m[2]) : start; // bare :N → single line
-  if (!Number.isFinite(start) || start < 1 || !Number.isFinite(end) || end < start) return { path: token };
+  if (!Number.isFinite(start) || start < 1 || !Number.isFinite(end) || end < start) return { path: token, invalid: true };
   const p = token.slice(0, m.index!);
   return p ? { path: p, startLine: start, endLine: end } : { path: token };
 }
@@ -1145,9 +1147,9 @@ export async function scanTokens(
   baseDir: string,
   opts: { allowAbsTilde: boolean; skipCode: boolean; tryMdExt: boolean; bareAt?: boolean },
   state: State,
-): Promise<{ path: string; startLine?: number; endLine?: number }[]> {
+): Promise<{ path: string; startLine?: number; endLine?: number; invalidRange?: true }[]> {
   const localSeen = new Set<string>();
-  const out: { path: string; startLine?: number; endLine?: number }[] = [];
+  const out: { path: string; startLine?: number; endLine?: number; invalidRange?: true }[] = [];
   // §5.6.1 — when scanning markdown content, precompute code regions once and skip `#@` matches whose
   // start index lies inside a fenced block or inline code span (the markdown escape hatch, §4.5 rule 3).
   // null when skipCode:false (top-level user-prompt scan) → inCode is never called → no behavior change.
@@ -1172,6 +1174,10 @@ export async function scanTokens(
     let endLine: number | undefined;
     if (!abs) {
       const parsed = splitLineRange(token);
+      // LR-3 — malformed range (`:0`, `:5-3`): the exact path (a literal `a.ts:0` file) had its chance above;
+      // an invalid range is not a path either → surface it as invalidRange so processTokenStream can warn
+      // the user (token stays verbatim, nothing injected). Must run BEFORE the startLine check below.
+      if (parsed.invalid) { out.push({ path: token, invalidRange: true }); continue; }
       if (parsed.startLine !== undefined && parsed.path !== token) {
         if (!opts.allowAbsTilde && isAbsoluteOrTilde(parsed.path)) continue;
         abs = await resolveImportPath(parsed.path, baseDir, opts.tryMdExt);
@@ -1210,6 +1216,12 @@ async function processTokenStream(
 ): Promise<void> {
   const recs = await scanTokens(text, baseDir, opts, state); // scan once, before any injection (opts carries tryMdExt)
   for (const rec of recs) {
+    // LR-3 — malformed range (`:0`, `:5-3`): warn (interactive only) and leave verbatim. No claim, no dedup
+    // (invalid records are never in injectedSet — localSeen would catch repeats but each scan is per-text anyway).
+    if (rec.invalidRange) {
+      if (ctx.hasUI) ctx.ui?.notify(`#@${rec.path} — not injected (range must be :N or :N-M, M ≥ N ≥ 1)`, "warning");
+      continue;
+    }
     if (state.injectedSet.has(claimKey(rec.path, rec.startLine, rec.endLine))) continue; // same path+range already claimed since scan
     await injectFile(rec.path, state, ctx, rec.startLine, rec.endLine); // claims key, emits block(s); never throws
   }

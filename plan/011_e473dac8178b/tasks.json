@@ -11,7 +11,7 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "Core gap fixes in file-injector.ts",
-          "status": "Planned",
+          "status": "Researching",
           "description": "Implement LR-1…LR-5 as behavior changes in emitText (slice budget/paging + clamped display + quadruple unification) and injectFile/scanTokens/splitLineRange (bare-abs claims, malformed-range notify, past-EOF failure). Each subtask carries its own failing-test-first coverage (implicit TDD); the named LINE-7…12 gates are formalized in P1.M2.T1.",
           "tasks": [
             {
@@ -81,7 +81,7 @@
               "type": "Task",
               "id": "P1.M1.T2",
               "title": "LR-2 claim-by-classification + LR-3/LR-4 failure feedback",
-              "status": "Planned",
+              "status": "Researching",
               "description": "R2: images/binaries claim the bare abs so identical bytes are never attached twice. R3: malformed ranges (:0, :5-3) that resolve to no file fire a hasUI-guarded warning notify instead of vanishing. LR-4: a start past EOF yields a failed token — verbatim, claim revoked, notify — never an empty <file> block.",
               "subtasks": [
                 {
@@ -104,7 +104,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S2",
                   "title": "LR-3: malformed-range tokens warn instead of vanishing",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: code_map.md — splitLineRange (L170–177) returns {path: token} for invalid suffixes (:0, :5-3), indistinguishable from 'no suffix'; scanTokens (L1144–1180, EXPORTED, unit-tested by LINE-5 at test L3008+) then drops the unresolvable token silently. CRITICAL: scanTokens has NO ctx parameter, so the notify CANNOT fire inside it — signal out and fire from the ctx-holding caller processTokenStream (L1195+), mirroring the SPA-fallback pattern `if (ctx.hasUI) ctx.ui?.notify(…, 'info')` at L956 (but type 'warning' here).\n2. INPUT: cleaned token (after §4.3 trailing-punct trim) inside scanTokens; resolveImportPath results (exact-first: a literal file named 'a.ts:10' WINS whole — must never notify).\n3. LOGIC: (a) splitLineRange gains an invalid marker (e.g. invalid?: true when the regex /:(\\d+)(?:-(\\d+))?$/ matched but validation failed — start<1 or end<start) while valid- and no-suffix return shapes stay byte-identical; update LINE-4's two invalid-case unit expectations accordingly (they currently assert {path:'a.ts:0'} raw-fallback). (b) scanTokens surfaces invalid-range tokens that fail BOTH exact and stripped resolution (e.g. a record {path: rawToken, invalidRange: true} or a parallel return) WITHOUT breaking the exported contract/LINE-5. (c) processTokenStream: for such records fire `if (ctx.hasUI) ctx.ui?.notify(\\`#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)\\`, 'warning')` (message shows the token as typed) and skip injection — token stays verbatim. Must NOT fire for: tokens with no range-looking suffix, valid ranges that resolve, or invalid-suffix tokens whose literal file EXISTS (exact-path-wins). Note: markdown-import scans call scanTokens directly from injectMarkdown — threading the notify there is optional (top-level prompt path is REQUIRED and is what LINE-10 tests); if threaded, no duplicate notifies per token.\n4. OUTPUT: LINE-10 behavior — injected:0, prompt verbatim, warning notify fired (asserted via the spy ctx {hasUI:true, ui:{notify:(m,t)=>notes.push({m,t})}} from url-injection.test.mjs L703, passed to injectFiles whose ctx param is 3rd — see L1661). Failing test first.\n5. DOCS: Mode A — JSDoc on splitLineRange documenting the invalid marker, and the notify string documented at the firing site. Rides with the work.",
@@ -121,7 +121,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T2.S3",
                   "title": "LR-4: past-EOF start is a failed token (no empty block, claim revoked, notify)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1"

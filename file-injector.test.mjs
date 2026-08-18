@@ -3020,8 +3020,8 @@ await runCase("LINE-4", "splitLineRange / sliceLines unit helpers", async () => 
   assert(JSON.stringify(mod.splitLineRange("a.ts:10")) === JSON.stringify({ path: "a.ts", startLine: 10, endLine: 10 }), "a.ts:10 → single");
   assert(JSON.stringify(mod.splitLineRange("a.ts:10-15")) === JSON.stringify({ path: "a.ts", startLine: 10, endLine: 15 }), "a.ts:10-15");
   assert(JSON.stringify(mod.splitLineRange("a.ts")) === JSON.stringify({ path: "a.ts" }), "no suffix");
-  assert(JSON.stringify(mod.splitLineRange("a.ts:0")) === JSON.stringify({ path: "a.ts:0" }), ":0 invalid → keep raw");
-  assert(JSON.stringify(mod.splitLineRange("a.ts:5-3")) === JSON.stringify({ path: "a.ts:5-3" }), "end<start invalid → keep raw");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:0")) === JSON.stringify({ path: "a.ts:0", invalid: true }), ":0 invalid → raw token + LR-3 invalid marker");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:5-3")) === JSON.stringify({ path: "a.ts:5-3", invalid: true }), "end<start invalid → raw token + LR-3 invalid marker");
   assert(mod.sliceLines("a\nb\nc\n", 2, 2) === "b", "single line 2");
   assert(mod.sliceLines("a\nb\nc\n", 2, 3) === "b\nc", "lines 2-3");
   assert(mod.sliceLines("a\nb\nc\n", 1, 3) === "a\nb\nc", "whole");
@@ -3127,6 +3127,44 @@ await runCase("LINE-9", "LR-2: #@pic.png #@pic.png:3 → ONE image (both orders)
   const r2b = await mod.injectFiles("Inspect #@data.bin:5 and #@data.bin", [], FIX);
   assert(r2b.injected === 1 && r2b.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length === 1,
     `reverse binary order also ONE note`);
+});
+
+// LINE-10 — LR-3 (§6): a malformed-range token (`:0`, `:5-3`) that resolves to no file warns instead of
+// vanishing. Injected:0, prompt verbatim, ONE warning notify with the token as typed. Negatives: no-suffix
+// missing files stay silent; valid ranges that resolve stay silent; a LITERAL file named `…:0` resolves whole
+// (exact-path-wins) with NO notify. Spy ctx mirrors url-injection.test.mjs's ctxWithNotifySpy (notes.push);
+// injectFiles' ctx param is 3rd.
+await runCase("LINE-10", "LR-3: #@a.ts:0 → injected:0, prompt verbatim, warning notify fired", async () => {
+  const notes = [];
+  const r = await mod.injectFiles("See #@a.ts:0 here", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes.push({ m, t }) } });
+  assert(r.injected === 0, `injected:0 (nothing delivered), got ${r.injected}`);
+  assert(r.text === "See #@a.ts:0 here", `prompt verbatim (#@a.ts:0 untouched), got ${JSON.stringify(r.text)}`);
+  assert(notes.length === 1, `exactly one notify fired, got ${notes.length}`);
+  assert(notes[0]?.t === "warning", `notify type 'warning', got ${notes[0]?.t}`);
+  assert(notes[0]?.m === "#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)",
+    `message shows the token as typed (em dash, ≥ chars), got ${JSON.stringify(notes[0]?.m)}`);
+
+  // Negative: a missing file with NO range-looking suffix stays silent (the common missing-file path).
+  const notes2 = [];
+  await mod.injectFiles("See #@nope.ts", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes2.push({ m, t }) } });
+  assert(notes2.length === 0, `missing file w/o range: NO notify, got ${notes2.length}`);
+
+  // Negative: a VALID range that resolves stays silent (delivers normally).
+  const notes3 = [];
+  const r3 = await mod.injectFiles("See #@a.ts:2", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes3.push({ m, t }) } });
+  assert(r3.injected === 1 && notes3.length === 0, `valid range resolves: injected=1, NO notify (notes=${notes3.length})`);
+
+  // Negative (§2.4 exact-path-wins): a file LITERALLY named '…:0' resolves whole — never notifies.
+  const lit = path.join(TMPDIR, "literal0.ts:0");
+  fsSync.writeFileSync(lit, "literal colon-zero file\n");
+  try {
+    const notes4 = [];
+    const r4 = await mod.injectFiles("See #@literal0.ts:0", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes4.push({ m, t }) } });
+    assert(r4.injected === 1 && notes4.length === 0, `literal '…:0' file exists → exact wins, delivered whole, NO notify`);
+    assert(hasBlock(r4, "literal colon-zero file"), "the literal file's content was delivered");
+  } finally {
+    fsSync.rmSync(lit, { force: true });
+  }
 });
 
 // MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@
