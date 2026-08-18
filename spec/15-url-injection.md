@@ -322,7 +322,7 @@ text files). Images delivered via URL go through the existing image branch.
 | `#example.com` mid-word `foo#example.com` | not matched (`#` not at boundary). |
 | `#v1.2` / `#3.14` | not URL-shaped → untouched prose. |
 | `#node.js` | deny-listed as a local-file reference (code extension `js`) → no fetch, untouched prose. Use `#https://node.js` to fetch. |
-| `ftp://` scheme | supported by `URL_SHAPE_RE`; fetch via `fetch` (Node supports it). |
+| `ftp://` scheme | accepted by `URL_SHAPE_RE` (§2.2 literal), but Node's `fetch` (undici) has no ftp support — the fetch throws (`TypeError: fetch failed`), so the token falls back to verbatim via the §3.5 catch (no block, no injection; the §3.6 footer spinner may flash — a fetch is genuinely attempted). |
 
 ---
 
@@ -344,7 +344,7 @@ if (cfg.enableUrls) {
   for (const m of event.text.matchAll(URL_INJECT_RE)) {
     const tok = cleanToken(m[2]);
     if (tok && URL_SHAPE_RE.test(tok)) {
-      const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
+      const abs = /^(https?|ftp):\/\//i.test(tok) ? tok : "https://" + tok;
       if (!state.injectedSet.has(abs)) {
         state.injectedSet.add(abs);
         onUrlFetch?.(abs);          // §3.6 — footer loading indicator (UI-only; undefined → no-op)

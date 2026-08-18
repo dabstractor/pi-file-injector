@@ -25,12 +25,15 @@ const BARE_AT_RE = /(^|(?<![\p{L}\p{N}_#]))@(\S+)/gu;
  *  Wires into the URL scan loop via `text.matchAll(URL_INJECT_RE)` → `m[2]` (P1.M1.T2.S3). NOT exported. */
 const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
 /** PRD §2.3 — an anchored shape gate: a candidate token is treated as a URL iff it has an explicit scheme
- *  (`https?`) OR a dotted host whose final label is an alpha TLD (2+ letters); optional `:port` and
+ *  (`https?` or `ftp` — spec §2.2 literal; NOTE [BUG-005]: `ftp://` passes this gate but Node's `fetch`
+ *  (undici) has no ftp support — the fetch throws and the token falls back to VERBATIM via injectUrl's
+ *  §3.5 catch, so ftp never injects; the gate still recognizes it so code matches the spec's regex
+ *  exactly) OR a dotted host whose final label is an alpha TLD (2+ letters); optional `:port` and
  *  optional `/path`. Case-insensitive (`i` flag; no `u` flag — no `\p{}` classes or lookbehind here).
  *  Leaves ordinary `#word` prose untouched: `#Heading`, `#1234` (issue ref), `#fff` (hex), `#3.14`,
  *  `#v1.2` (final label numeric → fails the alpha-TLD gate), and `C#`/`objective-C#` (mid-word, never a
  *  candidate) all fail to match. Accepted shapes include `#example.com/path`, `#https://x.com/y`,
- *  `#sub.example.co.uk/a`. [BUG-001] Code-extension deny-list: a scheme-less, PATH-LESS (bare
+ *  `#ftp://mirror.example/x`, `#sub.example.co.uk/a`. [BUG-001] Code-extension deny-list: a scheme-less, PATH-LESS (bare
  *  `word.ext`) token whose final label (after the last '.', lowercased) is a known code/file extension
  *  (e.g. `#main.go`, `#notes.md`, `#config.json`, `#node.js`) is treated as a LOCAL FILE reference, NOT a
  *  URL — the URL scan loop skips it before fetch (see `CODE_EXTENSIONS`). This eliminates the
@@ -40,7 +43,14 @@ const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
  *  deny-list entirely — use that form to force-fetch a domain whose TLD collides with a code extension
  *  (e.g. `#https://node.js`, `#https://foo.sh`). Wires into the URL loop as
  *  `URL_SHAPE_RE.test(cleanToken(m[2]))` (P1.M1.T2.S3). NOT exported. */
-const URL_SHAPE_RE = /^((https?):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
+const URL_SHAPE_RE = /^((https?|ftp):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
+/** [BUG-005] Shared scheme-bearing test for URL candidates — MUST stay in lockstep with
+ *  URL_SHAPE_RE's explicit-scheme alternative above (spec §2.2 literal: https?|ftp). Used by
+ *  the URL scan loop's deny-list guard and the https:// normalization so the two can never
+ *  drift again (a scheme-only gate change without this sync mangles ftp:// into
+ *  https://ftp://…). Case-insensitive (matches URL_SHAPE_RE's /i — #FTP://X is scheme-bearing).
+ *  NOT exported. */
+const URL_SCHEME_RE = /^(?:https?|ftp):\/\//i;
 /** [BUG-001] Code-extension deny-list. A scheme-less, PATH-LESS (bare `word.ext`) token whose final
  *  label (the substring after the LAST '.', lowercased) is in this Set is treated as a LOCAL FILE
  *  reference, NOT a URL — the URL scan loop skips it (no fetch, no normalization, no injection). This
@@ -1705,14 +1715,15 @@ export async function injectFiles(
         // class where the alpha-TLD gate's final label IS the extension (`#main.go`, `#notes.md`,
         // `#config.json`, `#node.js`). A slash-bearing scheme-less token (`#example.com/img.png`) is a
         // real domain + path — its alpha-TLD final label is the TLD (`com`), not the path extension, so
-        // it is NOT gated (it fetches). Explicit-scheme tokens (#https://…/#http://…) bypass
+        // it is NOT gated (it fetches). Explicit-scheme tokens (#https://…/#http://…/#ftp://…) bypass
         // this check entirely (URL_SHAPE_RE Alternative A). See CODE_EXTENSIONS + the JSDoc on
-        // URL_SHAPE_RE. Mirrors the scheme test used by the normalization below it.
-        if (!/^https?:\/\//i.test(tok) && !tok.includes("/")) {
+        // URL_SHAPE_RE. Mirrors the scheme test used by the normalization below it
+        // (shared URL_SCHEME_RE — kept in lockstep, BUG-005).
+        if (!URL_SCHEME_RE.test(tok) && !tok.includes("/")) {
           const finalLabel = tok.slice(tok.lastIndexOf(".") + 1).toLowerCase();
           if (CODE_EXTENSIONS.has(finalLabel)) continue;
         }
-        const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
+        const abs = URL_SCHEME_RE.test(tok) ? tok : "https://" + tok; // ftp://x stays ftp://x [BUG-005]
         if (!state.injectedSet.has(abs)) {
           state.injectedSet.add(abs);
           onUrlFetch?.(abs); // §X (URL download feedback) — fire AFTER gating+dedup, immediately before network egress, so the footer spinner only shows for a REAL fetch (not a gated/deduped/code-ext token)

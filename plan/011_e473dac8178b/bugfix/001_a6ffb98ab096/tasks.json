@@ -141,7 +141,7 @@
           "type": "Milestone",
           "id": "P1.M3",
           "title": "Spec & UX parity: autocomplete pass-through (BUG-004) + ftp scheme gate (BUG-005)",
-          "status": "Planned",
+          "status": "Complete",
           "description": "Two parity fixes. BUG-004: the #@ autocomplete item remap rewrites non-@ suggestion values to '#@<value>' (e.g. /cmd → '#@/cmd'), contradicting its own pass-through comment; applyCompletion does not depend on values starting with #@, so item-level pass-through is safe. BUG-005: URL_SHAPE_RE narrows the PRD URL spec's literal (https?|ftp) to https? only, and the coupled normalization site would mangle ftp:// tokens if only the regex changed — restore the spec-literal gate, sync the coupled site, and correct the spec's factually-wrong '(Node supports it)' claim.",
           "tasks": [
             {
@@ -173,14 +173,14 @@
               "type": "Task",
               "id": "P1.M3.T5",
               "title": "BUG-005: Restore spec-literal (https?|ftp) URL shape gate + sync coupled normalization + spec correction",
-              "status": "Planned",
+              "status": "Complete",
               "description": "Make code match the PRD URL spec's literal URL_SHAPE_RE ((https?|ftp)) — including the MANDATORY coupled fix to the https?-only normalization site that would otherwise mangle ftp:// tokens into https://ftp://… — and correct the spec's factually wrong '(Node supports it)' claim; ftp fetch still fails gracefully to verbatim via the existing catch.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T5.S1",
                   "title": "URL_SHAPE_RE ftp alternative + normalization site sync + spec/15 §7 correction",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Read plan/011_e473dac8178b/bugfix/001_a6ffb98ab096/architecture/spec_ux_bug004_005.md (§ BUG-005 spec-vs-code deviation + option comparison). spec/15-url-injection.md line 71 defines URL_SHAPE_RE with (https?|ftp); §7 edge-table row at line 325 promises ftp support but its parenthetical '(Node supports it)' is FACTUALLY WRONG — undici's fetch throws on ftp: (TypeError: fetch failed); §8 line 333 repeats the spec regex. Code: URL_SHAPE_RE at file-injector.ts:43 is (https?) only, JSDoc :27-43. COUPLED SITES: the shape gate at :1646; the normalization at :1660 '/^https?:\\/\\//i.test(tok) ? tok : \"https://\" + tok' — a REGEX-ONLY change would mangle '#ftp://example.com/x' into 'https://ftp://example.com/x' (NEW bug); the deny-list guard at :1656 is bypassed by ftp tokens anyway (they contain '/'); onUrlFetch fires at :1663 BEFORE fetch (honest: egress IS attempted); injectUrl's catch (:988-993) silently returns false → token stays verbatim.\n2. INPUT: tok = cleanToken(m[2]) from the URL scan loop (URL_INJECT_RE matchAll); the spec-literal regex from spec/15 §2.2 line 71.\n3. LOGIC: Implement PRD §Minor Issue 4 via the spec-literal option: (a) change URL_SHAPE_RE (:43) to /^((https?|ftp):\\/\\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}(?::\\d+)?(?:\\/\\S*)?)$/i; (b) MANDATORY: change the normalization test at :1660 to /^(https?|ftp):\\/\\//i so ftp tokens pass through un-prefixed; (c) update the JSDoc (:27-43) — drop the implicit narrowing, note that ftp:// passes the gate and fetch failure falls back to verbatim via the existing catch. Do NOT add an ftp client — the graceful verbatim path is the spec-consistent behavior. Failing test FIRST (label DET-FTP in url-injection.test.mjs near DET-2 :261-271, fetch stubbed in try/finally): globalThis.fetch = async (url) => { calls.push(String(url)); throw new TypeError(\"fetch failed\"); } (simulating undici's real ftp behavior) → injectFiles(\"#ftp://example.com/x\", [], FIX, false, true) → assert r.text === \"#ftp://example.com/x\" (verbatim), r.injected === 0, r.blocks.length === 0, calls.length === 1 && calls[0] === \"ftp://example.com/x\" (pins the no-mangling normalization — the critical regression net for the :1660 change). Keep COL-2 (:389-396, non-URL tokens → zero fetch) and DET-1/DET-2 green.\n4. OUTPUT: URL_SHAPE_RE matches the PRD literal; ftp tokens attempt egress and fall back verbatim; no https://ftp:// mangling. URL_SHAPE_RE stays NOT exported (module-surface allowlist unchanged).\n5. DOCS: [Mode A] (i) JSDoc on URL_SHAPE_RE per LOGIC (c); (ii) correct spec/15-url-injection.md §7 row line 325: replace 'fetch via fetch (Node supports it)' with the accurate statement that the gate accepts ftp:// but Node's fetch cannot retrieve it, so the token falls back to verbatim (spec §3.5 catch path); confirm §2.2 line 71 / §8 line 333 already match the restored regex. The README Limits bullet for this lands in P1.M4.T6 (changeset-level).",

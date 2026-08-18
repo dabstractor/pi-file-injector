@@ -258,6 +258,27 @@ await runCase("DET-1", "detection: #example.com → injected via HTML pipeline (
   }
 });
 
+// DET-FTP — [BUG-005] explicit ftp:// scheme: passes the spec-literal URL_SHAPE_RE (§2.2
+// (https?|ftp)), normalized UN-prefixed (abs === tok — pins the no-mangling sync), then the
+// fetch throws (undici has no ftp: TypeError "fetch failed", cause "unknown scheme" — verified
+// Node v26.7.0) → §3.5 catch → token left VERBATIM, nothing injected. The stub reproduces
+// undici's real rejection so the case stays hermetic/zero-network.
+await runCase("DET-FTP", "detection: #ftp://… → gate passes, fetch attempted UN-mangled, throws → verbatim (BUG-005)", async () => {
+  const calls = [];
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); throw new TypeError("fetch failed"); };
+    const r = await mod.injectFiles("#ftp://example.com/x", [], FIX, false, true);
+    assert(r.text === "#ftp://example.com/x", `ftp token left verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.injected === 0, `expected injected===0, got ${r.injected}`);
+    assert(r.blocks.length === 0, `expected no blocks, got ${JSON.stringify(r.blocks)}`);
+    assert(r.details.length === 0, `expected no details, got ${r.details.length}`);
+    assert(calls.length === 1 && calls[0] === "ftp://example.com/x",
+      `fetch attempted ONCE with the UN-mangled ftp URL (no https:// prefix); calls=${JSON.stringify(calls)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 // DET-2 — fully-qualified scheme token injects verbatim (no normalization needed).
 await runCase("DET-2", "detection: #https://x.com/y → injected, fetch called with the exact URL", async () => {
   const calls = [];
