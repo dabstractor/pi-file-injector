@@ -1003,6 +1003,8 @@ await runCase("U1", "U1 — Unicode word-boundary: #@ does not fire mid-word in 
 // (PRD §14). Option 2 (gate override) was tried and produced nothing — reverted. This case pins
 // the shipped Option 1 behavior: rewrite '#'→space, delegate, remap prefix/items back to #@, and a
 // deterministic applyCompletion for #@ prefixes. Headless-guarded (no ctx.ui → no-op).
+// BUG-004: the fake also returns a non-@ item ('/cmd') under the '@' prefix — it must pass through
+// untouched as the ORIGINAL object (no '#@/cmd' mangle).
 await runCase("A1", "A1 — #@ autocomplete: rewrites '#'→space for built-in, remaps result to #@, deterministic apply", async () => {
   const slot = captureHandler("session_start");
   assert(typeof slot.cb === "function", "factory must register a session_start handler");
@@ -1014,8 +1016,11 @@ await runCase("A1", "A1 — #@ autocomplete: rewrites '#'→space for built-in, 
   // Fake built-in: simulates pi's @ file completion. Captures the lines it received and returns
   // file items whose prefix/value carry the '@' (as pi does), so we can assert the #@ remap.
   let seenLines = null;
+  const atItem1 = { value: "@src/index.ts", label: "index.ts", description: "" };
+  const atItem2 = { value: "@src/util.ts", label: "util.ts", description: "" };
+  const cmdItem = { value: "/cmd", label: "cmd", description: "" }; // BUG-004: the non-@ item
   const fakeCurrent = {
-    getSuggestions: async (lines) => { seenLines = lines.map((l) => l.slice()); return { prefix: "@src/", items: [{ value: "@src/index.ts", label: "index.ts", description: "" }, { value: "@src/util.ts", label: "util.ts", description: "" }] }; },
+    getSuggestions: async (lines) => { seenLines = lines.map((l) => l.slice()); return { prefix: "@src/", items: [atItem1, atItem2, cmdItem] }; },
     applyCompletion: (lines, line, col) => ({ lines, cursorLine: line, cursorCol: col }),
     shouldTriggerFileCompletion: () => false,
   };
@@ -1032,8 +1037,15 @@ await runCase("A1", "A1 — #@ autocomplete: rewrites '#'→space for built-in, 
   const out = await provider.getSuggestions(["Review #@src/"], 0, "Review #@src/".length, { signal: { aborted: false } });
   assert(seenLines && seenLines[0] === "Review  @src/", `built-in must see '#' rewritten to space, got ${JSON.stringify(seenLines && seenLines[0])}`);
   assert(out && out.prefix === "#@src/", `prefix must be remapped to '#@src/', got ${JSON.stringify(out && out.prefix)}`);
-  assert(out && out.items.length === 2 && out.items.every((it) => it.value.startsWith("#@")), `every item value must be remapped to start with '#@' (got ${JSON.stringify(out && out.items.map((i) => i.value))})`);
+  assert(out && out.items.length === 3, `three items expected (2 @src + 1 /cmd), got ${out && out.items.length}`);
+  assert(out.items[0].value === "#@src/index.ts" && out.items[1].value === "#@src/util.ts",
+    `both @src items must remap to '#@…' (got ${JSON.stringify(out.items.map((i) => i.value))})`);
   assert(out.items[0].value === "#@src/index.ts", `first item value must be '#@src/index.ts', got ${out.items[0].value}`);
+  const cmd = out.items.find((i) => i.label === "cmd");
+  assert(cmd && cmd.value === "/cmd",
+    `non-@ item must pass through UNTOUCHED as '/cmd' (BUG-004; got ${JSON.stringify(cmd && cmd.value)})`);
+  assert(cmd === cmdItem, "pass-through must return the ORIGINAL item object (identity, not a copy)");
+  assert(!out.items.some((i) => i.value === "#@/cmd"), "BUG-004 mangle fingerprint '#@/cmd' must be absent");
 
   // Non-#@ input delegates to the built-in UNCHANGED (no rewrite, no remap — prefix stays '@src/').
   const out2 = await provider.getSuggestions(["Review @src/"], 0, "Review @src/".length, { signal: { aborted: false } });

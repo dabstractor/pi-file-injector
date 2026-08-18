@@ -1952,14 +1952,16 @@ export default function (pi: ExtensionAPI) {
 
         const inner = await current.getSuggestions(rewrittenLines, cursorLine, cursorCol, options);
         if (options.signal?.aborted || !inner || inner.items.length === 0) return inner; // nothing / aborted
-        // Only remap built-in FILE suggestions (prefix `@…`). If the built-in somehow returned
-        // non-@ items, pass them through untouched so we don't mangle slash-command suggestions.
+        // Only remap built-in FILE suggestions (prefix `@…`). Enforced per item below (BUG-004):
+        // non-string values, values already '#@…', and values NOT starting '@' (e.g. a slash-command
+        // '/cmd') are passed through as their ORIGINAL item object — only '@…' values remap to '#@…'.
         if (!inner.prefix.startsWith("@")) return inner;
 
         const items = inner.items.map((it) => {
-          let v = it.value;
-          if (!v.startsWith("#@")) v = v.startsWith("@") ? "#" + v : "#@" + v; // @path → #@path
-          return v === it.value ? it : { ...it, value: v };
+          if (typeof it.value !== "string") return it; // defensive: non-string → untouched
+          if (it.value.startsWith("#@")) return it; // already ours
+          if (!it.value.startsWith("@")) return it; // non-@ (e.g. '/cmd') → pass through untouched
+          return { ...it, value: "#" + it.value }; // @path → #@path — the ONLY remap
         });
         return { prefix: `#@${partial}`, items };
       },

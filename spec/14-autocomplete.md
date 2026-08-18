@@ -25,7 +25,7 @@ gate alone is insufficient. Reverted.
 **Shipped: Option 1 — line-rewrite reuse.** In `getSuggestions`, detect `#@<partial>` at the cursor,
 rewrite that one `#` into a space (so the built-in sees a clean `@<partial>` at a valid boundary),
 delegate to `current.getSuggestions(...)`, then remap the result back to `#@`: `prefix "@<partial>"`
-→ `"#@<partial>"` and each item value `@<path>` → `#@<path>`. `applyCompletion` is implemented
+→ `"#@<partial>"` and each item value `@<path>` → `#@<path>`. Item values that do not start with `@` (or `#@`) — for example a stray slash-command suggestion mixed into an `@` query — are passed through untouched, as are non-string values. `applyCompletion` is implemented
 inline for `#@` prefixes (deterministic replace, cursor placed after the inserted value) and
 delegates otherwise; `shouldTriggerFileCompletion` delegates to the built-in unchanged. This reuses
 Pi's entire file engine — gitignore-aware `fd` listing, sorting, fuzzy matching — with **zero**

@@ -148,14 +148,14 @@
               "type": "Task",
               "id": "P1.M3.T4",
               "title": "BUG-004: Autocomplete item remap passes non-@ values through untouched",
-              "status": "Planned",
+              "status": "Complete",
               "description": "Fix the item-level remap in getSuggestions so that values not starting with '@' (or already '#@') are returned untouched, matching the documented intent; only '@…' values get the '#' prefix.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M3.T4.S1",
                   "title": "Autocomplete remap: item-level pass-through for non-@ values",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Read plan/011_e473dac8178b/bugfix/001_a6ffb98ab096/architecture/spec_ux_bug004_005.md (§ BUG-004 provider analysis + fix inputs, § test conventions). The bug is the map at file-injector.ts:1904-1908 (mangle at :1906: 'if (!v.startsWith(\"#@\")) v = v.startsWith(\"@\") ? \"#\" + v : \"#@\" + v;') — a value like '/cmd' takes the '#@' + v branch. The prefix-level guard at :1902 stays. applyCompletion (:1911-1925) gates on the prefix ARGUMENT startsWith(\"#@\") (:1914) and inserts item.value verbatim (:1919-1921) — it does NOT require values to start with #@, so pass-through items insert fine. The provider is registered in the session_start handler (:1878-1880) via ctx.ui.addAutocompleteProvider, headless-guarded.\n2. INPUT: inner = await current.getSuggestions(rewrittenLines, ...) with inner.prefix starting '@' (guard already passed); inner.items: { value: unknown, ... }[] — values may be non-strings defensively.\n3. LOGIC: Implement PRD §Minor Issue 3 per its Recommendation: replace the map body so non-string values, values already starting '#@', and values NOT starting '@' are returned as the ORIGINAL item object (untouched); only '@…' values map to { ...it, value: \"#\" + it.value }. Keep the returned shape { prefix: `#@${partial}`, items } (:1909) and the prefix guard (:1902) unchanged. Failing test FIRST in file-injector.test.mjs: extend the A1 fakeCurrent.getSuggestions (:1003-1049) to also return { value: \"/cmd\", label: \"cmd\", description: \"\" } alongside the two @src/ items; CRITICAL: narrow the existing blanket assertion at :1036 (out.items.every(it => it.value.startsWith(\"#@\"))) to the two @src/… items, and add: the /cmd item survives with value === \"/cmd\" (not '#@/cmd'), same object semantics, @src items remap to '#@src/index.ts'/'#@src/util.ts'. Use label A1-NONAT (or extend A1 in place — no collision either way; existing BUG-001/BUG-002 labels are older bugs, do not reuse). Mock: captureHandler(\"session_start\") + fakeCurrent per A1 — no real pi TUI needed.\n4. OUTPUT: getSuggestions never mangles non-@ values; applyCompletion behavior unchanged. No exported surface change.\n5. DOCS: [Mode A] The code comment at :1900-1901 becomes TRUE — keep/adjust it to state the item-level pass-through. Optionally add one sentence to spec/14-autocomplete.md §14.2 (lines 17-36): non-@ item values are passed through untouched. No README change (autocomplete section :94 already accurate).",
