@@ -82,7 +82,7 @@
           "type": "Milestone",
           "id": "P1.M2",
           "title": "Minor robustness fixes: markdown malformed ranges (BUG-002) + empty URL images (BUG-003)",
-          "status": "Planned",
+          "status": "Complete",
           "description": "Two injection-path robustness fixes. BUG-002: injectMarkdown's Step-5 loop consumes scanTokens records without the invalidRange guard that the top-level processor has — a malformed range inside a delivered markdown file (e.g. #@a.md:0) silently verbatims (no LR-3 warning) and leaks the RAW token string into injectFile (process-cwd stat; relative block name if a literal colon-file exists). BUG-003: injectUrl's image branch lacks the F5 empty-body guard the local-file path has — a 200 image/* response with zero-length body attaches an empty ImageContent that providers reject.",
           "tasks": [
             {
@@ -114,14 +114,14 @@
               "type": "Task",
               "id": "P1.M2.T3",
               "title": "BUG-003: F5-mirror empty-body guard in injectUrl's image branch",
-              "status": "Planned",
+              "status": "Complete",
               "description": "Mirror the local-file F5 guard into injectUrl's image branch: a 200 image/* response with an empty body must emit the note block and attach nothing, instead of pushing an empty ImageContent ({type:'image',data:'',mimeType}) that providers reject.",
               "subtasks": [
                 {
                   "type": "Subtask",
                   "id": "P1.M2.T3.S1",
                   "title": "injectUrl image branch: empty body → formatEmptyImageBlock note, no attachment",
-                  "status": "Planned",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [],
                   "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Read plan/011_e473dac8178b/bugfix/001_a6ffb98ab096/architecture/injection_bug002_003.md (§ BUG-003 injectUrl image path, § fix inputs (h) guard placement analysis). readBytesCapped (:861-878) returns an EMPTY Buffer (not null) for a zero-length body — null only on overflow — so the existing 'if (buf === null) return false;' (:923) never catches it; resizeImage deterministically returns null on empty bytes (photon throws → catch → null), so resized?.data ?? buf.toString(\"base64\") === \"\" today. estimateImageTokens(null) === 2805 (IMAGE_FALLBACK_TOKENS :118) is the wrong cost for 0 bytes. The F5 local template (:1308-1323) pushes formatEmptyImageBlock + detail {path, kind:\"image\", dimensionHint: undefined} + subtract(ceil(len/4)) with no over-budget turn-away.\n2. INPUT: res (Response) with content-type image/*; state (images, blocks, details, remaining, count); url string. formatEmptyImageBlock (:387-389) shape: '<file name=\"URL\"><empty image file \\u2014 0 bytes; nothing to attach></file>'.\n3. LOGIC: Implement PRD §Minor Issue 2 per its Recommendation. Insert immediately AFTER 'if (buf === null) return false;' (:923) and BEFORE resizeImage (:925): if (buf.length === 0) → push formatEmptyImageBlock(url) to state.blocks, push { path: url, kind: \"image\", dimensionHint: undefined } to state.details, subtract(state, Math.ceil(f5Block.length / 4)), state.count++, return true. Placement rationale (mirror F5 exactly): before resizeImage avoids spawning the Worker for 0 bytes; before the guard-3 budget check gives F5 parity (the note always delivers; the ~15-20 token note cost is negligible). Mocking: tests stub globalThis.fetch (save/restore in try/finally, per-case) with makeRes({ ct: \"image/png\", body: \"\" }) from url-injection.test.mjs:143-167 — body:\"\" is the deterministic zero-length-chunk fixture. Do NOT stub resizeImage (external, jiti-aliased; relies on deterministic null-on-invalid). Failing test FIRST (label URL-IMG-EMPTY, near DIS-4 :346-360): injectFiles(\"#https://example.com/empty.png\", [], FIX, false, true) → assert r.images.length === 0, hasBlock(r, '<file name=\"https://example.com/empty.png\"><empty image file \\u2014 0 bytes; nothing to attach></file>'), r.injected === 1, r.details[0].kind === \"image\". Keep DIS-4 green (non-empty body still attaches — images[0].data round-trips).\n4. OUTPUT: empty-body URL images produce the note block + image detail, no ImageContent. Non-empty image URLs byte-identical to today. No exported surface change.\n5. DOCS: [Mode A] Update README.md ### URLs Images bullet (:82): an image URL whose body is empty attaches a note ('empty image file — 0 bytes') instead of an image, same as a 0-byte local image. Rides WITH this subtask.",
