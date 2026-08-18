@@ -1,0 +1,14 @@
+h1.0 Bug Fix Requirements
+ h2.0 Overview
+ h2.1 Critical Issues (Must Fix)
+ h2.2 Major Issues (Should Fix)
+  h3.0 Issue 1: Expanded chat view shows the paged-file directive as the body of any URL/binary file that follows a paged file in the same prompt
+ h2.3 Minor Issues (Nice to Fix)
+  h3.1 Issue 1: Malformed line-range tokens inside delivered markdown files are silently verbatim and leak an unresolved raw token into injectFile (process-cwd stat, relative block name)
+  h3.2 Issue 2: URL image response with empty body attaches an empty ImageContent (F5 guard not mirrored to the URL path)
+  h3.3 Issue 3: #@ autocomplete remap rewrites non-@ suggestion values to '#@<value>', contradicting its own pass-through guard
+  h3.4 Issue 4: ftp:// scheme tokens are never fetched, deviating from the PRD URL spec §2.2/§7 (documented-code narrowing to https?)
+ h2.4 Testing Summary
+ h2.5 Recommendations
+---
+para:20 list:5
