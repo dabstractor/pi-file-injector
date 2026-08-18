@@ -1036,7 +1036,7 @@ const FILE_BLOCK_RE = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
  * becomes a compile error.)
  *
  * DEFENSIVE (§12.23): `message?.details?.files ?? []` (old/foreign entries with no details → fallback
- * line); `bodies[i] !== undefined` guard; image expanded-view short-circuit (images already attached to
+ * line); `bodiesByPath` pop guard (missing path / empty FIFO → no body child); image expanded-view short-circuit (images already attached to
  * the user message, §6.4 — don't re-render); `typeof message?.content === "string"` guard. Never throws.
  *
  * @param message the CustomMessage (details.files: FileDetail[]; content: the joined <file> blocks string)
@@ -1050,17 +1050,29 @@ export function renderInjectedMessage(message: any, opts: { expanded: boolean },
   // contentStart/contentLen (char offsets into message.content), so message.content.slice(start, start+len)
   // recovers the EXACT body WITHOUT duplicating file bytes into details (§12.22); (2) stored `body` — old/
   // foreign/test entries (and pre-offset persisted messages) carry the deprecated body field; (3) the regex
-  // below — last-resort fallback for entries with neither (§6.3/§12.23 defensive rendering). The regex re-parse
-  // is computed UNCONDITIONALLY (cheap; needed for tier 3) but is only USED when tiers 1+2 miss. BUG-1: a file
-  // whose own content contains a literal `</file>` truncates the lazy `([\s\S]*?)` at the INNER `</file>`, so
-  // tiers 1+2 (length-derived offset / stored body) are the BUG-1-safe paths; tier 3 is regex-vulnerable but
-  // only fires for entries without offsets/body (test-crafted / old), where BUG-1 is not a real-world risk.
-  const bodies: string[] = [];
+  // below — last-resort fallback for entries with neither, PAIRED BY PATH (BUG-001, P1.M1.T1.S3: the path→FIFO
+  // `bodiesByPath`, popped in emission order like computeDetailOffsets's cursorByPath — the old bodies[i]
+  // index pairing mis-fired after a paged file: 2 blocks / 1 detail) (§6.3/§12.23 defensive rendering). The
+  // regex re-parse is computed UNCONDITIONALLY (cheap; needed for tier 3) but is only USED when tiers 1+2 miss.
+  // BUG-1: a file whose own content contains a literal `</file>` truncates the lazy `([\s\S]*?)` at the INNER
+  // `</file>`, so tiers 1+2 (length-derived offset / stored body) are the BUG-1-safe paths; tier 3 is
+  // regex-vulnerable (pairing is path-safe; truncation is not fixed) but only fires for entries without
+  // offsets/body (test-crafted / old), where BUG-1 is not a real-world risk.
+  // BUG-001 (P1.M1.T1.S3) — tier-3 is PATH-AWARE: path → FIFO of block-body inners, in emission (match)
+  // order — the same in-order per-path consumption as computeDetailOffsets's cursorByPath. Group 1 (the
+  // block's path) was captured but unused pre-S3. A paged path queues TWO inners (head, then the directive):
+  // a paged detail pops the head and the directive inner is never consumed — which is why the old
+  // bodies[i] index pairing (detail index ↔ block order) drifted +1 per preceding paged file (2 blocks,
+  // 1 detail) and showed the directive as a following url/binary file's body.
+  const bodiesByPath = new Map<string, string[]>();
   if (typeof message?.content === "string") {
     let m: RegExpExecArray | null;
     FILE_BLOCK_RE.lastIndex = 0; // module regex w/ g flag → reset before the loop
     while ((m = FILE_BLOCK_RE.exec(message.content)) !== null) {
-      bodies.push(m[2].replace(/^\n|\n$/g, "")); // strip the wrapping newlines from <file>\n…\n</file>
+      const inner = m[2].replace(/^\n|\n$/g, ""); // strip the wrapping newlines from <file>\n…\n</file>
+      const q = bodiesByPath.get(m[1]);
+      if (q !== undefined) q.push(inner);
+      else bodiesByPath.set(m[1], [inner]);
     }
   }
   // green Box — toolSuccessBg is ThemeBg → theme.bg (NOT theme.fg). paddingX/Y=1; bgFn paints every child line.
@@ -1078,15 +1090,22 @@ export function renderInjectedMessage(message: any, opts: { expanded: boolean },
     // one read line per file; expand hint ONCE per box (i===0), matching the [skill] precedent (PRD §6.3)
     box.addChild(new Text(readLine(d, theme) + (i === 0 ? expandHint(theme) : ""), 0, 0));
     if (opts.expanded) {
-      // 3-tier body resolution (§12.22 offset → stored body → regex fallback). Real emission (P1.M2.T1.S1)
-      // carries contentStart/contentLen (no duplicated bytes); tier-1 slices message.content EXACTLY — BUG-1-safe
-      // because the offsets are length-derived (block.length − header − footer), NOT regex: a body containing a
-      // literal </file> (which truncates FILE_BLOCK_RE's lazy capture) slices whole. Tier-2 (d.body) covers
-      // old/foreign/test entries still carrying the deprecated body field. Tier-3 (bodies[i]) is the last-resort
-      // regex fallback for entries with neither (§6.3/§12.23 defensive rendering).
+      // 3-tier body resolution (§12.22 offset → stored body → PATH-AWARE regex fallback). Real emission
+      // (P1.M2.T1.S1) carries contentStart/contentLen (no duplicated bytes); tier-1 slices message.content
+      // EXACTLY — BUG-1-safe because the offsets are length-derived (block.length − header − footer), NOT
+      // regex: a body containing a literal </file> (which truncates FILE_BLOCK_RE's lazy capture) slices
+      // whole. Tier-2 (d.body) covers old/foreign/test entries still carrying the deprecated body field.
+      // Tier-3 (BUG-001, P1.M1.T1.S3) is the last-resort fallback for entries with neither — PATH-AWARE: it
+      // pops this detail's path's next queued inner (FIFO, emission order; the same in-order consumption as
+      // computeDetailOffsets's cursorByPath), so it can never show another file's block after a paged file
+      // (2 blocks / 1 detail broke the old bodies[i] index pairing). Image details never render a body and
+      // never pop. BUG-1 caveat (unchanged): the inners are still regex-recovered — a literal </file> in
+      // content truncates the lazy capture — tiers 1+2 remain the BUG-1-safe paths (§6.3/§12.23 defensive
+      // rendering).
       const body = (d.contentStart != null && d.contentLen != null && typeof message?.content === "string")
         ? message.content.slice(d.contentStart, d.contentStart + d.contentLen)
-        : (typeof d.body === "string" ? d.body : bodies[i]);
+        : (typeof d.body === "string" ? d.body
+          : (d.kind !== "image" ? bodiesByPath.get(d.path)?.shift() : undefined)); // BUG-001: per-path FIFO pop (emission order); image never renders/pops
       if (body !== undefined && d.kind !== "image") { // images already attached to user msg (§6.4) — skip
         const lang = d.kind === "binary" ? undefined : getLanguageFromPath(d.path);
         const rendered = lang ? highlightCode(body, lang).join("\n") : body;

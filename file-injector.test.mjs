@@ -2951,6 +2951,38 @@ await runCase("REND-PAGED-DIR", "§6.3 expanded paged: head body FOLLOWED BY the
   assert(dirIdx > bodyIdx, `the directive renders AFTER the head body (§6.3 order), got bodyIdx=${bodyIdx} dirIdx=${dirIdx}`);
 });
 
+// REND-TIER3-PATH — BUG-001 (P1.M1.T1.S3): the tier-3 fallback is PATH-AWARE. Simulates an OLD persisted
+// message (pre-offset custom_message): details carry NO contentStart/contentLen and NO d.body, so the
+// renderer must recover bodies via tier-3. A paged file emits TWO blocks (head + directive) but ONE detail —
+// the old bodies[i] pairing indexed BLOCKS by DETAIL position, so the binary showed the <paged: directive
+// and the url showed the binary note. Post-fix each detail pops its OWN path's FIFO inner.
+await runCase("REND-TIER3-PATH", "BUG-001(old msg): tier-3 pairs by PATH — after a paged file, url/binary bodies are their OWN content (not the directive)", async () => {
+  const pagedHead = '<file name="/abs/big.log">\nHEAD-CONTENT-LINE-1\nHEAD-CONTENT-LINE-2\n</file>';
+  const directiveBl = '<file name="/abs/big.log"><paged: 118890 chars; head delivered 212 complete lines; read the rest with the read tool at offset:213, limit:2000, incrementing offset by 2000 until done></file>';
+  const binaryBl = '<file name="/abs/note.bin"><binary file — contents not injected; use the read tool if needed></file>';
+  const urlBl = '<file name="https://example.com/doc">\nURL-DOC-MARKDOWN-BODY\n</file>';
+  const content = [pagedHead, directiveBl, binaryBl, urlBl].join("\n\n"); // the real assembly separator
+  const details = [ // OLD message: no contentStart/contentLen, no body — tier-3 territory by construction
+    { path: "/abs/big.log", kind: "paged", range: ":213-", directive: "<paged: 118890 chars; head delivered 212 complete lines; read the rest with the read tool at offset:213, limit:2000, incrementing offset by 2000 until done>" },
+    { path: "/abs/note.bin", kind: "binary" },
+    { path: "https://example.com/doc", kind: "url", chars: 21 },
+  ];
+  const box = mod.renderInjectedMessage({ details: { files: details }, content }, { expanded: true }, REND_THEME);
+  // children: [0] read big.log:213- (+hint) · [1] HEAD body · [2] dim d.directive · [3] read note.bin ·
+  //           [4] binary note body · [5] read url · [6] url body  → 7 total
+  assert(box.children.length === 7, `expanded = 3 read lines + 3 bodies + 1 dim directive; got ${box.children.length}`);
+  const headBody = textOf(box.children[1]);
+  assert(headBody.includes("HEAD-CONTENT-LINE-1"), `paged detail pops its path's FIRST inner (the head), got ${JSON.stringify(headBody.slice(0, 60))}`);
+  const binBody = textOf(box.children[4]);
+  assert(binBody.includes("binary file — contents not injected"), `binary body is its OWN note, got ${JSON.stringify(binBody.slice(0, 60))}`);
+  assert(!binBody.includes("<paged:"), `BUG-001: binary body must NOT show the paged directive, got ${JSON.stringify(binBody.slice(0, 80))}`);
+  const urlBody = textOf(box.children[6]);
+  assert(urlBody.includes("URL-DOC-MARKDOWN-BODY"), `url body is its OWN markdown, got ${JSON.stringify(urlBody.slice(0, 60))}`);
+  assert(!urlBody.includes("<paged:") && !urlBody.includes("binary file"), `BUG-001: url body must show neither the directive nor the binary note, got ${JSON.stringify(urlBody.slice(0, 80))}`);
+  // the directive text appears ONLY as the paged detail's own dim d.directive child ([2]) — never as a body
+  assert(textOf(box.children[2]).includes("paged:"), `[2] is the dim directive child (the one legitimate directive display)`);
+});
+
 // ── P1.M2.T3.S1 (plan/009): verbatim re-submission regression ──
 // ─────────────────────────────────────────────────────────────────────
 // Pins PRD §6.4 (the prompt is preserved byte-for-byte; re-submission robustness) + §13.8 (stripping breaks

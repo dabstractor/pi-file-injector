@@ -11,14 +11,14 @@
           "type": "Milestone",
           "id": "P1.M1",
           "title": "BUG-001: Expanded-view body pairing after paged files (Major)",
-          "status": "Researching",
+          "status": "Complete",
           "description": "Make the chat renderer's expanded view show the correct body for url/binary details that follow a paged file in the same prompt. Two-layer fix: (1) populate contentStart/contentLen for kind url (body-bearing block, same envelope as text) and kind binary (note-inner via a kind-gated no-newline branch) in computeDetailOffsets; (2) make the renderer's tier-3 regex fallback pair details to blocks by path instead of index, repairing old persisted messages too. Display-only: model-facing message.content must remain byte-identical.",
           "tasks": [
             {
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "Fix expanded chat-view body pairing after paged files (computeDetailOffsets + tier-3 fallback)",
-              "status": "Researching",
+              "status": "Complete",
               "description": "A paged file emits TWO <file> blocks (head + <paged:> directive) but ONE FileDetail. computeDetailOffsets (file-injector.ts:462-513, skip-guard at :475) only computes offsets for kind text/paged, so url/binary details fall to tier-3 bodies[i] (:1065-1067) which indexes BLOCKS while i indexes DETAILS — after a paged file the following URL shows the paged directive and the binary never shows its note. Fix both the offset producer (url + binary kinds) and the fallback consumer (path-aware pairing).",
               "subtasks": [
                 {
@@ -59,7 +59,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "Renderer tier-3 fallback: path-aware bodies instead of bodies[i]",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",
