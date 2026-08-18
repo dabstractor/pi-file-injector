@@ -3100,8 +3100,33 @@ await runCase("LINE-12", "LR-5: #@lr5_five.txt:2-100000 (5-line file) → range 
   assert(d.kind === "text", `kind 'text' (FIX = no budget → the inline whole-slice arm), got '${d.kind}'`);
   assert(d.range === ":2-5", `range must be the DELIVERED :2-5 (clamped from :2-100000), got ${JSON.stringify(d.range)}`);
   assert(d.lines === 4, `4 lines delivered (2–5), got ${d.lines}`);
-  assert(hasBlock(r, "l2\nl3\nl4\nl5"), `body must be lines 2–5, got ${JSON.stringify(r.blocks)}`);
+  assert(hasBlock(r, "l2\nl3\nl4\nl5"), `body must be lines 2-5, got ${JSON.stringify(r.blocks)}`);
   assert(!hasBlock(r, "l1\n"), "line 1 must be absent");
+});
+
+// LINE-9 — LR-2 (§3 claim-by-type): images/binaries claim the BARE abs — a range is meaningless identity for
+// them, so a bare+ranged pair (EITHER order) delivers exactly ONE image / ONE note (identical bytes never
+// delivered twice). Reuses the existing pic.png (PNG_BYTES) + data.bin fixtures — no new fixtures, no mocks.
+// The ranged-then-bare order is caught by the stream-loop claimKey skip BEFORE injectFile; the
+// bare-then-ranged (and ranged-then-ranged) orders are caught by the branch guard inside injectFile.
+await runCase("LINE-9", "LR-2: #@pic.png #@pic.png:3 → ONE image (both orders); #@data.bin #@data.bin:5 → ONE note", async () => {
+  // image — bare then ranged
+  const r1 = await mod.injectFiles("Describe #@pic.png and #@pic.png:3", [], FIX);
+  assert(r1.injected === 1, `bare+ranged image pair: exactly ONE delivery, got injected=${r1.injected}`);
+  assert(r1.images.length === 1, `exactly ONE images entry (no duplicate bytes), got ${r1.images.length}`);
+  assert(r1.images[0].data === PNG_BYTES.toString("base64"), "the one image is the real PNG base64");
+  // image — ranged then bare
+  const r1b = await mod.injectFiles("Describe #@pic.png:3 and #@pic.png", [], FIX);
+  assert(r1b.injected === 1 && r1b.images.length === 1, `reverse order also ONE image, got injected=${r1b.injected} images=${r1b.images.length}`);
+  // binary — bare then ranged
+  const r2 = await mod.injectFiles("Inspect #@data.bin and #@data.bin:5", [], FIX);
+  assert(r2.injected === 1, `binary twin: one delivery, got injected=${r2.injected}`);
+  assert(r2.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length === 1,
+    `exactly ONE binary note block, got ${r2.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length}`);
+  // binary — ranged then bare
+  const r2b = await mod.injectFiles("Inspect #@data.bin:5 and #@data.bin", [], FIX);
+  assert(r2b.injected === 1 && r2b.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length === 1,
+    `reverse binary order also ONE note`);
 });
 
 // MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@

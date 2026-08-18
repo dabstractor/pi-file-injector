@@ -1227,6 +1227,16 @@ async function processTokenStream(
  * → F5 note; (2) real image (mime && hasValidImageMagic) → attach ImageContent + image block; (3) binary
  * (isBinary) → binary note; (4) else → emitText. Budget: ONLY emitText subtracts (T2.S2 adds image/binary).
  * Returns true iff a block/image was emitted (state.count bumped exactly once per claimed file).
+ *
+ * CLAIM SEMANTICS / LR-2 (§3 claim-by-type): claim ⟺ delivered. Images/binaries have no line semantics —
+ * a range is meaningless identity for them — so post-classification their EFFECTIVE claim is the bare abs.
+ * For a RANGED token, if the bare abs is already claimed (an earlier bare OR ranged delivery of the same
+ * file), the ranged pre-claim is backed out and the token is turned away verbatim (return false, NO count++
+ * — identical bytes are never delivered twice). For a BARE token the pre-read claim is already the bare
+ * abs (claimKey returns abs when no range), so no normalization is needed. On the deliver path the ranged
+ * pre-claim stays alongside the bare key harmlessly (picked policy, spec §3: ranged key deleted only on
+ * turn-away, kept on delivery); a later ranged form of the same image/binary hits this same bare-abs check. Text/markdown branches keep pure
+ * ranged claims (LR-7: distinct ranges are distinct deliveries).
  */
 export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?: number, endLine?: number): Promise<boolean> {
   let st;
@@ -1247,6 +1257,14 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
       // F5 — a 0-byte image file would attach an EMPTY ImageContent (which providers reject).
       // Align with the text path's empty-file handling: emit a note block, attach nothing.
       // line range is ignored for images (no line semantics).
+      // LR-2 (§3 claim-by-type) — the effective claim is the BARE abs (a range is meaningless identity
+      // for images/binaries). For a RANGED token (key !== abs): if the bare abs is already claimed → back out
+      // the ranged pre-claim, turn away verbatim, no count++; else add the bare abs. For a BARE token the
+      // pre-read claim already IS the bare abs — nothing to normalize.
+      if (key !== abs) {
+        if (state.injectedSet.has(abs)) { state.injectedSet.delete(key); return false; }
+        state.injectedSet.add(abs);
+      }
       const f5Block = formatEmptyImageBlock(abs);
       state.blocks.push(f5Block);
       state.details.push({ path: abs, kind: "image", dimensionHint: undefined }); // §6.4 — empty-image detail (parallel to the block push)
@@ -1256,6 +1274,12 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
       // A mislabeled file (e.g. text named `.png`) fails the magic-number sniff and falls
       // through to the text/binary path instead of attaching decoded garbage as an image.
       // line range is ignored for images (no line semantics).
+      // LR-2 (§3 claim-by-type) — the effective claim is the BARE abs (see JSDoc claim semantics):
+      // ranged token + bare already claimed → back out the ranged pre-claim, turn away verbatim, no count++.
+      if (key !== abs) {
+        if (state.injectedSet.has(abs)) { state.injectedSet.delete(key); return false; }
+        state.injectedSet.add(abs);
+      }
       const resized = await resizeImage(new Uint8Array(buf), mime); // Uint8Array; async Worker; null on failure
       state.images.push({
         type: "image",
@@ -1273,6 +1297,12 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
       await injectMarkdown(abs, buf.toString("utf8"), state, ctx, startLine, endLine);
     } else if (isBinary(buf)) {
       // BINARY (PRD §5.3) — note, no decoded garbage (em dash U+2014). line range ignored.
+      // LR-2 (§3 claim-by-type) — the effective claim is the BARE abs (see JSDoc claim semantics):
+      // ranged token + bare already claimed → back out the ranged pre-claim, turn away verbatim, no count++.
+      if (key !== abs) {
+        if (state.injectedSet.has(abs)) { state.injectedSet.delete(key); return false; }
+        state.injectedSet.add(abs);
+      }
       const binBlock = formatBinaryBlock(abs);
       state.blocks.push(binBlock);
       state.details.push({ path: abs, kind: "binary" }); // §6.4 — binary detail
@@ -1285,6 +1315,7 @@ export async function injectFile(abs: string, state: State, ctx: Ctx, startLine?
     return true;
   } catch {
     state.injectedSet.delete(key); // failure → UN-CLAIM so the key is NOT poisoned (claim ⟺ delivered; PRD §12.5)
+    state.injectedSet.delete(abs); // LR-2 — also un-claim the bare abs (the guard may have added it; no-op if absent)
     return false; // read/resize error → leave THIS token verbatim (PRD §5.4, §12.5)
   }
 }
