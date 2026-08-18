@@ -943,6 +943,20 @@ async function injectUrl(url: string, state: State, ctx: Ctx): Promise<boolean> 
     if (ct.startsWith("image/")) {
       const buf = await readBytesCapped(res, URL_MAX_BYTES); // raw Buffer — no UTF-8 decode
       if (buf === null) return false; // §3.3 guard 2b — overflowed mid-stream
+      if (buf.length === 0) {
+        // BUG-003 / F5 mirror (:1306-1323) — a 0-byte image body would attach an EMPTY ImageContent (data: "",
+        // which providers reject). readBytesCapped returns an EMPTY Buffer (not null) for a zero-length body, so
+        // the null check above never caught it. Emit the note instead: block + image detail + the note's cost,
+        // count++ → delivered (true). Before mime/resizeImage (no Worker spawn for 0 bytes — resizeImage is
+        // deterministically null on empty bytes) and before the guard-3 budget check (F5 parity: the note always
+        // delivers; its ~15-20 token cost is negligible). No claim back-out (URLs have no claimKey).
+        const f5Block = formatEmptyImageBlock(url);
+        state.blocks.push(f5Block);
+        state.details.push({ path: url, kind: "image", dimensionHint: undefined });
+        subtract(state, Math.ceil(f5Block.length / 4)); // note consumes budget (mirror F5)
+        state.count++;
+        return true;
+      }
       const mime = ct.split(";")[0].trim(); // strip params ("image/png; charset=…")
       const resized = await resizeImage(new Uint8Array(buf), mime); // async Worker; null on failure (mirror L968)
       const cost = estimateImageTokens(resized); // §5.6.2 tile estimate

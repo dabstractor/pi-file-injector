@@ -363,6 +363,28 @@ await runCase("DIS-4", "dispatch: image/png → images[] + image detail, bytes p
   }
 });
 
+// URL-IMG-EMPTY — BUG-003 (F5 parity): a 200 image/* response with a ZERO-LENGTH body must deliver the
+// empty-image NOTE (block + image detail + count) with NO ImageContent attachment — mirroring the local F5
+// guard for 0-byte #@image files. Before the fix this attached {type:"image", data:"", mimeType} (the
+// provider-rejected shape) and charged estimateImageTokens(null)=2805 for 0 bytes. makeRes({body:""}) is the
+// deterministic zero-length-chunk fixture (Buffer.from("") → the reader's single chunk is zero-length).
+await runCase("URL-IMG-EMPTY", "image URL with empty body → F5 note block + image detail, NO attachment (BUG-003)", async () => {
+  const calls = [];
+  const origFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => { calls.push(String(url)); return makeRes({ ct: "image/png", body: "" }); };
+    const r = await mod.injectFiles("#https://example.com/empty.png", [], FIX, false, true);
+    assert(calls.length === 1 && calls[0] === "https://example.com/empty.png", `exactly one fetch of the normalized URL, got ${JSON.stringify(calls)}`);
+    assert(r.images.length === 0, `NO ImageContent for a 0-byte image body (the provider-rejected shape), got images.length=${r.images.length}`);
+    assert(hasBlock(r, '<file name="https://example.com/empty.png"><empty image file — 0 bytes; nothing to attach></file>'),
+      `the F5 note block must be delivered (em dash U+2014), got blocks=${JSON.stringify(r.blocks)}`);
+    assert(r.injected === 1, `the note counts as a delivery (count++), got injected=${r.injected}`);
+    assert(r.details.length === 1 && r.details[0].kind === "image", `one image detail, got ${JSON.stringify(r.details)}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // COLLISION — the §2.3 table is the literal oracle. Distinguishes "URL-shaped" from
 // "not URL-shaped" via the calls tracker (the spec §4 zero-egress proof at the detection layer).

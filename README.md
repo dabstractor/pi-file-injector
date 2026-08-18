@@ -80,7 +80,9 @@ By content type:
 
 - **HTML pages** → extracted to markdown (boilerplate/nav/scripts stripped) and injected.
 - **Raw text, JSON, XML, RSS, Atom** → injected verbatim (no extraction).
-- **Images** (`#https://example.com/cat.png`) → attached as an image, same as `#@image`.
+- **Images** (`#https://example.com/cat.png`) → attached as an image, same as `#@image`. An image URL whose body
+  comes back empty (0 bytes) attaches nothing — it delivers the same "empty image file — 0 bytes" note a 0-byte
+  local image does.
 - **Anything else** (e.g. a PDF, unknown content type) → left as written; nothing is injected.
 
 The extraction libraries (defuddle and friends) are bundled with the package — you install nothing beyond `pi install`. See [Limits](#limits) for the fetch timeout, size cap, and the no-paging / no-caching behavior. `#` is disjoint from `#@`, so `#@file.txt` and `#https://example.com` in the same prompt both work.
