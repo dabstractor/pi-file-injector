@@ -1,0 +1,17 @@
+c76054a01977 spec/SPEC.md
+7c29f6848da6 spec/01-overview.md
+2afe8f18c3e0 spec/02-goals.md
+6d5d59ac2778 spec/03-background.md
+44905875b3c4 spec/04-syntax.md
+6dc5ac9028a2 spec/05-file-behavior.md
+77d21cbcada2 spec/06-delivery-display.md
+1615de74d186 spec/07-technical-reference.md
+0d1f29ea2ae1 spec/08-file-structure.md
+2d588e0cd239 spec/09-algorithm.md
+06b5f33f5a85 spec/10-edge-cases.md
+c8aaec3d4951 spec/11-acceptance-tests.md
+d20a21e815af spec/12-implementation-notes.md
+a2331ac89c21 spec/13-design-rationale.md
+4df3aabbbe35 spec/14-autocomplete.md
+4a937fb26645 spec/15-url-injection.md
+8c0768c5b23f spec/16-appendix-skeleton.md

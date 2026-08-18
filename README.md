@@ -1,6 +1,6 @@
 # `#@file`
 
-A [Pi](https://github.com/earendil-works/pi) extension that injects a whole file into your prompt when you write `#@` before the path. The file reaches the model before it replies, the whole file always reaches the model — injected whole when it fits the remaining context, paged via the `read` tool when it doesn't — with no configuration.
+A [Pi](https://github.com/earendil-works/pi) extension that injects whole files and web pages into your prompt. Write `#@` before a file path, or `#` before a URL. The file reaches the model before it replies, the whole file always reaches the model — injected whole when it fits the remaining context, paged via the `read` tool when it doesn't — with no configuration.
 
 ## Why
 
@@ -24,7 +24,9 @@ Or, directly from git:
 pi install git:github.com/dabstractor/pi-file-injector
 ```
 
-Restart Pi if a session is already open. To uninstall, run `pi remove npm:pi-file-injector`.
+Restart Pi if a session is already open. To uninstall, run `pi remove npm:pi-file-injector` (or `pi remove git:github.com/dabstractor/pi-file-injector` / the local path you used with `-e` for git/local installs).
+
+> **⚠️ Only one copy at a time.** This extension deduplicates injections *within* a single loaded copy; it cannot deduplicate against a second, concurrently-loaded copy. If two copies are active at once (e.g. a global npm/git install *and* a `-e ./file-injector.ts` dev copy), **every `#@file` is injected twice** and image cost doubles. If you are upgrading from an older `pi-file-injector`, remove the prior install (`pi remove …` for every install kind — npm, git, and local path) before installing this version. Check with `pi list` and confirm `pi-file-injector` appears only once.
 
 ## Usage
 
@@ -39,6 +41,42 @@ See #@a.ts.
 ```
 
 On submit, each file shows up as a compact green `read <path>` line directly below your message — one line per file, indistinguishable from the `read` tool. Press `ctrl+o` to expand any of them to the full contents. `#@` triggers stay in your message exactly as you typed them (`Review #@a.ts` stays `Review #@a.ts`), so cancelling and re-opening, forking, or re-submitting re-triggers injection. The file bytes are delivered to the model underneath — never pasted into your message bubble.
+
+### URLs
+
+Write `#` before a URL anywhere in your prompt to fetch the page, extract it to markdown, and inject that — the same way `#@` injects a file:
+
+```text
+Summarize #example.com
+What does #https://example.com/api return?
+Diff #https://news.ycombinator.com vs #@local-notes.md
+```
+
+Both `#example.com` (bare domain) and `#https://example.com/api` (full URL) work. On submit the page is fetched, the boilerplate is stripped, and the main content is converted to markdown by [defuddle](https://github.com/kepano/defuddle) before it reaches the model. Each URL renders as a green `read <url>` line — identical to the `read` tool and to `#@file` — and `ctrl+o` expands it to the extracted markdown. The `#` trigger stays in your message exactly as you typed it, so cancelling and re-opening, forking, or re-submitting re-fetches the page.
+
+Before / after:
+
+```text
+# you type:
+Summarize #example.com
+# you see (green line, ctrl+o to expand):
+read https://example.com (ctrl+o to expand)
+# the model receives:
+<file name="https://example.com">
+# Page Title
+
+…extracted markdown body…
+</file>
+```
+
+By content type:
+
+- **HTML pages** → extracted to markdown (boilerplate/nav/scripts stripped) and injected.
+- **Raw text, JSON, XML, RSS, Atom** → injected verbatim (no extraction).
+- **Images** (`#https://example.com/cat.png`) → attached as an image, same as `#@image`.
+- **Anything else** (e.g. a PDF, unknown content type) → left as written; nothing is injected.
+
+The extraction libraries (defuddle and friends) are bundled with the package — you install nothing beyond `pi install`. See [Limits](#limits) for the fetch timeout, size cap, and the no-paging / no-caching behavior. `#` is disjoint from `#@`, so `#@file.txt` and `#https://example.com` in the same prompt both work.
 
 Markdown files can import other files. If `spec.md` itself contains `#@api.md`, a single `#@spec.md` delivers both — `spec.md` first, then `api.md`. The import marker stays in `spec.md` verbatim (same as a top-level marker):
 
@@ -128,6 +166,23 @@ When it's on, a bare `@api.md` inside a delivered markdown file imports exactly 
 
 It affects markdown content only — a bare `@path` you type in your prompt is never injected. See [Limits](#limits).
 
+### URLs: `enableUrls` (network egress)
+
+URL injection is on by default. Set `enableUrls` to `false` to disable **all** network egress — every `#<url>` token is then left verbatim and no request is made (the air-gapped opt-out):
+
+```jsonc
+// ~/.pi/agent/settings.json — namespaced key
+{
+  "fileInjector": { "enableUrls": false }
+}
+```
+```json
+// or, ~/.pi/agent/file-injector.json — dedicated file
+{ "enableUrls": false }
+```
+
+`enableUrls` is read from the **same four sources and precedence** as `markdownBareAtImports` (above): global `settings.json` → global `file-injector.json` → project `settings.json` → project `file-injector.json` (project sources honored only in a trusted project). It is read once when a session starts and cached for that session. The default is `true`, so `#example.com` works with no configuration at all.
+
 ## Limits
 
 - **No size knob.** `#@` has no user-facing size setting. Oversize text files are delivered as a head block (first ~8 KB) plus a paging directive; the model reads the rest via the `read` tool. The model never holds a file larger than its context window all at once — that is a property of the medium, not of this extension.
@@ -139,8 +194,14 @@ It affects markdown content only — a bare `@path` you type in your prompt is n
 - **Only markdown is scanned.** A `#@` inside an injected `.ts`, `.json`, image, or any other non-markdown file is inert — only `.md`/`.markdown` pull in further files.
 - **Bare-`@` imports stay inside markdown.** Even with `markdownBareAtImports` on, a bare `@path` in your prompt is never injected — the setting only changes what a delivered markdown file pulls in. `#@` remains the sole prompt-level trigger.
 - **No autocomplete for in-file imports.** The `#@` path completer runs in the editor prompt only. Import directives live inside markdown files (written by hand), where your editor's normal file completion applies.
+- **URLs: 20 s fetch timeout.** A page that doesn't respond in 20 seconds is left as written.
+- **URLs: 1 MB response cap.** A page whose body exceeds 1 MB is left as written (not paged).
+- **URLs: no caching.** Every injection fetches fresh — cancelling and re-opening, forking, or re-submitting re-fetches the page.
+- **URLs: JS-rendered pages fall back to verbatim.** Extraction works on server-delivered HTML only. A single-page app that loads its content with JavaScript usually yields too little to extract, so the `#<url>` token is left as a reference (with a short notice) instead.
+- **URLs never page.** Unlike `#@file` (which pages oversize files through the `read` tool), an over-budget URL is left verbatim — the `read` tool can't fetch a URL.
+- **URLs need a dotted, alphabetic hostname.** A `#<url>` token must be a `http(s)://`/`ftp://` URL **or** a bare host whose final label is 2+ letters (e.g. `example.com`, `api.example.co.uk`). This rejects `#3.14`, `#v1.2`, `#fff` and other token-like text. In a coding agent a bare `#word.ext` is almost always a file reference rather than a website, so a scheme-less token with no path whose final label is a common code/file extension — `#main.go`, `#notes.md`, `#config.json`, `#node.js`, … — is treated as a file reference and left as written (no fetch, nothing injected). A slash makes it a real domain plus a path, so `#example.com/img.png` is still fetched; and an explicit scheme bypasses the check entirely, so to fetch a domain whose TLD collides with a code extension, write `#https://foo.sh` rather than `#foo.sh`. As a side effect, **raw IP addresses and `localhost` are not detected as URLs** — `#127.0.0.1:8080`, `#localhost:3000/api`, and even `#http://127.0.0.1` are left verbatim with no fetch and no error. To inject a local dev server, give it a resolvable hostname (an `/etc/hosts` alias, a `*.local` name, or a real domain) rather than an IP or `localhost`.
 
-## `#@` versus `@`
+## `#@` versus `@
 
 - `#@file` injects the whole file, always, everywhere.
 - `@file` is Pi's built-in autocomplete and command-line argument handling. This extension does not change it.

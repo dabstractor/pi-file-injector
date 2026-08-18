@@ -14,3 +14,7 @@ build/
 
 # pi-subagents debug artifacts (project-scoped run transcripts/outputs)
 .pi-subagents/
+*.log
+*.tmp
+*.bak
+*.swp

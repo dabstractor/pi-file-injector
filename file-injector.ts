@@ -5,6 +5,8 @@ import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { Defuddle } from "defuddle/node";
+import { parseHTML } from "linkedom";
 
 const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
 /** PRD §4.6 — markdown opt-in bare-`@` imports (the wiki-style `@path` shorthand). The lookbehind forbids a
@@ -14,6 +16,64 @@ const FILE_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#@(\S+)/gu;
  *  (PRD §4.6 literal `/(^|(?<=[^\w#]))@(\S+)/g` is the ASCII-equivalent form; this Unicode form is the
  *  recommendation.) Wires into scanTokens via `opts.bareAt` (markdown-only / opt-in, P1.M2). */
 const BARE_AT_RE = /(^|(?<![\p{L}\p{N}_#]))@(\S+)/gu;
+/** PRD §2.1/§2.2 — detects a `#<url>` candidate: a `#` at start-of-string OR after a non-word char
+ *  (Unicode `\p{L}\p{N}_`, matching FILE_INJECT_RE's boundary), NOT followed by `@`. The candidate token is
+ *  captured in group 2 (mirrors the group-2 convention of FILE_INJECT_RE/BARE_AT_RE). The `(?!@)` negative
+ *  lookahead makes `#@` disjoint — it is claimed EXCLUSIVELY by FILE_INJECT_RE and NEVER matched here (the
+ *  two triggers are disjoint per PRD §2.1). The Unicode lookbehind `(?<![\p{L}\p{N}_])` + the `u` flag mirror
+ *  the shipped FILE_INJECT_RE (architecture Refinement #1) — NOT the PRD §2.2 literal `(?<=\W)` ASCII form.
+ *  Wires into the URL scan loop via `text.matchAll(URL_INJECT_RE)` → `m[2]` (P1.M1.T2.S3). NOT exported. */
+const URL_INJECT_RE = /(^|(?<![\p{L}\p{N}_]))#(?!@)(\S+)/gu;
+/** PRD §2.3 — an anchored shape gate: a candidate token is treated as a URL iff it has an explicit scheme
+ *  (`https?|ftp`) OR a dotted host whose final label is an alpha TLD (2+ letters); optional `:port` and
+ *  optional `/path`. Case-insensitive (`i` flag; no `u` flag — no `\p{}` classes or lookbehind here).
+ *  Leaves ordinary `#word` prose untouched: `#Heading`, `#1234` (issue ref), `#fff` (hex), `#3.14`,
+ *  `#v1.2` (final label numeric → fails the alpha-TLD gate), and `C#`/`objective-C#` (mid-word, never a
+ *  candidate) all fail to match. Accepted shapes include `#example.com/path`, `#https://x.com/y`,
+ *  `#sub.example.co.uk/a`. [BUG-001] Code-extension deny-list: a scheme-less, PATH-LESS (bare
+ *  `word.ext`) token whose final label (after the last '.', lowercased) is a known code/file extension
+ *  (e.g. `#main.go`, `#notes.md`, `#config.json`, `#node.js`) is treated as a LOCAL FILE reference, NOT a
+ *  URL — the URL scan loop skips it before fetch (see `CODE_EXTENSIONS`). This eliminates the
+ *  false-positive class created by the final-label `[a-z]{2,}` gate (which accepts every 2+ letter alpha
+ *  string as a "TLD"). A slash-bearing scheme-less token (e.g. `#example.com/img.png`) is a real domain +
+ *  path and is NOT gated. Explicit-scheme tokens (`#https://…`, `#http://…`, `#ftp://…`) bypass the
+ *  deny-list entirely — use that form to force-fetch a domain whose TLD collides with a code extension
+ *  (e.g. `#https://node.js`, `#https://foo.sh`). Wires into the URL loop as
+ *  `URL_SHAPE_RE.test(cleanToken(m[2]))` (P1.M1.T2.S3). NOT exported. */
+const URL_SHAPE_RE = /^((https?|ftp):\/\/\S+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/\S*)?)$/i;
+/** [BUG-001] Code-extension deny-list. A scheme-less, PATH-LESS (bare `word.ext`) token whose final
+ *  label (the substring after the LAST '.', lowercased) is in this Set is treated as a LOCAL FILE
+ *  reference, NOT a URL — the URL scan loop skips it (no fetch, no normalization, no injection). This
+ *  targets the exact BUG-001 false-positive shape (`#main.go`, `#notes.md`, `#config.json`, `#node.js`)
+ *  where the alpha-TLD gate's final label IS the extension; a slash-bearing scheme-less token (e.g.
+ *  `#example.com/img.png`) is a real domain + path and is NOT gated (its alpha-TLD final label is the
+ *  TLD, not the path extension). Explicit-scheme tokens (#https://…, #http://…, #ftp://…) bypass this
+ *  list entirely. Covers the common coding / config / doc / image / archive extensions. NOT a real-TLD
+ *  list: com/org/net/io/dev/app/ai/co/me/xyz etc. are deliberately ABSENT so legitimate domains still
+ *  fetch (DET-1, DET-2). A few entries overlap real ccTLDs (.sh, .py): in a coding agent these mean a
+ *  script / Python file; force-fetch via #https://foo.sh. Trivially extendable — it is a plain Set.
+ *  NOT exported. */
+const CODE_EXTENSIONS: Set<string> = new Set([
+  // programming languages
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt", "kts", "cs", "cpp",
+  "cc", "cxx", "c", "h", "hpp", "hxx", "swift", "php", "pl", "pm", "lua", "r", "scala", "clj",
+  "cljs", "cljc", "ex", "exs", "erl", "hs", "ml", "mli", "fs", "fsi", "vb", "dart", "groovy", "el",
+  "scm", "rkt", "zig", "nim", "jl", "d", "f", "f90", "pas", "cob", "asm", "s", "v",
+  // web / markup
+  "html", "htm", "css", "scss", "sass", "less", "styl", "vue", "svelte", "astro",
+  // config / data
+  "xml", "json", "json5", "jsonc", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "sql",
+  "graphql", "gql", "proto", "csv", "tsv", "properties", "gradle", "cmake",
+  // scripts
+  "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "awk",
+  // images
+  "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif", "heic", "avif",
+  // documents
+  "md", "markdown", "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "tex", "bib",
+  "rst", "adoc",
+  // binary / archives / build artifacts
+  "db", "sqlite", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "lock", "log", "min", "map", "wasm",
+]);
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -56,6 +116,16 @@ const MD_EXTS = new Set(["md", "markdown"]);
  *  Derived from the 2000×2000 resize cap worst case: max(1,⌈2000/512⌉)·max(1,⌈2000/512⌉)·170 + 85 =
  *  4·4·170 + 85 = 2805. Consumed by estimateImageTokens (T2.S2). Defined here per the constants cluster. */
 const IMAGE_FALLBACK_TOKENS = 2805;
+
+/** §3.3 guard 1 — AbortController timeout for URL fetches (no paging for URLs; the read tool can't fetch). */
+const URL_TIMEOUT_MS = 20_000;
+/** §3.3 guard 2 — 1 MB download cap (pre-download Content-Length check + mid-stream abort in the capped readers). */
+const URL_MAX_BYTES = 1_000_000;
+/** §3.4 SPA / empty-extraction floor — defuddle output shorter than this is treated as a JS-rendered shell (verbatim + notify). */
+const URL_MIN_CONTENT = 200;
+/** §3.3 — a desktop browser User-Agent (some hosts 403 the default fetch UA; never trust-dependent). */
+const BROWSER_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /** F3 — magic-number sniff. Routes by EXTENSION first (PRD §5.2), then validates the ACTUAL
  *  bytes match the declared image type before attaching. A mislabeled file (text body named
@@ -174,7 +244,11 @@ export async function resolveImportPath(
 
 /** §4.6 — config shape. markdownBareAtImports: also match bare "@path" in markdown (opt-in). Loaded on
  *  session_start (P1.M2.T1.S1); missing/malformed → {} → markdownBareAtImports undefined → false downstream. */
-interface FileInjectorConfig { markdownBareAtImports?: boolean; }
+interface FileInjectorConfig {
+  markdownBareAtImports?: boolean;
+  /** Default true; when false, URL tokens (#<url>) are ignored entirely and NO network request is made (air-gapped opt-out). Read alongside markdownBareAtImports from the same four sources/precedence (spec §4). */
+  enableUrls?: boolean;
+}
 
 /** §4.6 — the camelCase key under which this extension's config may live inside Pi's settings.json (a
  *  conventional JSON-settings key; distinct from the package `name`). settings.json is open-schema (Pi
@@ -284,19 +358,10 @@ function headSlice(content: string): string {
   return s;
 }
 
-/** Count the COMPLETE lines fully contained in the head slice, so the directive can resume at the next
- *  line with ZERO data loss (Pi read offset is 1-indexed). A line is complete if it ends with '\n'
- *  within the head; the line count therefore equals the number of newlines in the head. If the head
- *  ends mid-line, that final partial line is NOT counted as complete — the directive re-reads it in
- *  full (redundant tail, never data loss). The directive resumes at (newlineCount + 1). */
-function headStartLine(head: string): number {
-  let n = 0;
-  for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 0x0A) n++;
-  return n + 1; // 1-indexed: first line AFTER the complete lines delivered in the head
-}
-
 /** Count complete lines in the head (for the directive's "first N lines injected" wording). Equals
- *  the number of newlines, since every newline terminates a complete line. */
+ *  the number of newlines, since every newline terminates a complete line. The directive resumes at
+ *  the line AFTER these complete lines, i.e. (newlineCount + 1) — computed inline at the call site
+ *  to avoid a trivially-wrapped single-use helper (startLine = headLines + 1, 1-indexed). */
 function headCompleteLineCount(head: string): number {
   let n = 0;
   for (let i = 0; i < head.length; i++) if (head.charCodeAt(i) === 0x0A) n++;
@@ -431,10 +496,12 @@ export function computeDetailOffsets(blocks: string[], details: FileDetail[]): F
  *  Consumed forward by the renderer (T2.S2) to draw collapsed `read <path>` lines; it is renderer metadata
  *  only and is NEVER sent to the model as separate text. In S1, emitText pushes `kind: "text"` (whole +
  *  sub-head) and `kind: "paged"` entries; image (`kind:"image"`, dimensionHint) and binary (`kind:"binary"`)
- *  entries are added in injectFile in S2. The kind union is forward-looking. */
+ *  entries are added in injectFile in S2. `kind:"url"` entries (path = the URL itself, no tildify) are
+ *  pushed by injectUrl (P1.M1.T2.S1) and rendered by readLine's url branch (P1.M1.T2.S2 — raw URL, no
+ *  range/hint). The kind union is forward-looking. */
 export interface FileDetail {
   path: string; // absolute resolved path (the <file name=…>)
-  kind: "text" | "image" | "binary" | "paged";
+  kind: "text" | "image" | "binary" | "paged" | "url"; // +"url": producer injectUrl (T2.S1); renderer = readLine url branch (T2.S2, raw URL no tildify). Safe — no exhaustive switch on .kind.
   chars?: number; // text: content length; paged: FULL content length
   lines?: number; // text: total line count
   range?: string; // paged: ":<startLine>-…" resume range (read-tool style)
@@ -711,6 +778,178 @@ export function estimateImageTokens(resized: ResizedImage | null): number {
   return tilesW * tilesH * 170 + 85;
 }
 
+// ---------- §3 URL injection (consumed by the URL loop in injectFiles — T2.S3) ------------------
+// All four functions below are PRIVATE (no `export`): the module-surface allowlist guard in
+// file-injector.test.mjs rejects any unregistered export. They are exercised via injectFiles →
+// injectUrl (the injectMarkdown precedent: a private recursion driver exercised through the public entry).
+
+/** §3.2/§6.1 — the URL injection block. Same `<file name="…">\n…\n</file>` envelope as formatTextFileBlock,
+ *  but `name` is the absolute URL (NOT a home-relative path). Consumed by injectUrl's text/html + raw-text
+ *  paths. NOT exported (private; exercised via injectFiles → injectUrl, per the injectMarkdown precedent). */
+function formatUrlBlock(url: string, content: string): string {
+  return '<file name="' + url + '">\n' + content + '\n</file>';
+}
+
+/** §3.3 guard 2 — stream-read `res.body` as a UTF-8 STRING, aborting (→ null) if accumulated bytes exceed
+ *  `cap`. Pre-download, injectUrl checks `Content-Length > cap` first; this enforces the cap MID-stream
+ *  (servers may lie or omit Content-Length). Falls back to `res.text()` (with a length check) when the body
+ *  has no reader. Returns null on overflow → caller leaves the token verbatim (§3.3). Used for text/html/
+ *  json/xml (NOT images — see readBytesCapped). */
+async function readBodyCapped(res: Response, cap: number): Promise<string | null> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const t = await res.text();
+    return t.length > cap ? null : t;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > cap) return null; // overflow → verbatim (§3.3)
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** §3.3/§5.2 — BYTE-oriented capped reader for the image path. Identical streaming/abort logic to
+ *  readBodyCapped but returns a raw Buffer (NO .toString) so binary image bytes are NOT UTF-8-corrupted.
+ *  The spec §8 pseudocode's Buffer.from(htmlString,"utf8") corrupts images; this reader is the fix.
+ *  Fed into resizeImage(new Uint8Array(buf), mime). Returns null on overflow → verbatim. */
+async function readBytesCapped(res: Response, cap: number): Promise<Buffer | null> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const b = Buffer.from(await res.arrayBuffer());
+    return b.length > cap ? null : b;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > cap) return null; // overflow → verbatim (§3.3)
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks); // raw bytes — no decode
+}
+
+/**
+ * §3 — fetch a URL and inject its content into `state`, routing by Content-Type:
+ *   • text/html | application/xhtml (or sniffed leading '<' when the Content-Type is
+ *     missing/unknown — the sniff is a FALLBACK, never an override)   → §3.2 defuddle extract → markdown
+ *   • text/plain | markdown | json | xml | rss | atom            → raw text, verbatim (no extraction)
+ *   • image/*                                                    → §5.2 resize + attach (Refinement D byte reader)
+ *   • anything else (PDF, octet-stream, …)                       → verbatim (§3.5)
+ *
+ * Three §3.3 guards — any failing leaves the `#<url>` token VERBATIM (NO paging — the read tool can't
+ * fetch URLs, §3.3): (1) AbortController 20s timeout; (2) Content-Length > URL_MAX_BYTES pre-download
+ * (skip) + stream-abort at URL_MAX_BYTES via the capped readers; (3) shared-budget over-limit
+ * (state.remaining !== null && cost > state.remaining). Successful injection subtracts `cost` from the
+ * shared `remaining` (like any delivered file) and bumps state.count.
+ *
+ * §3.4 SPA fallback: if defuddle yields < URL_MIN_CONTENT chars (a JS-rendered shell), leave the token
+ * verbatim AND emit a notify (guarded on ctx.hasUI): "#<url>: page appears JS-rendered; left as reference".
+ *
+ * §3.5 NEVER THROWS: non-2xx / DNS / TLS / timeout / cap / over-budget / empty-extraction / unhandled
+ * content-type / ANY thrown error → return false (verbatim, no block appended). The whole body is wrapped
+ * in try/catch with the timeout cleared in `finally`.
+ *
+ * @returns true iff a block (and/or image) was emitted (count bumped exactly once); false → verbatim.
+ *          PRIVATE — consumed by the URL loop in injectFiles (T2.S3); exercised via injectFiles in tests.
+ */
+async function injectUrl(url: string, state: State, ctx: Ctx): Promise<boolean> {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), URL_TIMEOUT_MS); // §3.3 guard 1
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: "follow",
+      headers: { "User-Agent": BROWSER_UA },
+    });
+    if (!res.ok) return false; // §3.5 non-2xx → verbatim
+    const len = Number(res.headers.get("content-length") || 0);
+    if (len && len > URL_MAX_BYTES) return false; // §3.3 guard 2a — too big, don't download
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+    // ── IMAGE path (Refinement D: BYTE reader) ──
+    if (ct.startsWith("image/")) {
+      const buf = await readBytesCapped(res, URL_MAX_BYTES); // raw Buffer — no UTF-8 decode
+      if (buf === null) return false; // §3.3 guard 2b — overflowed mid-stream
+      const mime = ct.split(";")[0].trim(); // strip params ("image/png; charset=…")
+      const resized = await resizeImage(new Uint8Array(buf), mime); // async Worker; null on failure (mirror L968)
+      const cost = estimateImageTokens(resized); // §5.6.2 tile estimate
+      if (state.remaining !== null && cost > state.remaining) return false; // §3.3 guard 3 — over-budget → verbatim
+      state.images.push({
+        type: "image",
+        data: resized?.data ?? buf.toString("base64"), // null => raw base64 of ORIGINAL bytes
+        mimeType: resized?.mimeType ?? mime, // null => original mime
+      });
+      state.blocks.push(formatImageBlock(url, resized)); // mirror L972 (name = url)
+      state.details.push({
+        path: url,
+        kind: "image",
+        dimensionHint: resized ? formatDimensionNote(resized) ?? undefined : undefined, // mirror L973
+      });
+      subtract(state, cost); // §5.6.2 mirror L974
+      state.count++;
+      return true;
+    }
+
+    // ── STRING reader for text/html/json/xml (images already handled above) ──
+    const html = await readBodyCapped(res, URL_MAX_BYTES);
+    if (html === null) return false; // §3.3 guard 2b — overflowed mid-stream
+
+    // §3.1 dispatch — an EXPLICIT raw-text Content-Type is NEVER second-guessed by the '<' sniff: the
+    // sniff is a fallback for a missing/unknown Content-Type only ("route by Content-Type, falling back
+    // to sniffing"). A text/plain body that begins with '<' is not a web page: raw.githubusercontent
+    // serves README.md as text/plain, and READMEs commonly open with `<p align="center">`. Routing such
+    // a file into the defuddle pipeline parses markdown-as-HTML, extracts ~0 chars, and then FALSELY
+    // reports "page appears JS-rendered" (§3.4) for a static file with no JS anywhere near it. [BUG-002]
+    const isHtml = ct.startsWith("text/html") || ct.startsWith("application/xhtml");
+    const isRawText =
+      ct.startsWith("text/") || ct.includes("json") || ct.includes("xml") || ct.includes("markdown");
+    let body: string;
+    if (isHtml || (!isRawText && /^\s*</.test(html))) {
+      // §3.2 HTML pipeline — Refinements A/B/C
+      const { document } = parseHTML(html); // (B) ONE arg — NOT parseHTML(html, {url})
+      const doc = document as any; // polyfills need `any` (styleSheets not on the TS DOM type)
+      if (!doc.styleSheets) doc.styleSheets = []; // (C) defuddle reads styleSheets
+      if (doc.defaultView && !doc.defaultView.getComputedStyle)
+        // (C) defuddle reads getComputedStyle
+        doc.defaultView.getComputedStyle = () => ({ display: "" });
+      doc.URL = url; // (B) set base URL AFTER parsing
+      const r = await Defuddle(doc as Document, url, { markdown: true }); // (A) async FUNCTION; result.content IS markdown
+      const md = (r.content ?? "").trim();
+      if (md.length < URL_MIN_CONTENT) {
+        // §3.4 SPA / empty-extraction
+        if (ctx.hasUI) ctx.ui?.notify(`${url}: page appears JS-rendered; left as reference`, "info");
+        return false; // verbatim + notify
+      }
+      body = (r.title ? `# ${r.title}\n\n` : "") + md; // r.title: required string, may be ""
+    } else if (isRawText) {
+      body = html; // §3.1 raw text — verbatim (no extraction)
+    } else {
+      return false; // §3.5 unhandled content-type → verbatim
+    }
+
+    const cost = Math.ceil(body.length / 4); // §3.3 token estimate (≈4 chars/token)
+    if (state.remaining !== null && cost > state.remaining)
+      return false; // §3.3 guard 3 — over-budget → verbatim (NO paging)
+
+    state.blocks.push(formatUrlBlock(url, body)); // <file name="URL">\n…\n</file>
+    state.details.push({ path: url, kind: "url", chars: body.length }); // FileDetail.kind "url" (Task 3)
+    subtract(state, cost); // shared budget
+    state.count++;
+    return true;
+  } catch {
+    return false; // §3.5 timeout/network/throw → verbatim (never throws)
+  } finally {
+    clearTimeout(to); // always release the AbortController timer
+  }
+}
+
 // ---------- §6.3 chat renderer (registered for "fileInjector.injected") -------------------------
 // Replicates the read tool's completed-call look: a green (toolSuccessBg) Box, one `read <path>` line per
 // file when collapsed, full/highlighted content when expanded. blocks (message.content) and details.files
@@ -812,6 +1051,10 @@ function readLine(d: FileDetail, theme: any): string {
   if (d.kind === "paged") {
     return `${title} ${pathPart}${theme.fg("warning", d.range ?? "")}`;
   }
+  if (d.kind === "url") {
+    // PRD §6 — raw URL (d.path holds the URL), NOT tildified; no range/dimensionHint suffix.
+    return `${title} ${theme.fg("accent", d.path)}`;
+  }
   return `${title} ${pathPart}`; // whole text (no suffix)
 }
 
@@ -832,6 +1075,11 @@ type Ctx = {
   getContextUsage?: () =>
     { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
   model?: { contextWindow: number; maxTokens: number } | undefined;
+  hasUI?: boolean; // §3.4 SPA fallback — emit a notify guarded on ctx.hasUI (the real pi ctx already has this)
+  // §3.4 SPA notify target. The param type mirrors pi's ExtensionUIContext.notify union exactly
+  // ("info" | "warning" | "error") so this widened local Ctx stays ASSIGNABLE to the real ExtensionContext
+  // passed at L1460 (a looser `level: string` would fail contravariant param checking under --strict).
+  ui?: { notify(message: string, type?: "info" | "warning" | "error"): void };
 };
 
 /**
@@ -1021,7 +1269,7 @@ export function emitText(abs: string, content: string, state: State): void {
     // directive pointing past EOF, causing a spurious read error for content already delivered).
     //
     // FINDING 1: derive the directive's resume offset from the ACTUAL line count of the head
-    // (headStartLine = newlines+1; headCompleteLineCount = newlines). The old hardcoded
+    // (resume offset = newlines+1; headCompleteLineCount = newlines). The old hardcoded
     // offset:2001 assumed the 8192-char head equals 2000 lines, which is only true for ~4-char
     // lines; for realistic files it silently lost the lines between the head's real end and
     // line 2000 (up to 100% for long-lined files). The directive now points exactly past the
@@ -1039,7 +1287,7 @@ export function emitText(abs: string, content: string, state: State): void {
     } else {
       // PRD §9 — extract paged locals once (DRY); used by BOTH the directive block and the paged detail.
       const headLines = headCompleteLineCount(head);
-      const startLine = headLines + 1; // == headStartLine(head)
+      const startLine = headLines + 1; // 1-indexed: first line AFTER the complete lines delivered in the head
       const directiveBlock = formatPagedDirectiveBlock(abs, content.length, startLine, headLines); // §6.3 — hoist; the directive block still reaches the model via content (display-only fix); its inner text is stored on the detail for the expanded view
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(directiveBlock);
@@ -1116,6 +1364,8 @@ export async function injectFiles(
   imagesIn: ImageContent[],
   ctx: Ctx,
   bareAt = false, // §4.6 — markdown bare-@ enabled? (derived from cfg in the input handler; default false for direct unit tests)
+  enableUrls = true, // [P1.M1.T2.S3] §4 — URL #<url> injection enabled? Default true so direct unit tests get the branch; the input handler passes the real `cfg.enableUrls !== false` (default-enabled; see architecture Refinement #2).
+  onUrlFetch?: (url: string) => void, // §X (URL download feedback) — UI progress hook: invoked once per real fetch, AFTER gating+dedup, immediately before network egress. Pure data callback (no return value consumed); undefined in tests/direct calls → no-op. The input handler wires it to a footer spinner.
 ): Promise<{ text: string; images: ImageContent[]; injected: number; paged: number; blocks: string[]; details: FileDetail[] }> {
   // §5.5 BUDGET — remaining context, computed ONCE (best-effort; never throws out of injectFiles).
   // The input event fires BEFORE the turn, so getContextUsage() may be undefined or its tokens
@@ -1179,6 +1429,42 @@ export async function injectFiles(
   await processTokenStream(
     text, ctx.cwd, { allowAbsTilde: true, skipCode: false, tryMdExt: false, bareAt: false }, state, ctx);
 
+  // [P1.M1.T2.S3] §8 URL branch — scan #<url> tokens and inject via injectUrl (T2.S1). Shares the
+  // SAME `state` as the #@file path above (blocks/details/images/injectedSet/remaining/count), so
+  // budget, dedup, and count are coherent across BOTH triggers. Placement is load-bearing: AFTER
+  // processTokenStream (files claim injectedSet first) and BEFORE the count===0 check (injectUrl's
+  // count++ keeps the early return open for URL-only prompts). Pipeline: matchAll(URL_INJECT_RE,
+  // group 2 = token) → cleanToken (strip trailing punct, §4.3) → URL_SHAPE_RE shape gate →
+  // normalize to absolute form → dedup on state.injectedSet (absolute key → #example.com and
+  // #https://example.com collapse) → await injectUrl (never throws; false → token left verbatim).
+  // enableUrls===false → loop body skipped entirely → ZERO network egress (§4 air-gapped opt-out).
+  if (enableUrls) {
+    for (const m of text.matchAll(URL_INJECT_RE)) {
+      const tok = cleanToken(m[2]);
+      if (tok && URL_SHAPE_RE.test(tok)) {
+        // [BUG-001] Code-extension deny-list: a scheme-less, PATH-LESS (bare `word.ext`) token
+        // whose final label is a known code/file extension is a LOCAL FILE reference, not a URL —
+        // skip it (no fetch, no normalization, no injection). This targets the exact false-positive
+        // class where the alpha-TLD gate's final label IS the extension (`#main.go`, `#notes.md`,
+        // `#config.json`, `#node.js`). A slash-bearing scheme-less token (`#example.com/img.png`) is a
+        // real domain + path — its alpha-TLD final label is the TLD (`com`), not the path extension, so
+        // it is NOT gated (it fetches). Explicit-scheme tokens (#https://…/#http://…/#ftp://…) bypass
+        // this check entirely (URL_SHAPE_RE Alternative A). See CODE_EXTENSIONS + the JSDoc on
+        // URL_SHAPE_RE. Mirrors the scheme test used by the normalization below it.
+        if (!/^https?:\/\//i.test(tok) && !/^ftp:\/\//i.test(tok) && !tok.includes("/")) {
+          const finalLabel = tok.slice(tok.lastIndexOf(".") + 1).toLowerCase();
+          if (CODE_EXTENSIONS.has(finalLabel)) continue;
+        }
+        const abs = /^https?:\/\//i.test(tok) ? tok : "https://" + tok;
+        if (!state.injectedSet.has(abs)) {
+          state.injectedSet.add(abs);
+          onUrlFetch?.(abs); // §X (URL download feedback) — fire AFTER gating+dedup, immediately before network egress, so the footer spinner only shows for a REAL fetch (not a gated/deduped/code-ext token)
+          await injectUrl(abs, state, ctx);
+        }
+      }
+    }
+  }
+
   if (state.count === 0) return { text, images: imagesIn, injected: 0, paged: 0, blocks: [], details: [] }; // ORIGINAL ref — nothing injected → byte-for-byte (§10 row 1)
 
   // §6.4 / §13.8 — the user message is the ORIGINAL `text`, byte-for-byte VERBATIM. Markers are NEVER stripped
@@ -1226,6 +1512,53 @@ export async function injectFiles(
  *  readConfig; read by the input handler to derive bareAt. */
 let cfg: FileInjectorConfig = {};
 
+/** §X (URL download feedback) — the ctx.ui subset makeUrlFetchStatus needs. Structural (no full
+ *  ExtensionUIContext import): the input handler passes its real ctx.ui, which satisfies this. */
+type StatusUi = { setStatus(key: string, text: string | undefined): void };
+
+/** §X (URL download feedback) — the footer status-row key. Pi renders ALL extension statuses
+ *  (ctx.ui.setStatus) on ONE shared footer line, sorted alphabetically by key (footer.js:
+ *  `a.localeCompare(b)`), then TRUNCATED to terminal width. A plain `"file-injector"` key sorts
+ *  among other extensions' statuses — so when others sort earlier, the download spinner lands at the
+ *  right end and is the first to be truncated (the "cut off / near the end" symptom). The leading
+ *  `!` sorts before EVERY letter key under localeCompare (verified), giving the spinner POLE
+ *  POSITION (leftmost) — so it survives truncation and the other statuses get pushed right/cut
+ *  instead. Defensible (not anti-social queue-jumping): this status is in the row ONLY while a
+ *  download is actively in flight (stop() removes it), so it claims the front exclusively when it is
+ *  the operation the user is waiting on. The key is invisible — only the `text` renders. */
+const URL_FETCH_STATUS_KEY = "!file-injector";
+
+/** §X (URL download feedback) — footer "loading indicator" controller for URL fetches. Problem: the
+ *  fetch runs synchronously INSIDE the input handler (before the agent streams), so there is zero user
+ *  feedback until the whole download finishes — and pi's `setWorkingMessage`/`setWorkingIndicator` are
+ *  streaming-phase only (they render iff `session.isStreaming`, which is false during `input`), so they
+ *  cannot signal the download. `setStatus` is the documented in-handler surface: setExtensionStatus →
+ *  ui.requestRender() repaints the footer immediately, and because injectFiles `await`s each fetch, an
+ *  interval here animates the braille glyph in parallel. onFetch(url) updates the label per-URL (host
+ *  only, for footer brevity) and is invoked from injectFiles' URL loop right before network egress;
+ *  stop() tears the interval down and clears the row (idempotent; safe to call with no fetch started).
+ *  No-op outside interactive TUI mode: the input handler only constructs this when ctx.hasUI is true. */
+function makeUrlFetchStatus(ui: StatusUi): { onFetch: (url: string) => void; stop: () => void } {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let label = "";
+  let i = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const paint = () => ui.setStatus(URL_FETCH_STATUS_KEY, `${frames[i]} ${label}`);
+  return {
+    onFetch(url: string) {
+      let host = url;
+      try { host = new URL(url).host || url; } catch { /* malformed — keep the raw token */ }
+      label = `Fetching ${host}…`;
+      if (timer === null) timer = setInterval(() => { i = (i + 1) % frames.length; paint(); }, 80);
+      paint();
+    },
+    stop() {
+      if (timer !== null) { clearInterval(timer); timer = null; }
+      ui.setStatus(URL_FETCH_STATUS_KEY, undefined); // clear the row (one-shot per prompt)
+    },
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   // §6.2/§12.20 — one-shot handoff stash from the input handler to before_agent_start. input produces the
   // work (file I/O + blocks/details); before_agent_start publishes it as the custom message after the user
@@ -1252,21 +1585,59 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" }; // MANDATORY loop prevention (§12.1)
     if (event.streamingBehavior === "steer") return { action: "continue" }; // skip mid-stream steering for latency (§12.2)
-    if (!event.text?.includes("#@")) return { action: "continue" }; // cheap pre-check before any regex/IO (§12.4)
+    if (!event.text?.includes("#")) return { action: "continue" }; // [P1.M1.T2.S3] cheap pre-check: both triggers (#@file, #<url>) contain '#' (§12.4)
 
-    const { text, images, injected, paged, blocks, details } = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start
+    // §X (URL download feedback) — footer loading indicator while URLs fetch. The fetch is synchronous
+    // inside this handler, so without this there is zero feedback until every download finishes.
+    // TUI-only + feature-detected: real Pi interactive mode provides ctx.ui.setStatus (the footer row);
+    // headless print/json/RPC (ctx.hasUI false) and any minimal ctx lacking setStatus skip it (then the
+    // onUrlFetch passthrough is undefined, so injectFiles never calls back — no timers spin up in tests).
+    // try/finally guarantees the spinner is torn down + the footer row cleared on EVERY exit path
+    // (injectFiles never throws — each injectUrl is internally isolated — but the finally is
+    // belt-and-suspenders against a future throw). Mirrors the addAutocompleteProvider feature-gate style.
+    const status = ctx.hasUI && ctx.ui && typeof ctx.ui.setStatus === "function" ? makeUrlFetchStatus(ctx.ui) : null;
+    let result;
+    try {
+      result = await injectFiles(event.text, event.images ?? [], ctx, cfg.markdownBareAtImports === true, cfg.enableUrls !== false, status ? status.onFetch : undefined); // §5.5 — paged count drives the mode-aware notify below; §4.6 — bareAt derived from cached cfg; §6.2 — blocks/details stashed for before_agent_start; [P1.M1.T2.S3] §4 — enableUrls default-enabled (Refinement #2: !== false, NOT === true); false gates ALL network egress; §X — onUrlFetch drives the footer spinner above
+    } finally {
+      status?.stop();
+    }
+    const { text, images, injected, paged, blocks, details } = result;
     if (!injected) return { action: "continue" }; // nothing injected → preserve prompt byte-for-byte (§10 row 1); injected counts whole+paged, so 0 = nothing delivered (no stash set → before_agent_start returns undefined)
 
     // §6.2 hand the built blocks+details to before_agent_start (the custom message). Only stashed when
     // injected > 0 (the !injected early-return above left no stash). Cleared one-shot in before_agent_start.
     pending = { blocks, details };
 
-    // §5.5 Notify — surface the mode, guarded on ctx.hasUI (PRD §5.5 Notify). Unified wording: always
-    // "N whole"; append ", M paged" only when paging. paged===0 → "#@ injected N whole"; paged>0 →
-    // "#@ injected N whole, M paged".
-    const whole = injected - paged;
-    const msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
-    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 unified whole/paged wording; guarded for print/json headless modes (api_verification §5)
+    // §5.5 Notify — trigger-aware wording, guarded on ctx.hasUI (PRD §5.5 Notify; headless print/json modes have no ctx.ui).
+    // Three branches from the details[].kind breakdown (NO new return field / State change):
+    //   • urlCount === 0 (files only)        → "#@ injected N whole[, M paged]" — byte-for-byte the ORIGINAL string
+    //     (file-injector.test.mjs Case 9 + the notify cluster assert this verbatim; URLs never increment paged).
+    //   • fileCount === 0 (URLs only)        → "injected N URL[s]" — no '#@' reference, no whole/paged axis
+    //     (URLs can never be paged: injectUrl returns false on over-budget with NO paging).
+    //   • both > 0 (mixed)                   → files keep the '#@ injected … whole[, … paged]' axis, then ", N URL[s]".
+    // 1:1 invariant: details.length === injected (every count++ pairs with exactly one details.push).
+    // Image-aware (Issue 2 from validation report): a URL-delivered image is kind:"image" but its `path` is the
+    // absolute https:// URL pushed by injectUrl (vs. a local-file image whose `path` is a filesystem path).
+    // Detect via scheme so an image-URL-only prompt reports as a URL ("injected 1 URL"), NOT "#@ injected" —
+    // the same glyph/trigger mismatch BUG-002 eliminated for text URLs.
+    const isUrlDelivered = (d: { path: string }) => /^https?:\/\//i.test(d.path);
+    const urlCount = details.filter((d) => d.kind === "url" || (d.kind === "image" && isUrlDelivered(d))).length; // text/html/json/xml URLs (kind "url") + URL-delivered images (kind "image" w/ scheme path)
+    const fileCount = injected - urlCount; // non-url kinds (local text/image/binary/paged) are all files
+    let msg: string;
+    if (urlCount === 0) {
+      // FILES ONLY — byte-for-byte the ORIGINAL string (Case 9 / notify cluster assert this verbatim).
+      const whole = injected - paged;
+      msg = `#@ injected ${whole} whole${paged > 0 ? `, ${paged} paged` : ""}`;
+    } else if (fileCount === 0) {
+      // URLS ONLY — no '#@', no whole/paged axis (BUG-002: was incorrectly "#@ injected 1 whole").
+      msg = `injected ${urlCount} URL${urlCount > 1 ? "s" : ""}`;
+    } else {
+      // MIXED — files keep the '#@ injected … whole[, … paged]' axis, then append the URL count.
+      const fileWhole = fileCount - paged; // paged ⊆ files (URLs never page) → fileWhole ≥ 0
+      msg = `#@ injected ${fileWhole} whole${paged > 0 ? `, ${paged} paged` : ""}, ${urlCount} URL${urlCount > 1 ? "s" : ""}`;
+    }
+    if (ctx.hasUI) ctx.ui.notify(msg, "info"); // §5.5 trigger-aware wording; guarded for print/json headless modes (api_verification §5)
     return { action: "transform" as const, text: event.text, images }; // §6.4 — text VERBATIM (event.text, unchanged; the prompt is never modified so cancel/fork/re-open re-triggers injection; §13.8)
   });
 

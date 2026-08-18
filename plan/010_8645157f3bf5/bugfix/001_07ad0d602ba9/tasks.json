@@ -1,0 +1,166 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "URL Shape Gate and Notify Bugfix Release",
+      "status": "Complete",
+      "description": "Fix the two bugs identified in the end-to-end validation PRD: BUG-001 (Major) — the URL_SHAPE_RE gate matches common code-file extensions as alpha-TLD hostnames, causing unwanted network fetches and content injection for everyday coding prose like '#main.go'. BUG-002 (Minor) — the status toast says '#@ injected' even for URL-only injections. Both fixes are localized to file-injector.ts and its test suite, with no API surface changes.",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "BUG-001: Eliminate code-extension false-positives in URL detection",
+          "status": "Complete",
+          "description": "Tighten the URL shape gate so scheme-less tokens whose final label is a known code/file extension (go, md, py, rs, ts, json, png, csv, etc.) are NOT treated as URLs. This prevents unwanted network egress and content injection for everyday '#filename.ext' coding prompts while preserving legitimate bare-domain URL detection (example.com, api.example.co.uk) and explicit-scheme URLs (#https://anything).",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "Implement code-extension deny-list gate in the URL scan loop",
+              "status": "Complete",
+              "description": "Add a comprehensive CODE_EXTENSIONS Set constant and a post-gate check in the URL scan loop that rejects scheme-less tokens whose final label matches a known code/file extension. Update the URL_SHAPE_RE JSDoc to document the new behavior.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Add CODE_EXTENSIONS deny-list constant and integrate the gate in the URL scan loop",
+                  "status": "Complete",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/010_8645157f3bf5/bugfix/001_07ad0d602ba9/architecture/source_analysis.md (§1-2, §6) and fix_strategy.md (BUG-001 section). URL_SHAPE_RE is defined at file-injector.ts:36 and has exactly ONE runtime consumer — URL_SHAPE_RE.test(tok) at L1398 inside the URL scan loop (L1395-1402). The scheme-less dotted-host alternative B matches ANY <word>.<2+alpha-letters> token, so code-file extensions (go, md, py, json, etc.) pass the gate as fake alpha-TLDs.\n2. INPUT: The URL scan loop at L1395-1402 receives `tok` (the cleanToken'd candidate from URL_INJECT_RE group 2). After URL_SHAPE_RE.test(tok) passes at L1398, the token is normalized to absolute form at L1399 (scheme-less tokens get 'https://' prepended). The current loop body is:\n   if (enableUrls) {\n     for (const m of text.matchAll(URL_INJECT_RE)) {\n       const tok = cleanToken(m[2]);\n       if (tok && URL_SHAPE_RE.test(tok)) {\n         const abs = /^https?:\\/\\//i.test(tok) ? tok : \"https://\" + tok;\n         if (!state.injectedSet.has(abs)) {\n           state.injectedSet.add(abs);\n           await injectUrl(abs, state, ctx);\n         }\n       }\n     }\n   }\n3. LOGIC: (a) Define a new module-level const CODE_EXTENSIONS as a Set<string> containing common code/file extensions (lowercase, no dot). Include at minimum these categories per fix_strategy.md: programming languages (ts, tsx, js, jsx, mjs, cjs, py, rb, go, rs, java, kt, cs, cpp, cc, c, h, hpp, swift, php, pl, lua, r, scala, clj, ex, erl, hs, ml, fs, vb, dart, groovy, el, scm, rkt, zig, nim, jl, d, f, f90, pas, asm, v), web/markup (html, htm, css, scss, sass, less, styl, vue, svelte), config/data (xml, json, json5, jsonc, yaml, yml, toml, ini, cfg, conf, env, sql, graphql, gql, proto, csv, tsv, properties, gradle, cmake), scripts (sh, bash, zsh, fish, ps1, bat, cmd, awk), images (png, jpg, jpeg, gif, webp, bmp, svg, ico, tiff, tif, heic, avif), documents (md, markdown, txt, pdf, doc, docx, xls, xlsx, ppt, pptx, rtf, tex, bib, rst, adoc), binary/archives (db, sqlite, zip, tar, gz, bz2, xz, 7z, rar, lock, log, min, map, wasm). Place it near URL_SHAPE_RE (around L37). (b) Add a post-gate check inside the URL scan loop: AFTER URL_SHAPE_RE.test(tok) passes AND the token is identified as scheme-less (i.e., !/^https?:\\/\\//i.test(tok) AND !/^ftp:\\/\\//i.test(tok)), extract the final label — the substring after the LAST '.' in tok, lowercased — and check CODE_EXTENSIONS.has(finalLabel). If it IS a code extension, skip this token (continue the loop — no fetch, no normalization, no injection). Explicit-scheme tokens (https://, http://, ftp://) must NEVER be checked against the deny-list — they bypass it entirely. (c) Write the failing test FIRST: add a test case in url-injection.test.mjs that asserts calls.length===0 for 'edit #main.go' (TDD). Then implement the gate. Then verify the test passes. (d) Update the JSDoc comment block above URL_SHAPE_RE (L27-35) to document the CODE_EXTENSIONS deny-list gate and remove the false claim that '#node.js' is 'the only residual false-positive class' and that it is 'benign.' State clearly that scheme-less tokens whose final label is a known code extension are treated as file references, not URLs. Document that explicit-scheme tokens bypass the deny-list.\n4. OUTPUT: The modified file-injector.ts with: (a) the CODE_EXTENSIONS Set constant near L37, (b) the post-gate check in the URL scan loop at ~L1398-1400, (c) updated JSDoc. No new exports needed — CODE_EXTENSIONS is private/module-level. The injectFiles return shape is UNCHANGED. The behavior change: scheme-less tokens with code-extension final labels no longer trigger fetches.\n5. DOCS: [Mode A] Update the JSDoc comment block on URL_SHAPE_RE (file-injector.ts L27-35) to honestly document the CODE_EXTENSIONS deny-list gate and correct the '#node.js is the only false-positive' claim. This rides WITH the implementation work — do not create a separate docs subtask.",
+                  "prd_selectors": [
+                    "h2.2",
+                    "h2.2/h3.0",
+                    "h2.5"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "Regression tests for the tightened URL shape gate",
+              "status": "Complete",
+              "description": "Update the COL-4 test case (#node.js now blocked by the deny-list) and add comprehensive no-fetch regression tests for representative #filename.ext patterns. Add a test proving that even a 200-OK response for a false-positive domain no longer injects content.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "Update COL-4 and add no-fetch regression tests for #filename.ext patterns",
+                  "status": "Complete",
+                  "story_points": 2,
+                  "dependencies": [
+                    "P1.M1.T1.S1"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/010_8645157f3bf5/bugfix/001_07ad0d602ba9/architecture/test_analysis.md (§5, §6, §11) and source_analysis.md (§2, §8, §11). The test file url-injection.test.mjs uses the runCase(n, name, fn) pattern with a global `calls` array and per-test globalThis.fetch stubbing via try/finally restore. COL-4 (L400-410) currently asserts #node.js IS url-shaped, fetch IS called (calls.length===1), 404 → verbatim. The test harness loads the real extension via jiti: `const mod = await jiti.import(TS_PATH)`. The FIX = FIX object is `{ cwd: TMPDIR }`. The RICH_HTML fixture (L~200) is a multi-paragraph HTML doc that passes the 200-char SPA floor. makeRes({ct, body, status, ok, contentLength}) is the response factory. Every test uses `mod.injectFiles(prompt, [], FIX, false, enableUrls)`.\n2. INPUT: The tightened URL scan loop from P1.M1.T1.S1 — scheme-less tokens whose final label is in CODE_EXTENSIONS no longer pass the gate. #node.js (ext 'js') is now blocked. #main.go (ext 'go') is now blocked. #example.com (TLD 'com') is NOT blocked (com is not a code extension). Explicit-scheme tokens like #https://node.js bypass the deny-list.\n3. LOGIC: (a) UPDATE COL-4 (L400-410): change the assertions from 'fetch IS called' to 'fetch is NOT called'. The new COL-4 should assert calls.length===0, injected===0, and r.text==='#node.js' (verbatim). Update the test name/comment to reflect that #node.js is now correctly rejected by the CODE_EXTENSIONS deny-list (not because it fails URL_SHAPE_RE, but because 'js' is a code extension). (b) ADD a new test group 'BUG-001 REGRESSION: code-extension tokens must NOT fetch' with individual runCase entries for representative extensions from the PRD: #main.go, #notes.md, #config.json, #image.png, #script.py, #utils.rs, #spec.tsx, #app.cs, #lib.java, #data.csv. Each case: stub fetch to record calls, call injectFiles with enableUrls=true, assert calls.length===0, injected===0, and r.text === prompt (verbatim). Use the existing calls-spy + try/finally restore pattern. (c) ADD a content-injection-harm test: stub fetch to return makeRes({ct:'text/html', body:RICH_HTML, status:200, ok:true}) and call injectFiles('refactor #main.go now', [], FIX, false, true). Assert injected===0 and that NO block contains 'https://main.go' — proving the Go homepage is NOT delivered to the model even when the domain would resolve and return rich HTML. (d) ADD a bypass test: verify explicit-scheme tokens STILL work — injectFiles('#https://node.js', [], FIX, false, true) with a fetch stub should still call fetch (calls.length===1) because explicit scheme bypasses the deny-list. This proves the deny-list only affects scheme-less tokens. Mock fetch to return makeRes({status:404, ok:false}) for the bypass test so it's hermetic. Place all new cases after the existing COLLISION group, before the NORMALIZATION group, following the existing naming convention (e.g., BUG1-1 through BUG1-N).\n4. OUTPUT: Modified url-injection.test.mjs with: updated COL-4, new regression test group (~12-14 new cases), and a bypass test. All new tests must pass with the tightened gate from P1.M1.T1.S1. The full suite (npm test) must still exit 0.\n5. DOCS: none — no user-facing/config/API surface change from test additions.",
+                  "prd_selectors": [
+                    "h2.2",
+                    "h2.2/h3.0",
+                    "h2.4",
+                    "h2.5"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Milestone",
+          "id": "P1.M2",
+          "title": "BUG-002: Trigger-aware status notify for URL-only injections",
+          "status": "Complete",
+          "description": "Make the input handler's notify toast trigger-aware so that URL-only prompts do not report '#@ injected'. Use the existing details[].kind field to distinguish URL vs file injections and produce appropriate wording for each case (files only, URLs only, mixed).",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M2.T1",
+              "title": "Implement trigger-aware notify wording in the input handler",
+              "status": "Complete",
+              "description": "Update the input handler's notify string (L1493-1495) to compute URL and file counts from the details array and produce trigger-aware wording. No API change to injectFiles is needed — the details array already carries the kind breakdown.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T1.S1",
+                  "title": "Update notify to distinguish URL vs file injections using details[].kind",
+                  "status": "Complete",
+                  "story_points": 1,
+                  "dependencies": [],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/010_8645157f3bf5/bugfix/001_07ad0d602ba9/architecture/source_analysis.md (§5, §9) and test_analysis.md (§7, §8). The notify is at file-injector.ts:1493-1495: `const whole = injected - paged; const msg = \\`#@ injected ${whole} whole${paged > 0 ? \\`, ${paged} paged\\` : \"\"}\\`; if (ctx.hasUI) ctx.ui.notify(msg, \"info\");`. The injectFiles return destructures `injected, paged, blocks, details` at L1483. The details array has entries with kind: 'url' | 'text' | 'image' | 'binary' — one per successful delivery. details.length === injected === state.count. URLs never increment paged. The handler is inside `pi.on('input', ...)` at L1478.\n2. INPUT: From injectFiles return (L1483): `details: FileDetail[]` where each FileDetail has a `kind` field. `injected` (total count) and `paged` (file-only paged count) are also available. No new return fields are needed — the existing details array provides the URL/file breakdown.\n3. LOGIC: (a) After the `pending = { blocks, details }` line (L1488) and before the notify block (L1493), compute: `const urlCount = details.filter(d => d.kind === 'url').length;` and `const fileCount = injected - urlCount;`. (b) Replace the hardcoded notify msg with trigger-aware logic: If urlCount === 0 (files only, the common case): keep the EXACT existing string `#@ injected ${whole} whole${paged > 0 ? \\`, ${paged} paged\\` : ''}` where whole = injected - paged. If fileCount === 0 (URLs only): use `injected ${urlCount} URL${urlCount > 1 ? 's' : ''}` — NO '#@' prefix, NO 'whole'/'paged' axis. If both > 0 (mixed): use `#@ injected ${fileWhole} whole${paged > 0 ? \\`, ${paged} paged\\` : ''}, ${urlCount} URL${urlCount > 1 ? 's' : ''}` where fileWhole = fileCount - paged. (c) The notify type stays 'info' and the `if (ctx.hasUI)` guard stays unchanged. (d) Write the failing test FIRST: add a handler-level test in url-injection.test.mjs (or file-injector.test.mjs) that drives the input handler with a URL-only prompt (stub fetch to return makeRes with RICH_HTML) and asserts the notify does NOT contain '#@'. Then implement the fix. Then verify.\n4. OUTPUT: Modified file-injector.ts L1493-1495 area with trigger-aware notify logic. The injectFiles return shape is UNCHANGED (no new fields). Existing file-only notify behavior is byte-for-byte preserved (urlCount===0 path). Only the msg string construction changes.\n5. DOCS: none — the notify wording is a transient UI toast, not a documented API surface. No README or JSDoc change needed for the toast text itself.",
+                  "prd_selectors": [
+                    "h2.3",
+                    "h2.3/h3.1",
+                    "h2.5"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M2.T2",
+              "title": "Regression tests for URL-only and mixed notify wording",
+              "status": "Complete",
+              "description": "Add handler-level tests that drive the real input handler with URL-only and mixed prompts and assert the notify toast wording is trigger-aware (no '#@' for URL-only).",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T2.S1",
+                  "title": "Add regression tests for URL-only and mixed prompt notify wording",
+                  "status": "Complete",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M2.T1.S1"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/010_8645157f3bf5/bugfix/001_07ad0d602ba9/architecture/test_analysis.md (§7). The handler-level test pattern uses captureHandler('input') to get the input callback, makeMockCtx(cwd, {hasUI:true}) to get a ctx with a notify spy, then calls `await slot.cb({text, source:'interactive', images:[]}, ctx)`. The notify spy records `rec.notify = {m, t}`. For URL tests, a fetch stub MUST be provided because injectFiles calls fetch for URL tokens — use the makeRes factory with RICH_HTML body and status:200/ok:true. The test harness must capture the 'input' handler specifically (there are also session_start and before_agent_start handlers). Note: the input handler reads the module-level `cfg` which is initialized on session_start — the test must either call the session_start handler first or ensure cfg defaults ({}) produce enableUrls !== false (which they do, since undefined !== false is true). The captureHandler pattern returns {cb, all} where cb is the LAST handler for the event.\n2. INPUT: The trigger-aware notify logic from P1.M2.T1.S1 — URL-only prompts produce 'injected N URL[s]', file-only prompts produce '#@ injected N whole[, M paged]', mixed prompts produce both parts.\n3. LOGIC: Add test cases (in url-injection.test.mjs or file-injector.test.mjs, following the runCase convention): (a) URL-ONLY notify test: capture ALL handlers via captureAllHandlers() (to get session_start + input + before_agent_start). Call session_start first to init cfg. Stub globalThis.fetch to return makeRes({ct:'text/html', body:RICH_HTML}). Drive the input handler with {text:'see #example.com', source:'interactive', images:[]}. Assert rec.notify.m does NOT contain '#@'. Assert rec.notify.m contains 'URL'. Assert rec.notify.t === 'info'. Restore fetch in finally. (b) MIXED notify test: write a local file fixture (file.txt) in TMPDIR. Stub fetch for the URL part. Drive input with {text:'#@file.txt and #example.com', source:'interactive', images:[]}. Assert notify.m contains BOTH 'whole' (for the file) and 'URL' (for the URL). Assert '#@' IS present (because there ARE files). Restore fetch and clean up the fixture in finally. (c) FILE-ONLY regression test: ensure the EXISTING file-only behavior is unchanged — drive input with '#@file.txt' (after writing the fixture) and assert notify.m === '#@ injected 1 whole' (byte-for-byte). This guards against regressions in the common case.\n4. OUTPUT: New test cases (3-4 cases) added to the test suite. All must pass with the trigger-aware notify from P1.M2.T1.S1. The full suite (npm test) must still exit 0.\n5. DOCS: none — no user-facing/config/API surface change from test additions.",
+                  "prd_selectors": [
+                    "h2.3",
+                    "h2.3/h3.1",
+                    "h2.4",
+                    "h2.5"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Milestone",
+          "id": "P1.M3",
+          "title": "Changeset-level documentation sync",
+          "status": "Complete",
+          "description": "Update README.md to honestly document the code-extension deny-list behavior and correct the false-confidence framing about '#3.14/#v1.2/#fff rejected' that gave users the impression #filename.ext was safe.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M3.T1",
+              "title": "Sync changeset-level documentation",
+              "status": "Complete",
+              "description": "Update README.md's URL detection section to reflect the tightened URL shape gate and the code-extension deny-list. Correct the false-confidence framing and document the workaround for blocked domains.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M3.T1.S1",
+                  "title": "Update README.md URL detection documentation",
+                  "status": "Complete",
+                  "story_points": 1,
+                  "dependencies": [
+                    "P1.M1.T1.S1",
+                    "P1.M1.T2.S1",
+                    "P1.M2.T1.S1",
+                    "P1.M2.T2.S1"
+                  ],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: See plan/010_8645157f3bf5/bugfix/001_07ad0d602ba9/architecture/source_analysis.md (§12) and fix_strategy.md. README.md L202 currently states: 'URLs need a dotted, alphabetic hostname. A #<url> token must be a http(s):// / ftp:// URL or a bare host whose final label is 2+ letters (e.g. example.com, api.example.co.uk). This deliberately rejects #3.14, #v1.2, #fff and other token-like text.' This framing gives false confidence that #filename.ext is safe. The README also has URL documentation at L50-55 (feature examples) and L184 (enableUrls config). The README is the only user-facing doc.\n2. INPUT: The completed BUG-001 fix (P1.M1.T1.S1) adds a CODE_EXTENSIONS deny-list that blocks scheme-less tokens whose final label is a known code/file extension. Explicit-scheme tokens (#https://domain.ext) bypass the deny-list. The completed BUG-002 fix (P1.M2.T1.S1) makes the notify trigger-aware.\n3. LOGIC: (a) Update the 'URLs need a dotted, alphabetic hostname' bullet (README.md L202) to document the code-extension deny-list. Add a sentence explaining that scheme-less tokens ending in a common code/file extension (go, md, py, rs, ts, json, png, csv, etc.) are treated as file references, not URLs, to avoid unwanted network fetches for everyday coding prompts. State the workaround: to fetch a domain whose TLD collides with a code extension, use the explicit-scheme form (e.g. #https://foo.py instead of #foo.py). Remove or qualify the '#3.14/#v1.2/#fff rejected' framing to avoid implying #filename.ext is also safe (it was never safe before this fix, and is now explicitly handled). (b) Do NOT change the feature examples (L50-55) or the enableUrls config section (L184) unless the deny-list behavior warrants a note there — it does not (the deny-list is always active when enableUrls is on, not a separate config). (c) Ensure the README is consistent with the updated JSDoc from P1.M1.T1.S1.\n4. OUTPUT: Modified README.md with the updated URL detection documentation. The change is confined to the Limits section (around L202). No structural changes to the README.\n5. DOCS: This IS the documentation task — it syncs the changeset-level README documentation for both BUG-001 and BUG-002. Per §5 Mode B, it is the FINAL task that sweeps the overview docs.",
+                  "prd_selectors": [
+                    "h2.0",
+                    "h2.2/h3.0",
+                    "h2.5"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
