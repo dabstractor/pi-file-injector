@@ -1,0 +1,167 @@
+{
+  "backlog": [
+    {
+      "type": "Phase",
+      "id": "P1",
+      "title": "Line-Range Gap Closure (LR-1…LR-5)",
+      "status": "Ready",
+      "description": "Close the five verified line-range gaps in file-injector.ts at HEAD ef57bd0: LR-1 (slice runs the §5.5 budget/paging decision), LR-2 (images/binaries claim the bare abs — no duplicate bytes), LR-3 (malformed ranges warn instead of vanishing), LR-4 (past-EOF start is a failed token, not an empty block), LR-5 (display shows the delivered/clamped range). Add regression gates LINE-7…LINE-12 to file-injector.test.mjs, keep all 4 suites + typecheck green, and sync README.md (which currently claims ranges never page). LR-6/LR-7 are OK at HEAD and all URL-side work is shipped — out of scope. Research findings: plan/011_e473dac8178b/architecture/{system_context,code_map,external_deps}.md (all line numbers verified at HEAD).",
+      "milestones": [
+        {
+          "type": "Milestone",
+          "id": "P1.M1",
+          "title": "Core gap fixes in file-injector.ts",
+          "status": "Planned",
+          "description": "Implement LR-1…LR-5 as behavior changes in emitText (slice budget/paging + clamped display + quadruple unification) and injectFile/scanTokens/splitLineRange (bare-abs claims, malformed-range notify, past-EOF failure). Each subtask carries its own failing-test-first coverage (implicit TDD); the named LINE-7…12 gates are formalized in P1.M2.T1.",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M1.T1",
+              "title": "LR-1 + LR-5: slice budget/paging & honest display in emitText",
+              "status": "Planned",
+              "description": "Rewrite emitText's range branch (L1303–1312) so the sliced content flows through the same §5.5 inline-vs-paged decision as a whole file, with the paged directive resuming in FILE coordinates, and clamp FileDetail.range/read line to the delivered range. Includes the normative code-quality note: unify the cost/lines/push/subtract quadruple instead of adding a fourth copy.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S1",
+                  "title": "Run the §5.5 inline-vs-paged decision on the slice (LR-1)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "prd_selectors": ["h1.2", "h2.26", "h2.28", "h2.29", "h3.16", "h3.20", "h2.12"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Read plan/011_e473dac8178b/architecture/code_map.md §emitText first. The range branch at file-injector.ts L1303–1312 pushes the slice whole unconditionally (comment L1304: 'Closed ranges are intentional extracts…'). The whole-file decision to reuse verbatim is L1315–1347: constants PAGED_THRESHOLD=0.6 (L88), HEAD_CHARS=8192 (L90); helpers headSlice(), headCompleteLineCount() (~L393), formatPagedDirectiveBlock(abs, len, startLine, injectedLines) (L411–412 — directive text already embeds 'offset:<startLine>, limit:2000'), extractDirectiveInner(). No notify/ctx is needed for LR-1 (state.paged already feeds the existing 'N whole, M paged' handler notify at L1700).\n2. INPUT: emitText(abs, content, state, startLine?, endLine?) receives the FULL decoded content (markdown path injectMarkdown L1412 passes full content + range and emitText re-slices at L1305 via sliceLines, L183–189). state.remaining is number|null (null = O-1 fallback → never page).\n3. LOGIC: In the range branch, compute slice = sliceLines(content, startLine, endLine ?? startLine); fileCost = Math.ceil(slice.length/4). Decision identical to whole-file: if state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining → inject slice whole (kind:'text', subtract(fileCost)); else if slice.length <= HEAD_CHARS → sub-head guard → whole (this guard already exists for whole files — apply it to the SLICE length); else page the slice: head = headSlice(slice), headLines = headCompleteLineCount(head), resumeLine = startLine + headLines (FILE coordinates so the model's read continues at the correct absolute line), push formatTextFileBlock(abs, head) + formatPagedDirectiveBlock(abs, slice.length, resumeLine, headLines), detail {path, kind:'paged', chars: slice.length, range: `:${resumeLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock)}, state.paged++, subtract(Math.ceil(HEAD_CHARS/4)). Mock nothing — pure function of state; drive budgets in tests via ctx.getContextUsage fixtures (PAGED_FIX L415, TINY_FIX L1127). Because injectMarkdown re-slices inside emitText, markdown ranged tokens get this fix automatically — assert one markdown ranged case under a tight budget.\n4. OUTPUT: emitText range branch runs the §5.5 decision; paged slices bump state.paged (surfacing in the existing mode-aware notify). Behavior with remaining===null must be byte-identical to today so LINE-1…LINE-6 stay green. Write the failing test first (tight budget + #@huge.log:1-999999 → kind:'paged', head + directive with file-coordinate offset) — this becomes formal gate LINE-8 in P1.M2.T1.S2; consume nothing new, expose no new exports.\n5. DOCS: Mode A — replace the L1304 branch comment with the new rule (slice runs the same budget decision as a whole file). The full emitText JSDoc rewrite is owned by P1.M1.T1.S3; do not duplicate it here."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S2",
+                  "title": "LR-5: clamp the displayed range to the delivered range",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": ["h1.2", "h2.28", "h2.30", "h2.31", "h3.24"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: code_map.md §emitText L1306 — rangeSuffix is built from the REQUESTED startLine/endLine, so :2-100000 on a 5-line file displays 'read a.ts:2-100000' while delivering lines 2–5. Clamping detection is free from the slice (spec §6 LR-5): delivered last line = startLine + (newlines in slice); the slice contains deliveredLineCount−1 newlines. Canonical form (LR-7, already pinned): delivered start === delivered end → ':N' (never ':N-N').\n2. INPUT: The rewritten range branch from P1.M1.T1.S1 (slice already computed there).\n3. LOGIC: Build rangeSuffix from the DELIVERED range, not the requested one, on the whole-slice path: deliveredEnd = startLine + (slice.match(/\\n/g)?.length ?? 0); rangeSuffix = startLine === deliveredEnd ? `:${startLine}` : `:${startLine}-${deliveredEnd}`; FileDetail.range = rangeSuffix. On the paged-slice path (S1) detail.range remains the resume directive `:${resumeLine}-`. Mock nothing. Existing LINE-1…6 fixtures use in-file ranges (:3, :2-3) so their expectations are unchanged — run them to confirm.\n4. OUTPUT: FileDetail.range and the collapsed read line show ':2-5' for '#@a.ts:2-100000' on a 5-line file (display and delivery agree). Failing test first — this becomes formal gate LINE-12 in P1.M2.T1.S2. No interface changes.\n5. DOCS: Mode A — update any JSDoc/comment on emitText/FileDetail that describes range as the 'requested' range to say 'delivered (clamped) range; :<resumeLine>- on the paged path'. Rides with the work."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T1.S3",
+                  "title": "Unify the emit quadruple + rewrite emitText JSDoc (code-quality note + Mode A docs)",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1", "P1.M1.T1.S2"],
+                  "prd_selectors": ["h1.2", "h2.29", "h2.34", "h2.9"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: Spec §10 code-quality note (normative per PRD R1): the fileCost/lineCount/push/subtract quadruple exists 3× in emitText — range-whole (inside S1's rewrite), inline-whole (L1315–1322), sub-head-whole (~L1337–1341). Do NOT leave a fourth copy after LR-1.\n2. INPUT: S1 + S2 landed (range branch now runs the budget decision with clamped display).\n3. LOGIC: Extract the shared quadruple into one private helper (e.g. emitWholeText(abs, content, state, rangeSuffix?) computing fileCost=Math.ceil(len/4), lineCount, pushing formatTextFileBlock + the kind:'text' detail, and subtracting) and use it from ALL whole-delivery paths (ranged whole, inline whole, sub-head whole). Pure refactor — behavior byte-identical; every existing test (LINE-1…6, all paged/budget cases) must stay green without editing their expectations.\n4. OUTPUT: single quadruple implementation; emitText JSDoc (L1291–1298) rewritten to the LR-1 contract: 'the §5.5 inline-vs-paged decision applies to the sliced content exactly as to a whole file (sub-head guard on the slice; paged slices resume in FILE coordinates — resumeLine = startLine + complete-lines-in-slice-head); FileDetail.range shows the delivered (clamped) range, or :<resumeLine>- when paged'. This JSDoc REPLACES the 'Closed ranges are intentional extracts … no paging' wording wherever it remains.\n5. DOCS: Mode A — the emitText JSDoc rewrite IS this subtask's deliverable (PRD R1). Nothing user-facing in README here (that is P1.M2.T2, Mode B)."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M1.T2",
+              "title": "LR-2 claim-by-classification + LR-3/LR-4 failure feedback",
+              "status": "Planned",
+              "description": "R2: images/binaries claim the bare abs so identical bytes are never attached twice. R3: malformed ranges (:0, :5-3) that resolve to no file fire a hasUI-guarded warning notify instead of vanishing. LR-4: a start past EOF yields a failed token — verbatim, claim revoked, notify — never an empty <file> block.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S1",
+                  "title": "LR-2: images/binaries claim the bare abs (no duplicate bytes)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "prd_selectors": ["h1.2", "h2.27", "h2.28", "h2.34", "h2.12"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: code_map.md §injectFile — the claim claimKey(abs, startLine, endLine) happens at L1239–1240 BEFORE classification; the three non-text branches are F5 empty-image (L1247–1253), F3 real-image (L1255–1271, magic-number sniff + resize + state.images.push), binary note (L1275–1281). Today '#@pic.png #@pic.png:3' claims abs and abs:3 → the same image attached twice. Spec §3 LR-2 implementation shape: keep the pre-read ranged claim (recursion-readiness, unchanged), then once classified image/binary the EFFECTIVE claim is the bare abs; text/markdown keep claiming abs:N / abs:N-M (distinct ranges are distinct deliveries).\n2. INPUT: injectFile(abs, state, ctx, startLine?, endLine?) with state.injectedSet; claimKey (L192–196) already canonicalizes :N ≡ :N-N.\n3. LOGIC: In EACH of the three branches (F5, F3, binary), before emitting: if state.injectedSet.has(abs) → duplicate → emit NOTHING, do not bump state.count, leave the token verbatim and return false (nothing emitted); otherwise add the bare abs key (the ranged key may remain alongside harmlessly or be normalized/deleted — spec allows both; pick one and note it in the JSDoc). scanTokens' localSeen dedups only same-key scans, so the ranged record still reaches injectFile and must be turned away there. Both token orders must dedup ('#@pic.png #@pic.png:3' AND '#@pic.png:3 #@pic.png'). Mock nothing (real fixture images already exist in the test suite — reuse the pic.png fixture used by budget tests ~L1563+).\n4. OUTPUT: exactly one state.images entry for the png pair; exactly one binary note for a binary twin pair; state.count bumped once per actually-delivered file. Failing tests first for both orders and both kinds — formalized as LINE-9 in P1.M2.T1.S1. LINE-1…6 (text/markdown claims) unchanged.\n5. DOCS: Mode A — JSDoc on injectFile claim semantics: 'claim ⟺ delivered; images/binaries claim the bare abs — a range is meaningless identity for them'. Rides with the work."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S2",
+                  "title": "LR-3: malformed-range tokens warn instead of vanishing",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": [],
+                  "prd_selectors": ["h1.2", "h2.26", "h2.27", "h2.30", "h2.32", "h3.11"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: code_map.md — splitLineRange (L170–177) returns {path: token} for invalid suffixes (:0, :5-3), indistinguishable from 'no suffix'; scanTokens (L1144–1180, EXPORTED, unit-tested by LINE-5 at test L3008+) then drops the unresolvable token silently. CRITICAL: scanTokens has NO ctx parameter, so the notify CANNOT fire inside it — signal out and fire from the ctx-holding caller processTokenStream (L1195+), mirroring the SPA-fallback pattern `if (ctx.hasUI) ctx.ui?.notify(…, 'info')` at L956 (but type 'warning' here).\n2. INPUT: cleaned token (after §4.3 trailing-punct trim) inside scanTokens; resolveImportPath results (exact-first: a literal file named 'a.ts:10' WINS whole — must never notify).\n3. LOGIC: (a) splitLineRange gains an invalid marker (e.g. invalid?: true when the regex /:(\\d+)(?:-(\\d+))?$/ matched but validation failed — start<1 or end<start) while valid- and no-suffix return shapes stay byte-identical; update LINE-4's two invalid-case unit expectations accordingly (they currently assert {path:'a.ts:0'} raw-fallback). (b) scanTokens surfaces invalid-range tokens that fail BOTH exact and stripped resolution (e.g. a record {path: rawToken, invalidRange: true} or a parallel return) WITHOUT breaking the exported contract/LINE-5. (c) processTokenStream: for such records fire `if (ctx.hasUI) ctx.ui?.notify(\\`#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)\\`, 'warning')` (message shows the token as typed) and skip injection — token stays verbatim. Must NOT fire for: tokens with no range-looking suffix, valid ranges that resolve, or invalid-suffix tokens whose literal file EXISTS (exact-path-wins). Note: markdown-import scans call scanTokens directly from injectMarkdown — threading the notify there is optional (top-level prompt path is REQUIRED and is what LINE-10 tests); if threaded, no duplicate notifies per token.\n4. OUTPUT: LINE-10 behavior — injected:0, prompt verbatim, warning notify fired (asserted via the spy ctx {hasUI:true, ui:{notify:(m,t)=>notes.push({m,t})}} from url-injection.test.mjs L703, passed to injectFiles whose ctx param is 3rd — see L1661). Failing test first.\n5. DOCS: Mode A — JSDoc on splitLineRange documenting the invalid marker, and the notify string documented at the firing site. Rides with the work."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M1.T2.S3",
+                  "title": "LR-4: past-EOF start is a failed token (no empty block, claim revoked, notify)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": ["P1.M1.T1.S1"],
+                  "prd_selectors": ["h1.2", "h2.28", "h2.30", "h2.32", "h2.34", "h2.12"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: code_map.md — sliceLines (L183–189) returns '' iff startLine > lineCount (trailing-newline 'wc -l' semantics; a 0-byte file has 0 lines, so '#@empty.txt:1' is also past-EOF). Today emitText pushes an EMPTY <file> block, injectFile bumps count (L1284), and the claim stays poisoned. The revoke pattern to copy: injectFile's catch at L1287 (state.injectedSet.delete(key), claim ⟺ delivered, §12.5). Notify pattern: hasUI-guarded ctx.ui?.notify(…, 'warning') per L956. Depends on T1.S1 because it modifies the same rewritten range branch.\n2. INPUT: slice/line-count data from S1's range branch; claimKey(abs, startLine, endLine) as the key to revoke; ctx threaded into injectFile already.\n3. LOGIC: PRD R3 leaves the seam open — implementer's choice between (a) emitText signals failure upward (e.g. returns boolean) so injectFile skips count++ and un-claims, or (b) injectFile's text branch AND injectMarkdown's ranged path pre-check startLine > lineCount(content) before emission. Whichever seam, the CONTRACT is: empty delivered slice ⟹ NO block, NO detail, NO count bump, claim REVOKED (state.injectedSet.delete(claimKey(abs, startLine, endLine)) so a repeat valid token of the same file still injects), token verbatim, and hasUI-guarded warning notify `#@a.ts:99 — not injected (file has 5 lines)` (line count uses the same trailing-newline semantics; token shown as typed). MUST cover BOTH call paths: direct text branch (injectFile L1282) and markdown (injectMarkdown L1395+ → emitText L1412) — a ranged markdown token past EOF must also fail, not deliver an empty block. A clamped END still delivers (clamping is recovery, not failure — do not fail :2-100000). Mock nothing.\n4. OUTPUT: LINE-11 behavior — no block with empty body, injected:0, claim released (a subsequent '#@a.ts:1' in the SAME prompt still injects — scanTokens ran before the claim, so ordering matters: verify the revoke happens before later tokens process or that processTokenStream's belt-and-suspenders re-check tolerates it), notify fired. Failing test first; LINE-1…6 green.\n5. DOCS: Mode A — JSDoc on the chosen seam (injectFile and/or emitText) stating 'empty delivered slice ⟹ failed token: verbatim + revoked claim + warning notify (mirrors the read tool, which errors past EOF)'. Rides with the work."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Milestone",
+          "id": "P1.M2",
+          "title": "Regression gates & changeset-level documentation",
+          "status": "Planned",
+          "description": "Formalize the spec §9 named gates LINE-7…LINE-12 in file-injector.test.mjs, prove the full suite + typecheck green, then sync README.md's line-range section to the honest contract (Mode B — runs last, depends on all implementing subtasks).",
+          "tasks": [
+            {
+              "type": "Task",
+              "id": "P1.M2.T1",
+              "title": "LINE-7…LINE-12 regression gates + full-suite green",
+              "status": "Planned",
+              "description": "R4: add the six named gates from spec/17-line-ranges.md §9 to file-injector.test.mjs using the existing runCase harness, then sweep npm test (4 files) and npm run typecheck to green. The implementing subtasks already carry TDD tests; these gates pin the exact spec matrix and guard against regressions.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T1.S1",
+                  "title": "Gates LINE-7 / LINE-9 / LINE-10 (resolution, image dedup, malformed notify)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": ["P1.M1.T2.S1", "P1.M1.T2.S2"],
+                  "prd_selectors": ["h1.2", "h2.26", "h2.27", "h2.33", "h2.34"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: system_context.md §5 — harness is runCase(id, desc, fn) with mod.injectFiles(text, [], ctx) returning {text, blocks, details, images, injected, paged…}; helpers assert/hasBlock(r, needle); LINE-1…6 live at test L2969–3031 as the pattern; notify spy = ctx {cwd:TMPDIR, hasUI:true, ui:{notify:(m,t)=>notes.push({m,t})}} (url-injection.test.mjs L703; injectFiles' ctx is the 3rd param, cf. L1661). FIX={cwd:TMPDIR} (L363).\n2. INPUT: Implemented LR-2 (P1.M1.T2.S1) and LR-3 (P1.M1.T2.S2).\n3. LOGIC: LINE-7 (§2.4 exact-path-wins — pins existing behavior): create a literal file named 'a.ts:10' in TMPDIR → '#@a.ts:10' injects the WHOLE literal file, no range (details[0].range undefined, body = literal file content). LINE-9: '#@pic.png #@pic.png:3' → exactly ONE state.images entry AND the reverse order likewise; a binary twin pair (e.g. existing .bin fixture with NUL bytes) → ONE binary note block. LINE-10: '#@a.ts:0' with the spy ctx → injected:0, r.text verbatim, notes contains a 'warning' notify whose message mentions the range rule. Use non-colliding fixture names; Linux allows ':' in filenames (platform note: fine here, CI is Linux).\n4. OUTPUT: three new passing runCases appended after LINE-6 (keep LINE-1…6 untouched); no production-code changes expected — if a gate fails, the bug belongs to the dependency subtasks (report back, do not paper over).\n5. DOCS: none — tests are self-documenting (Mode A not applicable)."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T1.S2",
+                  "title": "Gates LINE-8 / LINE-11 / LINE-12 (paged slice, past-EOF, clamped display)",
+                  "status": "Planned",
+                  "story_points": 2,
+                  "dependencies": ["P1.M1.T1.S1", "P1.M1.T1.S2", "P1.M1.T2.S3"],
+                  "prd_selectors": ["h1.2", "h2.29", "h2.30", "h2.33", "h3.20"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: system_context.md §5 — budget fixtures: PAGED_FIX (test L415–417: tokens 10000/window 50000/maxTokens 8192 → remaining 23616, threshold 14169.6) and TINY_FIX (L1127–1129: remaining clamps ≤0 — everything pages); merged-ctx pattern `const ctx = { ...base, getContextUsage: PAGED_FIX.getContextUsage, model: PAGED_FIX.model }` (L1296+); the ~1.83 MB huge.log fixture is used by existing budget tests (~L1563–1713). Notify spy per url-injection.test.mjs L703. a.ts (A_TS_CONTENT) has 4 lines — create a dedicated 5-line fixture for LINE-11/12 or reuse another known-length file.\n2. INPUT: Implemented LR-1 (P1.M1.T1.S1), LR-5 (P1.M1.T1.S2), LR-4 (P1.M1.T2.S3).\n3. LOGIC: LINE-8: tight budget + '#@huge.log:1-999999' → details[0].kind === 'paged', blocks contain the head slice AND a '<paged:' directive whose embedded offset equals 1 + headCompleteLineCount(head) (FILE coordinates, not slice-relative), result.paged incremented. LINE-11: '#@a.ts:99' on the 5-line fixture with spy ctx → NO block with an empty body, injected:0, claim released (a following '#@a.ts:1' in the same prompt still injects), a warning notify firing with the file's line count in the message. LINE-12: '#@a.ts:2-100000' (5-line file, budget FIX so it stays whole) → details[0].range === ':2-5'.\n4. OUTPUT: three new passing runCases; failures route back to the dependency subtasks (report, do not weaken assertions).\n5. DOCS: none — tests are self-documenting (Mode A not applicable)."
+                },
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T1.S3",
+                  "title": "Full-suite green sweep: npm test (4 files) + npm run typecheck",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S3", "P1.M2.T1.S1", "P1.M2.T1.S2"],
+                  "prd_selectors": ["h1.2", "h2.33"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: system_context.md §5 — `npm test` = node ./file-injector.test.mjs && node ./import-behavior.test.mjs && node ./relative-imports.test.mjs && node ./url-injection.test.mjs; `npm run typecheck` = node ./scripts/typecheck.mjs. The URL/import/relative suites are the do-not-regress guard for shipped behavior (URL deny-list, dispatch, spinner — awareness only, never edit those features to make a test pass).\n2. INPUT: All implementation subtasks (P1.M1.T1.S1–S3, P1.M1.T2.S1–S3) and both gate subtasks landed.\n3. LOGIC: Run the full suite + typecheck. Fix fallout ONLY within the changed seams (emitText range branch, injectFile claims/notifies, splitLineRange/scanTokens/processTokenStream, the new gates). Confirm the done-definition: LR-1…LR-5 closed per spec §10, LINE-1…LINE-12 all pass, no drift in the other three suites (byte-for-byte behavior guarded by them).\n4. OUTPUT: green `npm test` (4 files, includes LINE-1…12) and green `npm run typecheck`; a one-paragraph summary of anything adjusted during the sweep.\n5. DOCS: none — no user-facing surface change (README handled by P1.M2.T2)."
+                }
+              ]
+            },
+            {
+              "type": "Task",
+              "id": "P1.M2.T2",
+              "title": "Sync changeset-level documentation",
+              "status": "Planned",
+              "description": "R5 (Mode B): update README.md's line-range documentation to the honest contract delivered by R1–R4. It contradicts LR-1 today (L128: 'Closed ranges inject whole (no paging past the selection).'). Depends on every implementing subtask; runs last.",
+              "subtasks": [
+                {
+                  "type": "Subtask",
+                  "id": "P1.M2.T2.S1",
+                  "title": "README line-range section: honest paging, failure feedback, clamped display, image/binary dedup",
+                  "status": "Planned",
+                  "story_points": 1,
+                  "dependencies": ["P1.M1.T1.S1", "P1.M1.T1.S2", "P1.M1.T1.S3", "P1.M1.T2.S1", "P1.M1.T2.S2", "P1.M1.T2.S3", "P1.M2.T1.S1", "P1.M2.T1.S2", "P1.M2.T1.S3"],
+                  "prd_selectors": ["h1.2", "h2.25", "h2.29", "h2.30", "h2.31", "h2.34"],
+                  "context_scope": "CONTRACT DEFINITION:\n1. RESEARCH NOTE: system_context.md §6 — README.md L127–130 is the 'Line range.' paragraph; L128 is the sentence contradicting LR-1 ('Closed ranges inject whole (no paging past the selection). Images/binaries ignore :N / :N-M.'). Related range mentions that must stay consistent: L44 (syntax example block — leave as-is) and L147 (dedup bullet — update only if the bare-abs rule changes its meaning). Do NOT touch the #@file syntax or #<url> sections (deny-list docs shipped in commit 1757a27).\n2. INPUT: Final delivered behavior from all implementing subtasks (P1.M1.T1.S1–S3, P1.M1.T2.S1–S3) and green gates (P1.M2.T1.S1–S3).\n3. LOGIC: Replace L128 with the honest contract: a range runs the SAME budget decision as a whole file — under a tight budget the slice arrives as head + paging directive whose read offset resumes in file coordinates; it is never silently truncated. Add: malformed ranges (:0, :5-3) and past-EOF starts are left verbatim with a warning notify (never an empty block); the read line shows the delivered (clamped) range (read a.ts:2-5 for :2-100000); images/binaries dedup on the bare path — a range on an image/binary is ignored and never duplicates the bytes. Keep the surrounding L127/129/130 statements (they remain true). Match the README's existing voice/format (bold lead-ins, backticked tokens).\n4. OUTPUT: README.md line-range section no longer claims ranges never page and documents the new failure/dedup behavior; nothing else in the file changes.\n5. DOCS: This IS the changeset-level docs task (Mode B) — the final catch-all after the per-feature Mode A JSDoc updates that rode with each implementing subtask."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+h1.0 File & URL Content Injection — Specification
+ h2.0 Index
+ h2.1 1. Overview
+  h3.0 Problem
+  h3.1 Solution
+  h3.2 Value proposition
+  h3.3 Tagline
+ h2.2 2. Goals & Non-Goals
+  h3.4 Goals
+  h3.5 Non-Goals
+ h2.3 3. Background: How Pi Handles Input (must-read for implementer)
+  h3.6 3.1 Why #@ works everywhere (the key advantage)
+  h3.7 3.2 Why #@ is a safe, collision-free trigger
+  h3.8 3.3 Public vs internal utilities
+  h3.9 3.4 How #@ delivers files and renders them compactly (the two-mechanism model)
+ h2.4 4. The #@ Syntax Specification
+  h3.10 4.1 Grammar
+  h3.11 4.2 Detection regex
+  h3.12 4.3 Token cleanup
+  h3.13 4.4 Path resolution (top-level user tokens)
+  h3.14 4.5 Markdown import directives (same grammar, narrower rules)
+  h3.15 4.6 Optional bare-@ markdown imports (config: markdownBareAtImports)
+ h2.5 5. Behavior by File Type
+  h3.16 5.1 Text files (everything that isn't a recognized image)
+  h3.17 5.2 Image files
+  h3.18 5.3 Other binary files (non-image, NUL detected)
+  h3.19 5.4 Missing / directory / read error
+  h3.20 5.5 Oversize files: automatic paged delivery
+  h3.21 5.6 Markdown transitive imports
+   h4.0 5.6.1 Code-region detection (approximate CommonMark)
+   h4.1 5.6.2 Total-size budget accounting
+ h2.6 6. Output Format, Delivery & Chat Display
+  h3.22 6.1 Model-facing format: Pi-native <file> tags (unchanged)
+  h3.23 6.2 Delivery: a custom message returned from before_agent_start
+  h3.24 6.3 Chat display: a green, collapsible read-line box (the MessageRenderer)
+  h3.25 6.4 Assembly & shared state
+ h2.7 7. Technical Reference (verified APIs)
+ h2.8 8. File Structure
+ h2.9 9. Algorithm (pseudocode)
+ h2.10 10. Edge Cases (implementer checklist)
+ h2.11 11. Acceptance Criteria & Test Plan
+  h3.26 Manual test matrix
+  h3.27 Automated sanity check (optional)
+ h2.12 12. Implementation Notes & Gotchas
+ h2.13 13. Design Rationale & Tradeoffs
+  h3.28 13.1 Why unconditional delivery (no silent size gate)
+  h3.29 13.2 The tradeoff (be honest about it)
+  h3.30 13.3 Why a separate symbol instead of reusing @
+  h3.31 13.4 Why (almost) no user-facing config
+  h3.32 13.5 Relationship to a size-gated @
+  h3.33 13.6 Why markdown transitive imports, and why these guards
+  h3.34 13.7 Why custom messages + a renderer (compact display), and its one tradeoff
+  h3.35 13.8 Why the prompt is preserved verbatim (no #@ stripping)
+ h2.14 14. Interactive Path Autocomplete (TUI)
+  h3.36 14.1 Hook
+  h3.37 14.2 Implementation (shipped) — line-rewrite reuse (Option 1)
+  h3.38 14.3 Non-goal
+  h3.39 14.4 Scope note (markdown imports are injection-only)
+h1.1 Feature: URL Web-Content Injection (#<url>)
+ h2.15 1. Overview & scope
+ h2.16 2. Grammar & detection
+  h3.40 2.1 Two triggers, disjoint
+  h3.41 2.2 Detection regexes
+  h3.42 2.3 Collision table (extends §3.2)
+ h2.17 3. Behavior
+  h3.43 3.1 Content-type dispatch
+  h3.44 3.2 The HTML pipeline (extract + markdown)
+  h3.45 3.3 Cap, timeout, and over-budget → verbatim (NO paging)
+  h3.46 3.4 SPA / empty-extraction fallback
+  h3.47 3.5 Failures → verbatim
+  h3.48 3.6 Download feedback (footer loading indicator)
+ h2.18 4. Config: enableUrls (default true)
+ h2.19 5. Dependencies
+ h2.20 6. Chat display (extends §6.3)
+ h2.21 7. Edge cases (extends §10)
+ h2.22 8. Pseudocode — the URL branch
+ h2.23 9. Integration with the spec (merge points)
+ h2.24 Appendix A — Minimal skeleton
+h1.2 Feature: Line Ranges (#@<path>:N / #@<path>:N-M)
+ h2.25 1. Overview & scope
+ h2.26 2. Grammar & parsing
+ h2.27 3. Resolution & dedup
+ h2.28 4. Slicing semantics (per file type)
+ h2.29 5. Budget & paging on slices — LR-1 (normative; fixes verified gap)
+ h2.30 6. Failure feedback & honest display — LR-3, LR-4, LR-5 (normative; fix verified gaps)
+ h2.31 7. Chat display (extends §6.3)
+ h2.32 8. Edge cases (extends §10)
+ h2.33 9. Acceptance tests (extends §11)
+ h2.34 10. Requirement & gap register
+ h2.35 11. Integration with the spec (merge points)
+---
+code:41 para:195 list:39 table:17 quote:9
