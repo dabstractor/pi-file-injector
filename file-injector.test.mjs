@@ -114,6 +114,8 @@ function integrationCase(n, name, command, expected) {
 assert(typeof mod.default === "function", "mod.default must be a function (the factory)");
 assert(typeof mod.injectFiles === "function", "mod.injectFiles must be a function");
 assert(typeof mod.cleanToken === "function", "mod.cleanToken must be a function");
+assert(typeof mod.splitLineRange === "function", "mod.splitLineRange must be a function (#@file:N / :N-M)");
+assert(typeof mod.sliceLines === "function", "mod.sliceLines must be a function (#@file:N / :N-M)");
 assert(typeof mod.formatTextFileBlock === "function", "mod.formatTextFileBlock must be a function");
 assert(typeof mod.formatImageBlock === "function", "mod.formatImageBlock must be a function");
 assert(typeof mod.formatBinaryBlock === "function", "mod.formatBinaryBlock must be a function");
@@ -139,7 +141,7 @@ assert(typeof mod.computeDetailOffsets === "function", "mod.computeDetailOffsets
 // injectMarkdown (the PRIVATE recursion driver) being accidentally exported. (PRD §11 "the gate must assert
 // the real shipped module surface"; item LOGIC (c).)
 const ASSERTED_EXPORTS = new Set([
-  "default", "injectFiles", "cleanToken", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
+  "default", "injectFiles", "cleanToken", "splitLineRange", "sliceLines", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
   "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
   "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
   "resolveImportPath", "isRegularFile", "readConfig", "renderInjectedMessage", "computeDetailOffsets",
@@ -2044,8 +2046,8 @@ await runCase("T1.S1-9", "scanTokens bare-@ on: '@api.md and #@b.md' → 2 resol
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 2, `expected 2 resolved paths (bare @ + #@), got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0] === API, `first path (index 0, bare @api.md) must resolve to api.md, got ${JSON.stringify(arr[0])}`);
-  assert(arr[1] === B_MD, `second path (index 12, #@b.md) must resolve to b.md, got ${JSON.stringify(arr[1])}`);
+  assert(arr[0].path === API, `first path (index 0, bare @api.md) must resolve to api.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[1].path === B_MD, `second path (index 12, #@b.md) must resolve to b.md, got ${JSON.stringify(arr[1])}`);
   assert(
     "@api.md and #@b.md".indexOf("@api.md") < "@api.md and #@b.md".indexOf("#@b.md"),
     "records must be sorted by index ascending",
@@ -2065,7 +2067,7 @@ await runCase("T1.S1-10", "scanTokens no-double-match: '#@a.md' (bareAt:true) �
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 1, `#@a.md must yield exactly ONE resolved path (no double-match), got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0] === A_MD, `record must resolve to a.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[0].path === A_MD, `record must resolve to a.md, got ${JSON.stringify(arr[0])}`);
 });
 
 // T1.S1-11 — mid-word / Unicode `@` excluded. BARE_AT_RE forbids a preceding word char (\p{L}\p{N}_), so
@@ -2092,7 +2094,7 @@ await runCase("T1.S1-12", "scanTokens dedup: '#@api.md @api.md' → ONE resolved
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 1, `dedup must collapse to ONE resolved path, got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0] === API, `record must resolve to api.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[0].path === API, `record must resolve to api.md, got ${JSON.stringify(arr[0])}`);
 });
 
 // T1.S1-13 — code-exempt. With skipCode:true, a bare '@api.md' INSIDE a fenced code block is skipped
@@ -2958,6 +2960,78 @@ await runCase("MDV-1", "md verbatim: top-level #@mdVerbatim.md → its #@apiVerb
   assert(!hasBlock(r, "See apiVerbatim.md for details."), `the stripped form 'See apiVerbatim.md' must be ABSENT (content is verbatim, §6.4) — a stripping regression would make this PRESENT, got blocks=${JSON.stringify(r.blocks)}`);
   // (e) apiVerbatim.md was STILL INJECTED despite the marker being preserved (the import resolved+injected).
   assert(hasBlock(r, '<file name="' + API_VERBATIM + '">'), `apiVerbatim.md must STILL be injected (the import resolved), got blocks=${JSON.stringify(r.blocks)}`);
+});
+
+// ── LINE RANGE: #@file:N and #@file:N-M ──────────────────────────────────────────────────────────────
+// `:N` = ONLY line N. `:N-M` = lines N through M inclusive. Exact path wins (file named `a.ts:10` ok).
+// UI range is `:N` or `:N-M`. Closed ranges always inject whole (no paging past the selection).
+
+await runCase("LINE-1", "#@a.ts:3 injects ONLY line 3; detail.range is :3", async () => {
+  // A_TS_CONTENT lines: 1=export… 2=  return… 3=} 4=// a small…
+  const r = await mod.injectFiles("Review #@a.ts:3", [], FIX);
+  assert(r.injected === 1, `expected injected=1, got ${r.injected}`);
+  assert(r.text === "Review #@a.ts:3", `prompt must stay verbatim, got ${JSON.stringify(r.text)}`);
+  // body is exactly line 3 — the closing brace alone (no line 2, no line 4)
+  assert(hasBlock(r, ">\n}\n</file>"), `body must be ONLY line 3 ('}'), got ${JSON.stringify(r.blocks)}`);
+  assert(!hasBlock(r, "export function add"), `line 1 must be absent`);
+  assert(!hasBlock(r, "return a + b"), `line 2 must be absent`);
+  assert(!hasBlock(r, "a small TypeScript"), `line 4 must be absent`);
+  assert(r.details?.[0]?.range === ":3", `detail.range must be :3, got ${JSON.stringify(r.details?.[0])}`);
+  assert(r.details?.[0]?.kind === "text", `kind must stay text, got ${r.details?.[0]?.kind}`);
+});
+
+await runCase("LINE-2", "#@a.ts:2-3 injects lines 2–3 inclusive; range :2-3", async () => {
+  const r = await mod.injectFiles("See #@a.ts:2-3", [], FIX);
+  assert(r.injected === 1, `expected injected=1, got ${r.injected}`);
+  assert(hasBlock(r, "  return a + b;\n}"), `lines 2–3 present together`);
+  assert(!hasBlock(r, "export function add"), `line 1 absent`);
+  assert(!hasBlock(r, "a small TypeScript"), `line 4 absent`);
+  assert(r.details?.[0]?.range === ":2-3", `range :2-3, got ${JSON.stringify(r.details?.[0]?.range)}`);
+});
+
+await runCase("LINE-3", "trailing punct still trims: #@a.ts:2. → only line 2", async () => {
+  const r = await mod.injectFiles("See #@a.ts:2.", [], FIX);
+  assert(r.injected === 1, `expected injected=1, got ${r.injected}`);
+  assert(hasBlock(r, "  return a + b;"), `line 2 body present`);
+  assert(!hasBlock(r, "export function add"), `line 1 absent`);
+  assert(!hasBlock(r, "}\n//"), `line 3+ absent`);
+  assert(r.details?.[0]?.range === ":2", `range :2, got ${JSON.stringify(r.details?.[0]?.range)}`);
+});
+
+await runCase("LINE-4", "splitLineRange / sliceLines unit helpers", async () => {
+  assert(JSON.stringify(mod.splitLineRange("a.ts:10")) === JSON.stringify({ path: "a.ts", startLine: 10, endLine: 10 }), "a.ts:10 → single");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:10-15")) === JSON.stringify({ path: "a.ts", startLine: 10, endLine: 15 }), "a.ts:10-15");
+  assert(JSON.stringify(mod.splitLineRange("a.ts")) === JSON.stringify({ path: "a.ts" }), "no suffix");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:0")) === JSON.stringify({ path: "a.ts:0" }), ":0 invalid → keep raw");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:5-3")) === JSON.stringify({ path: "a.ts:5-3" }), "end<start invalid → keep raw");
+  assert(mod.sliceLines("a\nb\nc\n", 2, 2) === "b", "single line 2");
+  assert(mod.sliceLines("a\nb\nc\n", 2, 3) === "b\nc", "lines 2-3");
+  assert(mod.sliceLines("a\nb\nc\n", 1, 3) === "a\nb\nc", "whole");
+  assert(mod.sliceLines("a\nb\nc\n", 99, 100) === "", "past EOF → empty");
+});
+
+await runCase("LINE-5", "scanTokens carries startLine+endLine on #@a.ts:2-4", async () => {
+  const arr = await mod.scanTokens(
+    "#@a.ts:2-4",
+    TMPDIR,
+    { allowAbsTilde: true, skipCode: false, tryMdExt: false },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 1, `expected 1 record, got ${JSON.stringify(arr)}`);
+  assert(arr[0].path === path.join(TMPDIR, "a.ts"), `path must be a.ts, got ${arr[0].path}`);
+  assert(arr[0].startLine === 2 && arr[0].endLine === 4, `range 2-4, got ${JSON.stringify(arr[0])}`);
+});
+
+await runCase("LINE-6", "#@a.ts:2 #@a.ts:3 injects TWO blocks; same range still dedups", async () => {
+  const two = await mod.injectFiles("See #@a.ts:2 and #@a.ts:3", [], FIX);
+  assert(two.injected === 2, `different ranges must both inject, got ${two.injected}`);
+  assert(two.details?.[0]?.range === ":2" && two.details?.[1]?.range === ":3", `ranges :2 then :3, got ${JSON.stringify(two.details?.map((d) => d.range))}`);
+  assert(hasBlock(two, "  return a + b;"), `line 2 present`);
+  assert(hasBlock(two, ">\n}\n</file>"), `line 3 present as its own block`);
+  const whole = await mod.injectFiles("See #@a.ts:2 and #@a.ts", [], FIX);
+  assert(whole.injected === 2, `range + whole file must both inject, got ${whole.injected}`);
+  const dup = await mod.injectFiles("See #@a.ts:2 and #@a.ts:2", [], FIX);
+  assert(dup.injected === 1, `same range must still dedup, got ${dup.injected}`);
 });
 
 // MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@
