@@ -3079,6 +3079,22 @@ await runCase("LINE-8-MD", "LR-1 via markdown: tight budget + #@bigmd.md:1-99999
     "file-coordinate resume on the markdown slice");
 });
 
+await runCase("LINE-12", "LR-5: #@lr5_five.txt:2-100000 (5-line file) → range ':2-5' (display = delivered, clamped)", async () => {
+  // PRD §17.6 LR-5 / §17.9 LINE-12: display shows what was DELIVERED. sliceLines clamps the :2-100000 request
+  // to lines 2–5; the detail's range (and the collapsed read line) must show :2-5, not the requested :2-100000.
+  const five = path.join(TMPDIR, "lr5_five.txt");                    // UNIQUE inline fixture (no shared collision)
+  fsSync.writeFileSync(five, "l1\nl2\nl3\nl4\nl5\n");                 // exactly 5 lines (trailing \n ≠ extra line)
+  const r = await mod.injectFiles("See #@lr5_five.txt:2-100000", [], FIX);
+  assert(r.injected === 1, `one delivery, got ${r.injected}`);
+  assert(r.text === "See #@lr5_five.txt:2-100000", "prompt verbatim (§6.4)");
+  const d = r.details[0];
+  assert(d.kind === "text", `kind 'text' (FIX = no budget → the inline whole-slice arm), got '${d.kind}'`);
+  assert(d.range === ":2-5", `range must be the DELIVERED :2-5 (clamped from :2-100000), got ${JSON.stringify(d.range)}`);
+  assert(d.lines === 4, `4 lines delivered (2–5), got ${d.lines}`);
+  assert(hasBlock(r, "l2\nl3\nl4\nl5"), `body must be lines 2–5, got ${JSON.stringify(r.blocks)}`);
+  assert(!hasBlock(r, "l1\n"), "line 1 must be absent");
+});
+
 // MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@
 // variant: a top-level #@mdBare.md whose content contains a BARE @apiBare.md. With bareAt:true (4th param),
 // the bare import RESOLVES (apiBare.md is injected) AND the bare marker SURVIVES verbatim in mdBare.md's block

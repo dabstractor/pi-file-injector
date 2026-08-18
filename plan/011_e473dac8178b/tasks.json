@@ -18,7 +18,7 @@
               "type": "Task",
               "id": "P1.M1.T1",
               "title": "LR-1 + LR-5: slice budget/paging & honest display in emitText",
-              "status": "Planned",
+              "status": "Researching",
               "description": "Rewrite emitText's range branch (L1303–1312) so the sliced content flows through the same §5.5 inline-vs-paged decision as a whole file, with the paged directive resuming in FILE coordinates, and clamp FileDetail.range/read line to the delivered range. Includes the normative code-quality note: unify the cost/lines/push/subtract quadruple instead of adding a fourth copy.",
               "subtasks": [
                 {
@@ -43,7 +43,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S2",
                   "title": "LR-5: clamp the displayed range to the delivered range",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1"
@@ -61,7 +61,7 @@
                   "type": "Subtask",
                   "id": "P1.M1.T1.S3",
                   "title": "Unify the emit quadruple + rewrite emitText JSDoc (code-quality note + Mode A docs)",
-                  "status": "Planned",
+                  "status": "Researching",
                   "story_points": 1,
                   "dependencies": [
                     "P1.M1.T1.S1",

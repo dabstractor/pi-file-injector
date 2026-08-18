@@ -533,7 +533,7 @@ export interface FileDetail {
   kind: "text" | "image" | "binary" | "paged" | "url"; // +"url": producer injectUrl (T2.S1); renderer = readLine url branch (T2.S2, raw URL no tildify). Safe — no exhaustive switch on .kind.
   chars?: number; // text: content length; paged: FULL content length
   lines?: number; // text: total line count
-  range?: string; // paged resume ":N-" OR user line range ":N" / ":N-M" (read-tool style)
+  range?: string; // paged resume ":N-" OR the user line range ":N" / ":N-M" as DELIVERED — clamped when end > EOF (LR-5; read-tool style)
   pagedHeadLines?: number; // paged: complete lines delivered in the head
   dimensionHint?: string; // image: formatDimensionNote(resized) — UNUSED in S1 (image is S2)
   body?: string; // the EXACT file body embedded in the block (text/paged head), so the renderer can
@@ -1309,13 +1309,18 @@ export function emitText(abs: string, content: string, state: State, startLine?:
   if (startLine !== undefined) {
     const end = endLine ?? startLine;
     content = sliceLines(content, startLine, end);
-    rangeSuffix = startLine === end ? `:${startLine}` : `:${startLine}-${end}`; // UI: read path:N / path:N-M
+    // LR-5 (PRD §17.6) — the DISPLAYED range is the DELIVERED (clamped) range, not the requested one:
+    // sliceLines joins L lines with L−1 newlines, so the last delivered line = startLine + newlines-in-slice.
+    // `:2-100000` on a 5-line file delivers lines 2–5 and displays `:2-5` (display and delivery agree).
+    // Canonical (LR-7): a single delivered line → `:N` (never `:N-N`).
+    const deliveredEnd = startLine + (content.match(/\n/g)?.length ?? 0);
+    rangeSuffix = startLine === deliveredEnd ? `:${startLine}` : `:${startLine}-${deliveredEnd}`; // UI: read path:N / path:N-M (clamped to the delivered range)
     const fileCost = Math.ceil(content.length / 4);
     const lineCount = content.length === 0 ? 0 : (content.match(/\n/g)?.length ?? 0) + 1;
     if (state.remaining === null || fileCost <= PAGED_THRESHOLD * state.remaining) {
       // INLINE (whole slice) — fits or budget unknown (O-1): byte-identical to the former unconditional push.
       state.blocks.push(formatTextFileBlock(abs, content));
-      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix }); // the REQUESTED range (LR-5 clamping is S2)
+      state.details.push({ path: abs, kind: "text", chars: content.length, lines: lineCount, range: rangeSuffix }); // the DELIVERED (clamped) range (LR-5) — clamps only when the requested end passed EOF
       subtract(state, fileCost);
     } else if (content.length <= HEAD_CHARS) {
       // §5.5 sub-head guard — applied to the SLICE length (a slice that already fits HEAD_CHARS pages nothing;
@@ -1332,7 +1337,7 @@ export function emitText(abs: string, content: string, state: State, startLine?:
       const directiveBlock = formatPagedDirectiveBlock(abs, content.length, resumeLine, headLines);
       state.blocks.push(formatTextFileBlock(abs, head));
       state.blocks.push(directiveBlock);
-      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${resumeLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock) }); // paged-resume display, NOT rangeSuffix (the requested range)
+      state.details.push({ path: abs, kind: "paged", chars: content.length, range: `:${resumeLine}-`, pagedHeadLines: headLines, directive: extractDirectiveInner(directiveBlock) }); // paged-resume display `:${resumeLine}-`, NOT rangeSuffix (the delivered range)
       state.paged++;
       subtract(state, Math.ceil(HEAD_CHARS / 4)); // matches the whole-file paged branch (HEAD_CHARS basis, not head.length)
     }
