@@ -158,7 +158,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S1",
                   "title": "Gates LINE-7 / LINE-9 / LINE-10 (resolution, image dedup, malformed notify)",
-                  "status": "Complete",
+                  "status": "Ready",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T2.S1",
@@ -177,7 +177,7 @@
                   "type": "Subtask",
                   "id": "P1.M2.T1.S2",
                   "title": "Gates LINE-8 / LINE-11 / LINE-12 (paged slice, past-EOF, clamped display)",
-                  "status": "Researching",
+                  "status": "Complete",
                   "story_points": 2,
                   "dependencies": [
                     "P1.M1.T1.S1",

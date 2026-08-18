@@ -3114,6 +3114,30 @@ await runCase("LINE-8-MD", "LR-1 via markdown: tight budget + #@bigmd.md:1-99999
     "file-coordinate resume on the markdown slice");
 });
 
+// LINE-8b — LR-1 (PRD §17.5) FILE-COORDINATE discriminator: LINE-8/8-MD use :1-999999 (startLine=1), where
+// the correct file-coordinate resume (startLine + headLines) and the slice-relative bug (1 + headLines) are
+// the SAME NUMBER — those gates cannot fail on a slice-coordinate regression. :3-999999 separates them by
+// exactly 2: the directive MUST embed offset:(3 + headLines), and the slice-relative fingerprint
+// offset:(1 + headLines) MUST be absent (smoking-gun discipline, cf. LINE-26). headLines is computed the
+// same dynamic way LINE-8 does (ASCII fixture → the 8192-unit head is exact). No chars assert — the :1-
+// slice length is already pinned by LINE-8; for :3- the line-1/2 subtraction adds fragility, not coverage.
+await runCase("LINE-8b", "LR-1 file-coordinates: #@huge.log:3-999999 → resume = 3 + headLines (slice-relative fingerprint ABSENT)", async () => {
+  const r = await mod.injectFiles("Summarize #@huge.log:3-999999", [], PAGED_FIX);
+  const headLines = (HUGE_LOG_CONTENT.slice(0, 8192).match(/\n/g) || []).length; // complete lines in the SLICE head
+  const resumeLine = 3 + headLines;                                            // startLine=3 → FILE coordinates
+  assert(r.paged === 1, `the :3- slice must PAGE under PAGED_FIX, got paged=${r.paged}`);
+  assert(r.injected === 1, `one delivery (paged), got injected=${r.injected}`);
+  const d = r.details[0];
+  assert(d.kind === "paged", `kind must be 'paged', got '${d.kind}'`);
+  assert(d.range === `:${resumeLine}-`, `range = FILE-coordinate :${resumeLine}- (3 + ${headLines}), got ${JSON.stringify(d.range)}`);
+  assert(d.pagedHeadLines === headLines, `pagedHeadLines = ${headLines}, got ${d.pagedHeadLines}`);
+  assert(r.blocks[1].includes("offset:" + resumeLine), `directive must resume at file line ${resumeLine} (startLine 3 + head lines)`);
+  assert(!r.blocks[1].includes("offset:" + (1 + headLines)),
+    `SMOKING-GUN: slice-relative offset:${1 + headLines} must be ABSENT (file coordinates, not slice-relative — PRD §17.5)`);
+  assert(r.blocks[0].startsWith('<file name="' + HUGE + '">') && r.blocks[0].length < HUGE_LOG_CONTENT.length,
+    "blocks[0] must be the HEAD block (of the slice), not the full content");
+});
+
 await runCase("LINE-12", "LR-5: #@lr5_five.txt:2-100000 (5-line file) → range ':2-5' (display = delivered, clamped)", async () => {
   // PRD §17.6 LR-5 / §17.9 LINE-12: display shows what was DELIVERED. sliceLines clamps the :2-100000 request
   // to lines 2–5; the detail's range (and the collapsed read line) must show :2-5, not the requested :2-100000.
