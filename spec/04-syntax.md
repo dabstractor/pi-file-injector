@@ -3,10 +3,13 @@
 ### 4.1 Grammar
 
 ```
-#@<path>
+#@<path>          # whole file
+#@<path>:N        # only line N         (optional suffix; §17)
+#@<path>:N-M      # lines N..M inclusive
 ```
 
 - The literal two-character trigger `#@`, immediately followed by a path token.
+- **Optional line-range suffix** `:N` / `:N-M` — 1-indexed, inclusive, parsed after §4.3 trimming with exact-path-wins precedence; fully specified in §17.
 - **`<path>`** = a maximal run of non-whitespace characters (`\S+`), then trailing sentence punctuation is trimmed (see §4.3).
 - The trigger must appear at **start-of-string** or **after a non-word character** (so `foo#@bar` mid-word does *not* trigger).
 

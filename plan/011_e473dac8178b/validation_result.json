@@ -1,0 +1,5 @@
+{
+  "hasIssues": true,
+  "issueCount": 3,
+  "summary": "Functionally excellent: 279 unit tests, typecheck, 12 data-level probes, 13 real-pi E2E scenarios, a 94-URL live corpus, and packaging checks all pass. Three minor issues: stale README claim that line ranges never page (contradicts shipped LR-1 behavior; plan doc-sync task unstarted), ftp:// URLs accepted by the shape gate but undeliverable by Node fetch (silently verbatim, spec claim wrong), and FileDetail.lines off-by-one vs wc-l range semantics (unused display metadata)."
+}

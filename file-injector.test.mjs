@@ -114,6 +114,9 @@ function integrationCase(n, name, command, expected) {
 assert(typeof mod.default === "function", "mod.default must be a function (the factory)");
 assert(typeof mod.injectFiles === "function", "mod.injectFiles must be a function");
 assert(typeof mod.cleanToken === "function", "mod.cleanToken must be a function");
+assert(typeof mod.splitLineRange === "function", "mod.splitLineRange must be a function (#@file:N / :N-M)");
+assert(typeof mod.sliceLines === "function", "mod.sliceLines must be a function (#@file:N / :N-M)");
+assert(typeof mod.countLines === "function", "mod.countLines must be a function (LR-4 wc-l line count; 0-byte → 0)");
 assert(typeof mod.formatTextFileBlock === "function", "mod.formatTextFileBlock must be a function");
 assert(typeof mod.formatImageBlock === "function", "mod.formatImageBlock must be a function");
 assert(typeof mod.formatBinaryBlock === "function", "mod.formatBinaryBlock must be a function");
@@ -139,7 +142,7 @@ assert(typeof mod.computeDetailOffsets === "function", "mod.computeDetailOffsets
 // injectMarkdown (the PRIVATE recursion driver) being accidentally exported. (PRD §11 "the gate must assert
 // the real shipped module surface"; item LOGIC (c).)
 const ASSERTED_EXPORTS = new Set([
-  "default", "injectFiles", "cleanToken", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
+  "default", "injectFiles", "cleanToken", "splitLineRange", "sliceLines", "countLines", "formatTextFileBlock", "formatImageBlock", "formatBinaryBlock",
   "formatEmptyImageBlock", "formatPagedDirectiveBlock", "hasValidImageMagic", "scanTokens", "injectFile",
   "emitText", "isAbsoluteOrTilde", "computeCodeRanges", "inCode", "estimateImageTokens",
   "resolveImportPath", "isRegularFile", "readConfig", "renderInjectedMessage", "computeDetailOffsets",
@@ -342,6 +345,15 @@ function buildFixtures() {
 const { HUGE_LOG_CONTENT } = buildFixtures();
 // Write huge.log AFTER computing content (so we hold the exact string for the assertion).
 fsSync.writeFileSync(path.join(TMPDIR, "huge.log"), HUGE_LOG_CONTENT);
+
+// LR-1 (LINE-8-MD) — big MARKDOWN fixture for the ranged-paged case: ~3,000 lines × ~40 chars ≈ 120,000 chars
+// (fileCost 30,000 > PAGED_FIX threshold ~14,170; length > HEAD_CHARS 8192 → pages). NO imports (no #@ and no
+// @path markers — keep the test about paging, not scanning). ASCII → headSlice(8192) is exact, so the test's
+// expected headLines = newlines in BIGMD_CONTENT.slice(0, 8192) is exact.
+const BIGMD_LINES = Array.from({ length: 3000 }, (_, i) => `# big markdown line ${i + 1} ${"x".repeat(20)}\n`);
+const BIGMD_CONTENT = BIGMD_LINES.join("");
+const BIGMD = path.join(TMPDIR, "bigmd.md");
+fsSync.writeFileSync(BIGMD, BIGMD_CONTENT);
 
 // The home-dir notes file for the tilde case (#10). Written into os.homedir(); cleaned up in finally.
 fsSync.writeFileSync(HOME_NOTES_PATH, HOME_NOTES_CONTENT);
@@ -1155,21 +1167,30 @@ await runCase("PD6", "§5.5 Finding 2: sub-head-sized file under tight budget �
 // low-medium: the sub-head guard always delivers whole by design (Finding 2), so whether subtract
 // ran or not, injected/paged/the emitted blocks are identical for any one injectFiles call). The
 // effect only compounds internally across many files. We therefore pin the fix structurally: read
-// the emitText source and assert the sub-head-guard branch contains a subtract(state, fileCost)
-// call (matching the whole branch). This is a regression guard against the one-line fix being
+// the source and assert (a) the sub-head guard routes through emitWholeText and (b) emitWholeText —
+// now the single whole-delivery implementation for all four paths — contains the subtract(state,
+// fileCost) call (F1 holds structurally). This is a regression guard against the one-line fix being
 // reverted, and documents WHY no behavioral case can distinguish it.
 await runCase("PD-SUBHEAD-BUDGET", "§5.6.2 sub-head guard subtracts fileCost (source-level regression guard) [F1]", async () => {
   const src = fsSync.readFileSync(path.join(process.cwd(), "file-injector.ts"), "utf8");
-  // locate emitText and inspect only its body
+  // P1.M1.T1.S3: the F1 subtract moved into emitWholeText (the ONE whole-delivery helper). Pin BOTH halves:
+  // (a) emitText's sub-head guard routes through emitWholeText; (b) the helper subtracts the full fileCost —
+  // which now covers ALL FOUR whole-delivery paths (range inline, range guard, whole inline, whole guard).
   const fnStart = src.indexOf("function emitText(");
   assert(fnStart !== -1, "emitText must exist in file-injector.ts");
   const fnBody = src.slice(fnStart, src.indexOf("\n}", fnStart) + 2);
-  // the sub-head-guard branch is `if (content.length <= HEAD_CHARS) {` — find it
   const guardIdx = fnBody.indexOf("content.length <= HEAD_CHARS");
   assert(guardIdx !== -1, "sub-head guard branch must exist in emitText");
   const guardBlock = fnBody.slice(guardIdx, fnBody.indexOf("} else {", guardIdx));
-  assert(guardBlock.includes("subtract(state, fileCost)"),
-    `sub-head guard must call subtract(state, fileCost) — F1 fix present in: ${JSON.stringify(guardBlock)}`);
+  assert(guardBlock.includes("emitWholeText("),
+    `sub-head guard must deliver via emitWholeText — got: ${JSON.stringify(guardBlock)}`);
+  const helperStart = src.indexOf("function emitWholeText(");
+  assert(helperStart !== -1, "emitWholeText must exist in file-injector.ts");
+  const helperBody = src.slice(helperStart, src.indexOf("\n}", helperStart) + 2);
+  assert(helperBody.includes("subtract(state, fileCost)"),
+    `emitWholeText must call subtract(state, fileCost) — F1 invariant in: ${JSON.stringify(helperBody)}`);
+  const emitCalls = fnBody.match(/emitWholeText\(/g)?.length ?? 0;
+  assert(emitCalls === 4, `emitText must route ALL 4 whole-delivery paths through emitWholeText; found ${emitCalls}`);
 });
 
 await runCase("PD7", "§5.5 Finding 1: long-lined file (head < 1 line) → directive offset derived from head, 0% loss", async () => {
@@ -2044,8 +2065,8 @@ await runCase("T1.S1-9", "scanTokens bare-@ on: '@api.md and #@b.md' → 2 resol
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 2, `expected 2 resolved paths (bare @ + #@), got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0] === API, `first path (index 0, bare @api.md) must resolve to api.md, got ${JSON.stringify(arr[0])}`);
-  assert(arr[1] === B_MD, `second path (index 12, #@b.md) must resolve to b.md, got ${JSON.stringify(arr[1])}`);
+  assert(arr[0].path === API, `first path (index 0, bare @api.md) must resolve to api.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[1].path === B_MD, `second path (index 12, #@b.md) must resolve to b.md, got ${JSON.stringify(arr[1])}`);
   assert(
     "@api.md and #@b.md".indexOf("@api.md") < "@api.md and #@b.md".indexOf("#@b.md"),
     "records must be sorted by index ascending",
@@ -2065,7 +2086,7 @@ await runCase("T1.S1-10", "scanTokens no-double-match: '#@a.md' (bareAt:true) �
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 1, `#@a.md must yield exactly ONE resolved path (no double-match), got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0] === A_MD, `record must resolve to a.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[0].path === A_MD, `record must resolve to a.md, got ${JSON.stringify(arr[0])}`);
 });
 
 // T1.S1-11 — mid-word / Unicode `@` excluded. BARE_AT_RE forbids a preceding word char (\p{L}\p{N}_), so
@@ -2092,7 +2113,7 @@ await runCase("T1.S1-12", "scanTokens dedup: '#@api.md @api.md' → ONE resolved
     { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
   );
   assert(arr.length === 1, `dedup must collapse to ONE resolved path, got ${arr.length}: ${JSON.stringify(arr)}`);
-  assert(arr[0] === API, `record must resolve to api.md, got ${JSON.stringify(arr[0])}`);
+  assert(arr[0].path === API, `record must resolve to api.md, got ${JSON.stringify(arr[0])}`);
 });
 
 // T1.S1-13 — code-exempt. With skipCode:true, a bare '@api.md' INSIDE a fenced code block is skipped
@@ -2466,8 +2487,8 @@ await runCase("DELIV-1", "injectFiles return shape: r.text stripped (no ---/<fil
   assert(d.path === A_TS, `details[0].path is the resolved a.ts abs, got ${d.path}`);
   assert(d.kind === "text", `details[0].kind === 'text', got ${d.kind}`);
   assert(d.chars === A_TS_CONTENT.length, `details[0].chars is the content length (${A_TS_CONTENT.length}), got ${d.chars}`);
-  const expectedLines = (A_TS_CONTENT.match(/\n/g) || []).length + 1;
-  assert(d.lines === expectedLines, `details[0].lines is newline-count+1 (${expectedLines}), got ${d.lines}`);
+  const expectedLines = mod.countLines(A_TS_CONTENT);
+  assert(d.lines === expectedLines, `details[0].lines is wc-l (${expectedLines}, countLines semantics — consistent with range validation), got ${d.lines}`);
 });
 
 // DELIV-2 — CUSTOM MESSAGE (full contract). before_agent_start publishes
@@ -2958,6 +2979,304 @@ await runCase("MDV-1", "md verbatim: top-level #@mdVerbatim.md → its #@apiVerb
   assert(!hasBlock(r, "See apiVerbatim.md for details."), `the stripped form 'See apiVerbatim.md' must be ABSENT (content is verbatim, §6.4) — a stripping regression would make this PRESENT, got blocks=${JSON.stringify(r.blocks)}`);
   // (e) apiVerbatim.md was STILL INJECTED despite the marker being preserved (the import resolved+injected).
   assert(hasBlock(r, '<file name="' + API_VERBATIM + '">'), `apiVerbatim.md must STILL be injected (the import resolved), got blocks=${JSON.stringify(r.blocks)}`);
+});
+
+// ── LINE RANGE: #@file:N and #@file:N-M ──────────────────────────────────────────────────────────────
+// `:N` = ONLY line N. `:N-M` = lines N through M inclusive. Exact path wins (file named `a.ts:10` ok).
+// UI range is `:N` or `:N-M`. Closed ranges always inject whole (no paging past the selection).
+
+await runCase("LINE-1", "#@a.ts:3 injects ONLY line 3; detail.range is :3", async () => {
+  // A_TS_CONTENT lines: 1=export… 2=  return… 3=} 4=// a small…
+  const r = await mod.injectFiles("Review #@a.ts:3", [], FIX);
+  assert(r.injected === 1, `expected injected=1, got ${r.injected}`);
+  assert(r.text === "Review #@a.ts:3", `prompt must stay verbatim, got ${JSON.stringify(r.text)}`);
+  // body is exactly line 3 — the closing brace alone (no line 2, no line 4)
+  assert(hasBlock(r, ">\n}\n</file>"), `body must be ONLY line 3 ('}'), got ${JSON.stringify(r.blocks)}`);
+  assert(!hasBlock(r, "export function add"), `line 1 must be absent`);
+  assert(!hasBlock(r, "return a + b"), `line 2 must be absent`);
+  assert(!hasBlock(r, "a small TypeScript"), `line 4 must be absent`);
+  assert(r.details?.[0]?.range === ":3", `detail.range must be :3, got ${JSON.stringify(r.details?.[0])}`);
+  assert(r.details?.[0]?.kind === "text", `kind must stay text, got ${r.details?.[0]?.kind}`);
+});
+
+await runCase("LINE-2", "#@a.ts:2-3 injects lines 2–3 inclusive; range :2-3", async () => {
+  const r = await mod.injectFiles("See #@a.ts:2-3", [], FIX);
+  assert(r.injected === 1, `expected injected=1, got ${r.injected}`);
+  assert(hasBlock(r, "  return a + b;\n}"), `lines 2–3 present together`);
+  assert(!hasBlock(r, "export function add"), `line 1 absent`);
+  assert(!hasBlock(r, "a small TypeScript"), `line 4 absent`);
+  assert(r.details?.[0]?.range === ":2-3", `range :2-3, got ${JSON.stringify(r.details?.[0]?.range)}`);
+});
+
+await runCase("LINE-3", "trailing punct still trims: #@a.ts:2. → only line 2", async () => {
+  const r = await mod.injectFiles("See #@a.ts:2.", [], FIX);
+  assert(r.injected === 1, `expected injected=1, got ${r.injected}`);
+  assert(hasBlock(r, "  return a + b;"), `line 2 body present`);
+  assert(!hasBlock(r, "export function add"), `line 1 absent`);
+  assert(!hasBlock(r, "}\n//"), `line 3+ absent`);
+  assert(r.details?.[0]?.range === ":2", `range :2, got ${JSON.stringify(r.details?.[0]?.range)}`);
+});
+
+await runCase("LINE-4", "splitLineRange / sliceLines unit helpers", async () => {
+  assert(JSON.stringify(mod.splitLineRange("a.ts:10")) === JSON.stringify({ path: "a.ts", startLine: 10, endLine: 10 }), "a.ts:10 → single");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:10-15")) === JSON.stringify({ path: "a.ts", startLine: 10, endLine: 15 }), "a.ts:10-15");
+  assert(JSON.stringify(mod.splitLineRange("a.ts")) === JSON.stringify({ path: "a.ts" }), "no suffix");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:0")) === JSON.stringify({ path: "a.ts:0", invalid: true }), ":0 invalid → raw token + LR-3 invalid marker");
+  assert(JSON.stringify(mod.splitLineRange("a.ts:5-3")) === JSON.stringify({ path: "a.ts:5-3", invalid: true }), "end<start invalid → raw token + LR-3 invalid marker");
+  assert(mod.sliceLines("a\nb\nc\n", 2, 2) === "b", "single line 2");
+  assert(mod.sliceLines("a\nb\nc\n", 2, 3) === "b\nc", "lines 2-3");
+  assert(mod.sliceLines("a\nb\nc\n", 1, 3) === "a\nb\nc", "whole");
+  assert(mod.sliceLines("a\nb\nc\n", 99, 100) === "", "past EOF → empty");
+
+  // LR-4 — countLines unit pins (wc-l semantics + the 0-byte special case the naive parts-mirror gets wrong).
+  assert(mod.countLines("") === 0, "0-byte file → 0 lines (spec: #@empty.txt:1 is past-EOF)");
+  assert(mod.countLines("a") === 1, "no trailing newline → 1 line");
+  assert(mod.countLines("a\n") === 1, "single trailing newline ≠ extra line (wc -l)");
+  assert(mod.countLines("l1\nl2\nl3\nl4\nl5\n") === 5, "5 lines with trailing newline → 5");
+});
+
+await runCase("LINE-5", "scanTokens carries startLine+endLine on #@a.ts:2-4", async () => {
+  const arr = await mod.scanTokens(
+    "#@a.ts:2-4",
+    TMPDIR,
+    { allowAbsTilde: true, skipCode: false, tryMdExt: false },
+    { blocks: [], details: [], images: [], injectedSet: new Set(), remaining: null, count: 0, paged: 0 },
+  );
+  assert(arr.length === 1, `expected 1 record, got ${JSON.stringify(arr)}`);
+  assert(arr[0].path === path.join(TMPDIR, "a.ts"), `path must be a.ts, got ${arr[0].path}`);
+  assert(arr[0].startLine === 2 && arr[0].endLine === 4, `range 2-4, got ${JSON.stringify(arr[0])}`);
+});
+
+await runCase("LINE-6", "#@a.ts:2 #@a.ts:3 injects TWO blocks; same range still dedups", async () => {
+  const two = await mod.injectFiles("See #@a.ts:2 and #@a.ts:3", [], FIX);
+  assert(two.injected === 2, `different ranges must both inject, got ${two.injected}`);
+  assert(two.details?.[0]?.range === ":2" && two.details?.[1]?.range === ":3", `ranges :2 then :3, got ${JSON.stringify(two.details?.map((d) => d.range))}`);
+  assert(hasBlock(two, "  return a + b;"), `line 2 present`);
+  assert(hasBlock(two, ">\n}\n</file>"), `line 3 present as its own block`);
+  const whole = await mod.injectFiles("See #@a.ts:2 and #@a.ts", [], FIX);
+  assert(whole.injected === 2, `range + whole file must both inject, got ${whole.injected}`);
+  const dup = await mod.injectFiles("See #@a.ts:2 and #@a.ts:2", [], FIX);
+  assert(dup.injected === 1, `same range must still dedup, got ${dup.injected}`);
+});
+
+// LINE-7 — §2.4 exact-path-wins (pins PRE-EXISTING behavior): the §3 retry ladder's STEP 1 resolves the FULL token (suffix included) first, so a file LITERALLY named 'a.ts:10' is delivered WHOLE — the suffix is never reinterpreted as a range. The shared a.ts fixture (4 lines) makes this discriminating: if the range interpretation wrongly ran, a.ts:10 = line 10 of a 4-line file → past-EOF → LR-4 → verbatim → injected:0. And a whole-a.ts misfire is excluded by the 'return a + b;' negative (a.ts line 2). Linux allows ':' in filenames (CI is Linux). Inline fixture + finally rmSync — mirrors LINE-10's literal0.ts:0 pattern.
+await runCase("LINE-7", "§2.4 exact-path-wins: literal 'a.ts:10' file → #@a.ts:10 delivers the WHOLE literal file, no range", async () => {
+  const lit = path.join(TMPDIR, "a.ts:10");
+  fsSync.writeFileSync(lit, "LR7 literal colon file — line one\nLR7 line two\n");
+  try {
+    const r = await mod.injectFiles("See #@a.ts:10 here", [], FIX);
+    assert(r.injected === 1, `the LITERAL a.ts:10 file resolves whole (exact wins), got injected=${r.injected}`);
+    assert(hasBlock(r, "LR7 literal colon file — line one"), `the literal file's content is the body, got ${JSON.stringify(r.blocks)}`);
+    assert(hasBlock(r, '<file name="' + lit + '">'), `the delivered block's name IS the literal ${lit} abs path`);
+    assert(!hasBlock(r, "return a + b;"), `a.ts content must NOT be delivered (no range slice of a.ts, no whole-a.ts misfire)`);
+    assert(r.blocks.length === 1, `exactly one block (the literal file), got ${r.blocks.length}`);
+    assert(r.details?.[0]?.kind === "text", `kind 'text' (whole-file delivery), got '${r.details?.[0]?.kind}'`);
+    assert(r.details?.[0]?.range === undefined, `NO range on a literal-file delivery (§2.4: resolves as-is, whole), got ${JSON.stringify(r.details?.[0]?.range)}`);
+    assert(r.text === "See #@a.ts:10 here", `prompt verbatim (#@a.ts:10 untouched, §6.4), got ${JSON.stringify(r.text)}`);
+  } finally {
+    fsSync.rmSync(lit, { force: true });
+  }
+});
+
+// LINE-8 — LR-1 (PRD §17.5): a ranged token's SLICE runs the same §5.5 inline-vs-paged decision as a whole
+// file. Under PAGED_FIX (remaining 23,616; threshold ≈ 14,170), #@huge.log:1-999999's slice (~2 MB, fileCost
+// ~500K > threshold AND > HEAD_CHARS) must PAGE — not silently dump ~2 MB inline (the LR-1 gap: a typo'd end
+// disabled the overflow safety valve). The directive resumes in FILE coordinates: resumeLine = startLine +
+// headLines (startLine=1 here, so it coincides with the whole-file headLines+1). Formalized in P1.M2.T1.S2.
+await runCase("LINE-8", "LR-1: tight budget + #@huge.log:1-999999 → kind:'paged', head + directive, file-coordinate resume", async () => {
+  const r = await mod.injectFiles("Summarize #@huge.log:1-999999", [], PAGED_FIX);
+  const headLines = (HUGE_LOG_CONTENT.slice(0, 8192).match(/\n/g) || []).length;   // ASCII → head is exactly 8192
+  const resumeLine = 1 + headLines;                                                // startLine = 1
+  assert(r.paged === 1, `expected paged===1, got ${r.paged}`);
+  assert(r.injected === 1, `one delivery (paged), got ${r.injected}`);
+  const d = r.details[0];
+  assert(d.kind === "paged", `kind must be 'paged', got '${d.kind}'`);
+  // sliceLines drops the file's single trailing newline (split → drop final "" → join "\n"), so the
+  // delivered slice is exactly one byte shorter than the fixture — compute the expected value from it.
+  const expectedSliceLen = HUGE_LOG_CONTENT.length - 1;
+  assert(d.chars === expectedSliceLen, `chars = slice length (covers the file), got ${d.chars}`);
+  assert(d.range === `:${resumeLine}-`, `range must be :${resumeLine}-, got ${d.range}`);
+  assert(d.pagedHeadLines === headLines, `pagedHeadLines must be ${headLines}, got ${d.pagedHeadLines}`);
+  assert(r.blocks[0].startsWith('<file name="' + HUGE + '">') && r.blocks[0].length < HUGE_LOG_CONTENT.length,
+    "blocks[0] must be the HEAD block, not the full content");
+  assert(r.blocks[1].includes("offset:" + resumeLine), `directive must resume at file line ${resumeLine}`);
+});
+
+// LINE-8-MD — LR-1 via MARKDOWN: injectMarkdown passes the FULL content + range to emitText, which re-slices
+// and runs the same §5.5 decision → ranged markdown tokens page identically. Pins that a future refactor
+// moving the slice out of emitText cannot silently regress markdown.
+await runCase("LINE-8-MD", "LR-1 via markdown: tight budget + #@bigmd.md:1-999999 → paged (injectMarkdown re-slices in emitText)", async () => {
+  const r = await mod.injectFiles("Summarize #@bigmd.md:1-999999", [], PAGED_FIX);
+  const headLines = (BIGMD_CONTENT.slice(0, 8192).match(/\n/g) || []).length;
+  const resumeLine = 1 + headLines;
+  assert(r.paged === 1 && r.details[0].kind === "paged", "the markdown slice must page");
+  assert(r.details[0].range === `:${resumeLine}-` && r.details[0].pagedHeadLines === headLines,
+    "file-coordinate resume on the markdown slice");
+});
+
+// LINE-8b — LR-1 (PRD §17.5) FILE-COORDINATE discriminator: LINE-8/8-MD use :1-999999 (startLine=1), where
+// the correct file-coordinate resume (startLine + headLines) and the slice-relative bug (1 + headLines) are
+// the SAME NUMBER — those gates cannot fail on a slice-coordinate regression. :3-999999 separates them by
+// exactly 2: the directive MUST embed offset:(3 + headLines), and the slice-relative fingerprint
+// offset:(1 + headLines) MUST be absent (smoking-gun discipline, cf. LINE-26). headLines is computed the
+// same dynamic way LINE-8 does (ASCII fixture → the 8192-unit head is exact). No chars assert — the :1-
+// slice length is already pinned by LINE-8; for :3- the line-1/2 subtraction adds fragility, not coverage.
+await runCase("LINE-8b", "LR-1 file-coordinates: #@huge.log:3-999999 → resume = 3 + headLines (slice-relative fingerprint ABSENT)", async () => {
+  const r = await mod.injectFiles("Summarize #@huge.log:3-999999", [], PAGED_FIX);
+  const headLines = (HUGE_LOG_CONTENT.slice(0, 8192).match(/\n/g) || []).length; // complete lines in the SLICE head
+  const resumeLine = 3 + headLines;                                            // startLine=3 → FILE coordinates
+  assert(r.paged === 1, `the :3- slice must PAGE under PAGED_FIX, got paged=${r.paged}`);
+  assert(r.injected === 1, `one delivery (paged), got injected=${r.injected}`);
+  const d = r.details[0];
+  assert(d.kind === "paged", `kind must be 'paged', got '${d.kind}'`);
+  assert(d.range === `:${resumeLine}-`, `range = FILE-coordinate :${resumeLine}- (3 + ${headLines}), got ${JSON.stringify(d.range)}`);
+  assert(d.pagedHeadLines === headLines, `pagedHeadLines = ${headLines}, got ${d.pagedHeadLines}`);
+  assert(r.blocks[1].includes("offset:" + resumeLine), `directive must resume at file line ${resumeLine} (startLine 3 + head lines)`);
+  assert(!r.blocks[1].includes("offset:" + (1 + headLines)),
+    `SMOKING-GUN: slice-relative offset:${1 + headLines} must be ABSENT (file coordinates, not slice-relative — PRD §17.5)`);
+  assert(r.blocks[0].startsWith('<file name="' + HUGE + '">') && r.blocks[0].length < HUGE_LOG_CONTENT.length,
+    "blocks[0] must be the HEAD block (of the slice), not the full content");
+});
+
+await runCase("LINE-12", "LR-5: #@lr5_five.txt:2-100000 (5-line file) → range ':2-5' (display = delivered, clamped)", async () => {
+  // PRD §17.6 LR-5 / §17.9 LINE-12: display shows what was DELIVERED. sliceLines clamps the :2-100000 request
+  // to lines 2–5; the detail's range (and the collapsed read line) must show :2-5, not the requested :2-100000.
+  const five = path.join(TMPDIR, "lr5_five.txt");                    // UNIQUE inline fixture (no shared collision)
+  fsSync.writeFileSync(five, "l1\nl2\nl3\nl4\nl5\n");                 // exactly 5 lines (trailing \n ≠ extra line)
+  const r = await mod.injectFiles("See #@lr5_five.txt:2-100000", [], FIX);
+  assert(r.injected === 1, `one delivery, got ${r.injected}`);
+  assert(r.text === "See #@lr5_five.txt:2-100000", "prompt verbatim (§6.4)");
+  const d = r.details[0];
+  assert(d.kind === "text", `kind 'text' (FIX = no budget → the inline whole-slice arm), got '${d.kind}'`);
+  assert(d.range === ":2-5", `range must be the DELIVERED :2-5 (clamped from :2-100000), got ${JSON.stringify(d.range)}`);
+  assert(d.lines === 4, `4 lines delivered (2–5), got ${d.lines}`);
+  assert(hasBlock(r, "l2\nl3\nl4\nl5"), `body must be lines 2-5, got ${JSON.stringify(r.blocks)}`);
+  assert(!hasBlock(r, "l1\n"), "line 1 must be absent");
+});
+
+// LINE-9 — LR-2 (§3 claim-by-type): images/binaries claim the BARE abs — a range is meaningless identity for
+// them, so a bare+ranged pair (EITHER order) delivers exactly ONE image / ONE note (identical bytes never
+// delivered twice). Reuses the existing pic.png (PNG_BYTES) + data.bin fixtures — no new fixtures, no mocks.
+// The ranged-then-bare order is caught by the stream-loop claimKey skip BEFORE injectFile; the
+// bare-then-ranged (and ranged-then-ranged) orders are caught by the branch guard inside injectFile.
+await runCase("LINE-9", "LR-2: #@pic.png #@pic.png:3 → ONE image (both orders); #@data.bin #@data.bin:5 → ONE note", async () => {
+  // image — bare then ranged
+  const r1 = await mod.injectFiles("Describe #@pic.png and #@pic.png:3", [], FIX);
+  assert(r1.injected === 1, `bare+ranged image pair: exactly ONE delivery, got injected=${r1.injected}`);
+  assert(r1.images.length === 1, `exactly ONE images entry (no duplicate bytes), got ${r1.images.length}`);
+  assert(r1.images[0].data === PNG_BYTES.toString("base64"), "the one image is the real PNG base64");
+  // image — ranged then bare
+  const r1b = await mod.injectFiles("Describe #@pic.png:3 and #@pic.png", [], FIX);
+  assert(r1b.injected === 1 && r1b.images.length === 1, `reverse order also ONE image, got injected=${r1b.injected} images=${r1b.images.length}`);
+  // binary — bare then ranged
+  const r2 = await mod.injectFiles("Inspect #@data.bin and #@data.bin:5", [], FIX);
+  assert(r2.injected === 1, `binary twin: one delivery, got injected=${r2.injected}`);
+  assert(r2.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length === 1,
+    `exactly ONE binary note block, got ${r2.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length}`);
+  // binary — ranged then bare
+  const r2b = await mod.injectFiles("Inspect #@data.bin:5 and #@data.bin", [], FIX);
+  assert(r2b.injected === 1 && r2b.blocks.filter((b) => b.includes('<file name="' + BIN + '">')).length === 1,
+    `reverse binary order also ONE note`);
+});
+
+// LINE-10 — LR-3 (§6): a malformed-range token (`:0`, `:5-3`) that resolves to no file warns instead of
+// vanishing. Injected:0, prompt verbatim, ONE warning notify with the token as typed. Negatives: no-suffix
+// missing files stay silent; valid ranges that resolve stay silent; a LITERAL file named `…:0` resolves whole
+// (exact-path-wins) with NO notify. Spy ctx mirrors url-injection.test.mjs's ctxWithNotifySpy (notes.push);
+// injectFiles' ctx param is 3rd.
+await runCase("LINE-10", "LR-3: #@a.ts:0 → injected:0, prompt verbatim, warning notify fired", async () => {
+  const notes = [];
+  const r = await mod.injectFiles("See #@a.ts:0 here", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes.push({ m, t }) } });
+  assert(r.injected === 0, `injected:0 (nothing delivered), got ${r.injected}`);
+  assert(r.text === "See #@a.ts:0 here", `prompt verbatim (#@a.ts:0 untouched), got ${JSON.stringify(r.text)}`);
+  assert(notes.length === 1, `exactly one notify fired, got ${notes.length}`);
+  assert(notes[0]?.t === "warning", `notify type 'warning', got ${notes[0]?.t}`);
+  assert(notes[0]?.m === "#@a.ts:0 — not injected (range must be :N or :N-M, M ≥ N ≥ 1)",
+    `message shows the token as typed (em dash, ≥ chars), got ${JSON.stringify(notes[0]?.m)}`);
+
+  // Negative: a missing file with NO range-looking suffix stays silent (the common missing-file path).
+  const notes2 = [];
+  await mod.injectFiles("See #@nope.ts", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes2.push({ m, t }) } });
+  assert(notes2.length === 0, `missing file w/o range: NO notify, got ${notes2.length}`);
+
+  // Negative: a VALID range that resolves stays silent (delivers normally).
+  const notes3 = [];
+  const r3 = await mod.injectFiles("See #@a.ts:2", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes3.push({ m, t }) } });
+  assert(r3.injected === 1 && notes3.length === 0, `valid range resolves: injected=1, NO notify (notes=${notes3.length})`);
+
+  // Negative (§2.4 exact-path-wins): a file LITERALLY named '…:0' resolves whole — never notifies.
+  const lit = path.join(TMPDIR, "literal0.ts:0");
+  fsSync.writeFileSync(lit, "literal colon-zero file\n");
+  try {
+    const notes4 = [];
+    const r4 = await mod.injectFiles("See #@literal0.ts:0", [], { cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes4.push({ m, t }) } });
+    assert(r4.injected === 1 && notes4.length === 0, `literal '…:0' file exists → exact wins, delivered whole, NO notify`);
+    assert(hasBlock(r4, "literal colon-zero file"), "the literal file's content was delivered");
+  } finally {
+    fsSync.rmSync(lit, { force: true });
+  }
+});
+
+// LINE-11 — LR-4 (§17.6): a start past EOF is a FAILED token — no empty <file> block, no detail, no count
+// bump, the claim REVOKED (a valid token of the same file, later in the SAME prompt, still injects), the
+// token verbatim, and one hasUI-guarded warning notify (mirrors the read tool, which errors past EOF).
+// Covers BOTH line-bearing paths (direct text + markdown), the clamped-END non-failure, the 0-byte edge,
+// and the start==lineCount boundary. Spy ctx mirrors LINE-10; fixtures are inline w/ finally cleanup.
+await runCase("LINE-11", "LR-4: #@five.txt:99 (5-line file) → no block, claim released, warning notify", async () => {
+  const five = path.join(TMPDIR, "lr4_five.txt");            // inline, unique (no shared collision)
+  fsSync.writeFileSync(five, "l1\nl2\nl3\nl4\nl5\n");          // exactly 5 lines (trailing \n ≠ extra line)
+  const md = path.join(TMPDIR, "lr4.md");
+  fsSync.writeFileSync(md, "m1\nm2\n");                        // 2-line markdown
+  const spyCtx = (notes) => ({ cwd: TMPDIR, hasUI: true, ui: { notify: (m, t) => notes.push({ m, t }) } });
+  try {
+    // (a) Positive — text path: past-EOF start fails cleanly (the verified LR-4 gap, now closed).
+    const notes = [];
+    const r = await mod.injectFiles("See #@lr4_five.txt:99", [], spyCtx(notes));
+    assert(r.injected === 0, `injected:0 (nothing delivered), got ${r.injected}`);
+    assert(r.text === "See #@lr4_five.txt:99", `prompt verbatim, got ${JSON.stringify(r.text)}`);
+    assert(r.blocks.length === 0 && r.details.length === 0, `NO block and NO detail (no empty body), got ${r.blocks.length}/${r.details.length}`);
+    assert(notes.length === 1 && notes[0].t === "warning", `exactly one 'warning' notify, got ${JSON.stringify(notes)}`);
+    assert(notes[0].m === `#@${five}:99 — not injected (file has 5 lines)`,
+      `message = abs + canonical range + wc-l count (em dash), got ${JSON.stringify(notes[0].m)}`);
+
+    // (b) Claim released — the VALID :1, later in the SAME prompt, still injects (scanTokens recorded
+    //     both keys; the revoke lands inside injectFile before record 2 processes).
+    const notes2 = [];
+    const r2 = await mod.injectFiles("See #@lr4_five.txt:99 then #@lr4_five.txt:1", [], spyCtx(notes2));
+    assert(r2.injected === 1, `:1 still injects after the failed :99 (claim released), got ${r2.injected}`);
+    assert(hasBlock(r2, "l1\n"), "line 1 delivered");
+    assert(notes2.length === 1 && notes2[0].m.includes(":99"), `still exactly the one :99 warning, got ${JSON.stringify(notes2)}`);
+
+    // (c) Markdown path — a ranged markdown token past EOF fails the SAME way (injectFile guards before
+    //     injectMarkdown runs; no empty block, no import scan on an empty body).
+    const notes3 = [];
+    const r3 = await mod.injectFiles("See #@lr4.md:3", [], spyCtx(notes3));
+    assert(r3.injected === 0 && r3.blocks.length === 0, `markdown past-EOF: injected:0, no block, got ${r3.injected}/${r3.blocks.length}`);
+    assert(notes3.length === 1 && notes3[0].m === `#@${md}:3 — not injected (file has 2 lines)`,
+      `markdown notify (2 lines), got ${JSON.stringify(notes3[0]?.m)}`);
+
+    // (d) Negative — a clamped END still DELIVERS (clamping is LR-5 recovery, NOT failure).
+    const notes4 = [];
+    const r4 = await mod.injectFiles("See #@lr4_five.txt:2-100000", [], spyCtx(notes4));
+    assert(r4.injected === 1 && hasBlock(r4, "l2\nl3\nl4\nl5"), `:2-100000 clamps and DELIVERS lines 2-5`);
+    assert(notes4.length === 0, `clamped end: NO notify, got ${notes4.length}`);
+
+    // (e) Edge (§17.4/§17.8) — a 0-byte file has 0 lines, so :1 is past-EOF (countLines("") === 0).
+    const notes5 = [];
+    const r5 = await mod.injectFiles("See #@empty.txt:1", [], spyCtx(notes5));
+    assert(r5.injected === 0 && r5.blocks.length === 0, `0-byte file :1 → no empty block, got ${r5.injected}/${r5.blocks.length}`);
+    assert(notes5.length === 1 && notes5[0].m === `#@${EMPTY}:1 — not injected (file has 0 lines)`,
+      `0-line notify, got ${JSON.stringify(notes5[0]?.m)}`);
+
+    // (f) Boundary — startLine === lineCount is the LAST line: DELIVERS, does NOT fail (only > fails).
+    const notes6 = [];
+    const r6 = await mod.injectFiles("See #@lr4_five.txt:5", [], spyCtx(notes6));
+    assert(r6.injected === 1 && hasBlock(r6, "l5\n"), `:5 (== lineCount) delivers line 5`);
+    assert(notes6.length === 0, `boundary: NO notify, got ${notes6.length}`);
+  } finally {
+    fsSync.rmSync(five, { force: true });
+    fsSync.rmSync(md, { force: true });
+  }
 });
 
 // MDV-2 — BARE-@ IMPORT-MARKER CHAIN (markdownBareAtImports ON, verbatim in delivered content). The bare-@

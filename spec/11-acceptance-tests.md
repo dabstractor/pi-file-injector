@@ -54,12 +54,17 @@ pi -e .                             # quick test (directory — resolves via pac
 | 40 | **display — print mode** | `pi -p "Review #@a.ts"` | No TUI rendering; model still receives the `<file>` block via the custom message (verify in `--mode json` that a user-role message carries the `<file>` block after the prompt). |
 | 41 | **model input — structure** | `#@a.ts` with extension loaded; inspect provider request (`before_provider_request`) | Two user-role messages: `[verbatim prompt — #@a.ts preserved]` then `[<file name="/abs/a.ts">…</file>]`. The prompt text is byte-identical to what the user typed (§6.4). |
 | 42 | **re-open re-injection** | `Review #@a.ts`; cancel (ESC); `/tree` → select the user message → resubmit unchanged | Editor prefilled with `Review #@a.ts` (verbatim); resubmit re-creates the `<file>` custom message (no `read` call); model receives `a.ts` again. Confirms decorators survive cancel/re-open (§13.8). |
+| 43 | line range — basic | `Review #@a.ts:10` (a.ts ≥ 10 lines) | Line 10 only in the block; green `read a.ts:10`; prompt verbatim; notify `1 whole` (§17). |
+| 44 | range — malformed | `See #@a.ts:0` (and `#@a.ts:5-3`) | Token left verbatim; nothing injected; **warning notify** names the token and the rule (LR-3). |
+| 45 | range — past EOF | `See #@a.ts:99` (5-line file) | No block, no `read` line, `injected 0`; warning notify `… file has 5 lines` (LR-4). |
+| 46 | range — oversize slice | tight budget; `Summarize #@huge.log:1-999999` | Slice **pages**: head + directive resuming at the correct absolute line; notify `0 whole, 1 paged` (LR-1). |
+| 47 | range — image/binary | `Describe #@pic.png and #@pic.png:3` | Image attached **once**; one `read pic.png` line; range not shown (LR-2). |
 
 ### Automated sanity check (optional)
 
 Beyond the in-process `sharp-at-test` command above, two standalone Node scripts (zero-dep, load the real extension via Pi's jiti loader) pin the behaviors in this section as runnable regression gates:
 
-- **`file-injector.test.mjs`** — the full §11 matrix + §10 edges (the project's `npm test`).
+- **`file-injector.test.mjs`** — the full §11 matrix + §10 edges (the project's `npm test`); line ranges are the `LINE-1 … LINE-12` cases (§17.9 — `LINE-7 … LINE-12` land with LR-1/LR-2/LR-3/LR-4/LR-5).
 - **`relative-imports.test.mjs`** — focused on the two properties that are easiest to regress: **(a)** every `[#]@path` inside a delivered markdown resolves relative to that file's directory at every depth (never `ctx.cwd`; a same-named cwd-root file never wins, and a missing-in-dir import never falls back to cwd), and **(b)** with `markdownBareAtImports` on, bare-`@` is honored at **every** depth including the very first imported file (cases 30–32 above). Covers four layers: `resolveImportPath`, `scanTokens`, `injectFiles`, and the real `input` handler with a hermetic project config.
 
 ```ts

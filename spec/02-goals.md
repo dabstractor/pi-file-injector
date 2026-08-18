@@ -1,7 +1,7 @@
 ## 2. Goals & Non-Goals
 
 ### Goals
-1. **New syntax `#@<path>`** that unconditionally **delivers the entire file** into the model's context at prompt-submission time: injected whole when it fits remaining context, paged via the model's `read` tool when it does not (§5.5).
+1. **New syntax `#@<path>`** that unconditionally **delivers the entire file** into the model's context at prompt-submission time: injected whole when it fits remaining context, paged via the model's `read` tool when it does not (§5.5). An optional **line-range suffix** — `#@<path>:N` / `#@<path>:N-M` (1-indexed, inclusive) — delivers only the selected lines through the same budget/paging machinery (§17).
 2. **Works in every input context** — interactive TUI, the initial CLI/`-p` message, and RPC — because it operates on the `input` event.
 3. **No configuration required.** `#@` works with zero setup; the inline-vs-paged decision is computed automatically from the active model's context window and current usage (§5.5), and there are no knobs for format, image handling, paging, or budget. The single user-facing setting is the opt-in `markdownBareAtImports` (§4.6), off by default.
 4. **Correct file-type handling** with no knobs: text → content; image → attached; other binary → a clear note (not garbage); missing/dir → left as a literal token.
@@ -15,6 +15,7 @@
 - **No manual fallback.** Oversize files are paged automatically. The user does not have to notice an overflow and switch to the `read` tool themselves.
 - **No user-facing size config.** The context budget is derived from the active model and current usage. There is no threshold or setting to tune.
 - **No globbing / multi-file** (`#@src/*.ts`). Single concrete path per token.
+- **No character-offset, column, or open-ended ranges.** `:N`/`:N-M` select whole, closed line spans only — `#@a.ts:5-` is not a range token, and ranges never apply to images, binaries, or URLs (§17.1).
 - **No directory reads.** `#@some/dir` is left as a literal token.
 - **No transitive imports from non-markdown files.** Only `.md`/`.markdown` content is scanned for `#@` directives; a `#@` inside an injected `.ts`/`.json`/image/etc. is inert.
 - **No absolute/tilde markdown imports.** Markdown imports are relative-only by design (portability + a shared doc can't yank arbitrary home/system paths). Top-level user-prompt `#@` still allows absolute and `~/` paths (§4.4).
